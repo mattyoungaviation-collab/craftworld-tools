@@ -1036,20 +1036,16 @@ def logout():
     session.pop("username", None)
     return redirect(url_for("index"))
 
-
-
-# -------- Profitability tab (manual mastery + workshop) --------
-@app.route("/profitability", methods=["GET", "POST"])
-
+# Helper: read either object.attribute or dict["key"]
 def attr_or_key(obj, name, default=None):
-    """
-    Safely get obj.name OR obj['name'], with a default.
-    Works for both dicts and simple objects.
-    """
     if isinstance(obj, dict):
         return obj.get(name, default)
     return getattr(obj, name, default)
 
+
+# -------- Profitability tab (manual mastery + workshop) --------
+
+@app.route("/profitability", methods=["GET", "POST"])
 def profitability():
     # Require UID set in Overview (so we know whose factories to pull)
     if not has_uid_flag():
@@ -2839,6 +2835,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
