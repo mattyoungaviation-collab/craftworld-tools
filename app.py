@@ -2128,11 +2128,12 @@ def masterpieces_view():
                 <p class="subtle">No leaderboard data.</p>
               {% endif %}
 
-              <p class="subtle" style="margin-top:6px;">
+ <p class="subtle" style="margin-top:6px;">
   Event MP total (bottom):
-  <strong>{{ "{:,.0f}".format(mp.collectedPoints or 0) }}</strong>
-  of {{ "{:,.0f}".format(mp.requiredPoints or 0) }} required.
+  <strong>{{ (mp.collectedPoints | default(0, true)) | int }}</strong>
+  of {{ (mp.requiredPoints | default(0, true)) | int }} required.
 </p>
+
 
             </div>
           {% endfor %}
@@ -3306,6 +3307,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
