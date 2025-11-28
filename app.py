@@ -197,6 +197,8 @@ BASE_TEMPLATE = """
 <head>
   <meta charset="utf-8">
   <title>CraftWorld Tools</title>
+  <!-- Make it mobile friendly -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -205,6 +207,8 @@ BASE_TEMPLATE = """
       margin: 0;
       padding: 0;
     }
+
+    /* ---------- NAV ---------- */
     .nav {
       display: flex;
       align-items: center;
@@ -224,9 +228,15 @@ BASE_TEMPLATE = """
       text-transform: uppercase;
       color: #e5e7eb;
     }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
     .nav-links a,
     .nav-links span {
-      margin-left: 14px;
       text-decoration: none;
       font-size: 14px;
       padding: 6px 10px;
@@ -252,10 +262,13 @@ BASE_TEMPLATE = """
       border: 1px dashed rgba(75,85,99,0.9);
       cursor: not-allowed;
     }
+
+    /* ---------- LAYOUT ---------- */
     .container {
       max-width: 1160px;
       margin: 18px auto 40px;
       padding: 0 16px 24px;
+      box-sizing: border-box;
     }
     .card {
       background: radial-gradient(circle at top, #111827 0, #020617 50%, #020617 100%);
@@ -274,6 +287,13 @@ BASE_TEMPLATE = """
     h2 { font-size: 18px; }
     h3 { font-size: 16px; color: #e5e7eb; }
 
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+
+    /* ---------- TABLES ---------- */
     table {
       width: 100%;
       border-collapse: collapse;
@@ -283,9 +303,9 @@ BASE_TEMPLATE = """
     th, td {
       padding: 6px 8px;
       border-bottom: 1px solid rgba(30,64,175,0.5);
+      text-align: left;
     }
     th {
-      text-align: left;
       font-weight: 600;
       color: #bfdbfe;
       background: rgba(15,23,42,0.85);
@@ -295,6 +315,12 @@ BASE_TEMPLATE = """
     }
     tr:nth-child(odd) td {
       background: rgba(15,23,42,0.25);
+    }
+
+    /* wrapper for horizontal scroll on small screens */
+    .scroll-x {
+      width: 100%;
+      overflow-x: auto;
     }
 
     .subtle {
@@ -373,7 +399,7 @@ BASE_TEMPLATE = """
       margin-bottom: 4px;
       color: #e5e7eb;
     }
-    input[type=text], input[type=number], select {
+    input[type=text], input[type=number], select, textarea {
       width: 100%;
       padding: 8px 10px;
       border-radius: 10px;
@@ -383,7 +409,8 @@ BASE_TEMPLATE = """
       font-size: 14px;
       box-sizing: border-box;
     }
-    input[type=text]::placeholder {
+    input[type=text]::placeholder,
+    textarea::placeholder {
       color: #6b7280;
     }
     .two-col {
@@ -395,6 +422,44 @@ BASE_TEMPLATE = """
       font-size: 12px;
       color: #9ca3af;
       margin-top: 4px;
+    }
+
+    /* ---------- MOBILE TWEAKS ---------- */
+    @media (max-width: 768px) {
+      .nav {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 10px 12px;
+        gap: 6px;
+      }
+      .nav-title {
+        font-size: 16px;
+      }
+      .nav-links {
+        justify-content: flex-start;
+      }
+      .container {
+        margin: 12px auto 24px;
+        padding: 0 10px 16px;
+      }
+      .card {
+        padding: 12px 12px;
+        margin-bottom: 12px;
+      }
+      table {
+        font-size: 12px;
+      }
+      th, td {
+        padding: 4px 6px;
+      }
+      button {
+        width: 100%;
+        text-align: center;
+        margin-top: 8px;
+      }
+      .two-col {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -412,7 +477,6 @@ BASE_TEMPLATE = """
       <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
       <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
       <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
-
     </div>
   </div>
   <div class="container">
@@ -421,6 +485,7 @@ BASE_TEMPLATE = """
 </body>
 </html>
 """
+
 
 
 # -------- Overview tab --------
@@ -2345,6 +2410,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
