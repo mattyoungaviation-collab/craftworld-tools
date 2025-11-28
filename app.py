@@ -1290,7 +1290,7 @@ def snipe():
                     target_points = float(target_entry.get("masterpiecePoints") or 0.0)
                     points_needed = max(0.0, target_points + 1.0 - my_points)
 
-                     resources = mp.get("resources") or []
+                    resources = mp.get("resources") or []
                     options: List[Dict[str, Any]] = []
 
                     for r in resources:
@@ -1419,6 +1419,7 @@ def snipe():
                         "options": options,
                         "mix_plan": mix_plan,
                     }
+
 
 
                 except Exception as e:
@@ -2361,5 +2362,6 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
