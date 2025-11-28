@@ -1616,82 +1616,239 @@ def boosts():
     return html
 
 # -------- Masterpieces tab --------
-@app.route("/masterpieces")
+@app.route("/masterpieces", methods=["GET", "POST"])
 def masterpieces_view():
-    error: Optional[str] = None
-    masterpieces_data: List[Dict[str, Any]] = []
-
+    # --- Load masterpieces list from API ---
     try:
-        masterpieces_data = fetch_masterpieces()
+        uid = session.get("voya_uid")
+        masterpieces = fetch_masterpieces(uid)
     except Exception as e:
-        error = f"Error fetching masterpieces: {e}"
+        masterpieces = []
+        error = f"Error fetching Masterpieces: {e}"
+    else:
+        error = None
 
-    content = """
-    <div class="card">
-      <h1>Masterpieces</h1>
-      <p class="subtle">
-        Live <code>masterpieces</code> data from Craft World with top 25 and event MP at the bottom of each.
-      </p>
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
+    # --- Tier thresholds ---
+    tiers = [
+        {"tier": 1, "points": 10_000},
+        {"tier": 2, "points": 35_000},
+        {"tier": 3, "points": 85_000},
+        {"tier": 4, "points": 250_000},
+        {"tier": 5, "points": 1_000_000},
+        {"tier": 6, "points": 3_250_000},
+        {"tier": 7, "points": 15_000_000},
+        {"tier": 8, "points": 50_000_000},
+        {"tier": 9, "points": 100_000_000},
+        {"tier": 10, "points": 200_000_000},
+    ]
 
-      {% if masterpieces %}
-        {% for mp in masterpieces %}
-          <div class="card" style="margin-top:12px;">
-            <h2>{{ mp.name }} <span class="subtle">({{ mp.addressableLabel or mp.id }})</span></h2>
-            <p class="subtle">
-              Type: {{ mp.type }} · Event: {{ mp.eventId }}<br>
-              Event MP: {{ mp.collectedPoints | int }} / {{ mp.requiredPoints | int }}
-            </p>
+    # --- Session calculator storage ---
+    calc_resources = session.get("mp_calc_resources", [])
+    selected_mp_id = session.get("mp_calc_masterpiece_id")
 
-            <h3>Top 25 leaderboard</h3>
-            {% set lb = mp.leaderboard or [] %}
-{% if lb %}
-  <div class="mp-table-wrap">
-    <table>
-      <tr>
-        <th>#</th>
-        <th>Player</th>
-        <th>UID</th>
-        <th>MP</th>
-      </tr>
-      {% for entry in lb[:25] %}
-        <tr>
-          <td>{{ entry.position }}</td>
-          <td>{{ entry.profile.displayName or '—' }}</td>
-          <td class="subtle">{{ entry.profile.uid }}</td>
-          <td>{{ "{:,.0f}".format(entry.masterpiecePoints) }}</td>
-        </tr>
-      {% endfor %}
-    </table>
-  </div>
+    calc_error = None
+    calc_summary = None
 
-  <p class="subtle" style="margin-top:6px;">
-    Event MP total (bottom):
-    <strong>{{ "{:,.0f}".format(mp.collectedPoints) }}</strong>
-    of {{ "{:,.0f}".format(mp.requiredPoints) }} required.
-  </p>
-{% endif %}
+    # Build resource dropdown from CSV tokens
+    resource_options = sorted(FACTORIES_FROM_CSV.keys())
 
+    # --- Handle POST actions ---
+    if request.method == "POST":
+        action = request.form.get("calc_action")
 
-            <p class="subtle" style="margin-top:6px;">
-              Event MP total (bottom):
-              <strong>{{ "{:,.0f}".format(mp.collectedPoints) }}</strong>
-              of {{ "{:,.0f}".format(mp.requiredPoints) }} required.
-            </p>
-          </div>
-        {% endfor %}
-      {% else %}
-        <p class="subtle">No masterpieces data returned.</p>
-      {% endif %}
-    </div>
-    """
+        # update selected MP
+        mp_id_raw = request.form.get("calc_masterpiece_id")
+        if mp_id_raw:
+            try:
+                selected_mp_id = int(mp_id_raw)
+                session["mp_calc_masterpiece_id"] = selected_mp_id
+            except:
+                pass
 
+        # ADD RESOURCE
+        if action == "add":
+            symbol = (request.form.get("calc_symbol") or "").upper().strip()
+            amount_raw = request.form.get("calc_amount")
+
+            try:
+                amount = float(amount_raw)
+                if amount <= 0:
+                    raise ValueError
+            except:
+                calc_error = "Invalid amount."
+                amount = None
+
+            if not symbol or symbol not in resource_options:
+                calc_error = "Select a valid resource."
+
+            if not calc_error:
+                # Merge or append
+                merged = False
+                for r in calc_resources:
+                    if r["symbol"] == symbol:
+                        r["amount"] += amount
+                        merged = True
+                        break
+                if not merged:
+                    calc_resources.append({"symbol": symbol, "amount": amount})
+
+                session["mp_calc_resources"] = calc_resources
+
+        # CLEAR
+        elif action == "clear":
+            calc_resources = []
+            session["mp_calc_resources"] = []
+
+        # CALCULATE
+        elif action == "calc":
+            if not selected_mp_id:
+                calc_error = "Pick a Masterpiece first."
+            elif not calc_resources:
+                calc_error = "Add at least one resource."
+            else:
+                try:
+                    # convert list → API dict
+                    donation_dict = {r["symbol"]: r["amount"] for r in calc_resources}
+
+                    # Craft World prediction
+                    result = predict_reward(selected_mp_id, donation_dict)
+
+                    points = result.get("masterpiecePoints", 0.0)
+                    xp = result.get("experiencePoints", 0.0)
+
+                    # price lookup
+                    prices = fetch_live_prices_in_coin()
+                    total_cost = 0.0
+                    for r in calc_resources:
+                        p = prices.get(r["symbol"], 0.0)
+                        total_cost += p * r["amount"]
+
+                    # Determine tier
+                    current_tier = 1
+                    next_needed = None
+                    for t in tiers:
+                        if points >= t["points"]:
+                            current_tier = t["tier"]
+                        else:
+                            next_needed = t["points"] - points
+                            break
+
+                    if next_needed is None:
+                        progress_pct = 100.0
+                    else:
+                        prev_points = [tt["points"] for tt in tiers if tt["tier"] == current_tier][0]
+                        span = next_needed + (points - prev_points)
+                        progress_pct = (points - prev_points) / span * 100.0
+
+                    calc_summary = {
+                        "points": points,
+                        "xp": xp,
+                        "cost": total_cost,
+                        "tier": current_tier,
+                        "points_fmt": f"{points:,.0f}",
+                        "xp_fmt": f"{xp:,.0f}",
+                        "cost_fmt": f"COIN {total_cost:,.0f}",
+                        "tier_label": f"Tier {current_tier}",
+                        "points_needed_next": next_needed or 0,
+                        "points_needed_next_fmt": f"{(next_needed or 0):,.0f}",
+                        "progress_pct": round(progress_pct, 1),
+                    }
+                except Exception as e:
+                    calc_error = f"Error calculating: {e}"
+
+    # --- Build HTML ---
     content = render_template_string(
-        content,
-        masterpieces=masterpieces_data,
-        error=error,
+        """
+        <div class="card">
+          <h1>🏆 Masterpiece Tools</h1>
+          <p class="subtle">Plan donations, calculate tiers, and view active Masterpieces.</p>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;">
+
+          <!-- Tier Table -->
+          <div class="card" style="flex:1 1 260px;min-width:0;">
+            <h2>Masterpiece Tier Requirements</h2>
+            <div style="max-height:260px;overflow:auto;">
+              <table>
+                <tr><th>Tier</th><th>Points</th></tr>
+                {% for t in tiers %}
+                  <tr><td>Tier {{ t.tier }}</td><td>{{ "{:,.0f}".format(t.points) }}</td></tr>
+                {% endfor %}
+              </table>
+            </div>
+          </div>
+
+          <!-- Donation Planner -->
+          <div class="card" style="flex:1 1 260px;min-width:0;">
+            <h2>📊 Donation Planner</h2>
+            <form method="post" class="section">
+
+              <label>Masterpiece</label>
+              <select name="calc_masterpiece_id">
+                {% for mp in masterpieces %}
+                  <option value="{{ mp.id }}" {% if mp.id == selected_mp_id %}selected{% endif %}>
+                    {{ mp.name or ("MP " ~ mp.id) }}
+                  </option>
+                {% endfor %}
+              </select>
+
+              <label style="margin-top:10px;">Select Resource:</label>
+              <select name="calc_symbol">
+                <option value="">-- Choose a Resource --</option>
+                {% for sym in resource_options %}
+                  <option value="{{ sym }}">{{ sym }}</option>
+                {% endfor %}
+              </select>
+
+              <label style="margin-top:10px;">Quantity:</label>
+              <input name="calc_amount" type="number" step="0.0001" placeholder="Enter amount">
+
+              <div style="display:flex;gap:8px;margin-top:12px;">
+                <button name="calc_action" value="add">➕ Add</button>
+                <button name="calc_action" value="clear">🗑️ Clear</button>
+                <button name="calc_action" value="calc">📊 Calculate</button>
+              </div>
+            </form>
+
+            {% if calc_resources %}
+            <div class="section" style="margin-top:14px;">
+              <h3>📋 Added Resources</h3>
+              <ul>
+                {% for r in calc_resources %}
+                  <li>{{ r.symbol }} — {{ "{:,.4f}".format(r.amount) }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+
+            {% if calc_summary %}
+            <div class="section" style="margin-top:14px;">
+              <h3>📈 Results</h3>
+              <p><strong>Total Points:</strong> {{ calc_summary.points_fmt }}</p>
+              <p><strong>Total XP:</strong> {{ calc_summary.xp_fmt }}</p>
+              <p><strong>Total Cost:</strong> {{ calc_summary.cost_fmt }}</p>
+              <p><strong>Masterpiece Tier:</strong> {{ calc_summary.tier_label }}</p>
+              <p>
+                <strong>Progress to next tier:</strong>
+                {{ calc_summary.progress_pct }}%
+                {% if calc_summary.points_needed_next > 0 %}
+                  ({{ calc_summary.points_needed_next_fmt }} points needed)
+                {% endif %}
+              </p>
+            </div>
+            {% endif %}
+
+          </div>
+        </div>
+        """,
+        tiers=tiers,
+        masterpieces=masterpieces,
+        selected_mp_id=selected_mp_id,
+        resource_options=resource_options,
+        calc_resources=calc_resources,
+        calc_summary=calc_summary,
+        calc_error=calc_error,
     )
 
     html = render_template_string(
@@ -1701,6 +1858,7 @@ def masterpieces_view():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 # -------- Snipe Calculator tab --------
@@ -2840,6 +2998,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
