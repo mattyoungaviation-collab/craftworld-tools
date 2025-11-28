@@ -2026,7 +2026,7 @@ def masterpieces_view():
                     {% if calc_summary["next_tier_points"] %}
                       <span class="subtle">
                         {{ "{:,.0f}".format(calc_summary["points_to_next"]) }} more points needed for Tier {{ calc_summary["tier"] + 1 }}<br>
-                        ({{ "{:,.1f}".format(calc_summary["progress_pct"]) }}% to next tier)
+                        ({{ "{:,.1f}".format((calc_summary["progress_pct"] or 0)) }}% to next tier)
                       </span>
                     {% else %}
                       <span class="subtle">Max tier reached</span>
@@ -3306,6 +3306,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
