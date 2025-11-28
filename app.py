@@ -1339,7 +1339,76 @@ def snipe():
                             "max_points": max_points,
                         })
 
-                    options.sort(key=lambda o: o["coin_cost"] if o["coin_cost"] > 0 else 1e18)
+                                        options.sort(key=lambda o: o["coin_cost"] if o["coin_cost"] > 0 else 1e18)
+
+                    # ----- Cheapest multi-resource mix plan (greedy by COIN/point) -----
+                    mix_plan: Optional[Dict[str, Any]] = None
+                    if points_needed > 0 and options:
+                        enriched = []
+                        for o in options:
+                            pts_per_unit = o["points_per_unit"]
+                            price_coin = o["price_coin"]
+                            remaining_units = o["remaining"]
+                            if pts_per_unit <= 0 or price_coin <= 0 or remaining_units <= 0:
+                                continue
+                            coin_per_point = price_coin / pts_per_unit
+                            max_points_res = remaining_units * pts_per_unit
+                            e = dict(o)
+                            e["coin_per_point"] = coin_per_point
+                            e["max_points_res"] = max_points_res
+                            enriched.append(e)
+
+                        # cheapest COIN per point first
+                        enriched.sort(key=lambda e: e["coin_per_point"])
+
+                        remaining_pts = points_needed
+                        chosen_rows: List[Dict[str, Any]] = []
+                        total_coin = 0.0
+                        total_battery = 0.0
+
+                        for e in enriched:
+                            if remaining_pts <= 0:
+                                break
+
+                            pts_from_this = min(remaining_pts, e["max_points_res"])
+                            if pts_from_this <= 0:
+                                continue
+
+                            # convert points back to units, round up
+                            units = math.ceil(pts_from_this / e["points_per_unit"])
+                            if units > e["remaining"]:
+                                units = int(e["remaining"])
+                                pts_from_this = units * e["points_per_unit"]
+
+                            if units <= 0:
+                                continue
+
+                            coin_cost = units * e["price_coin"]
+                            battery_cost = units * e["battery_per_unit"]
+
+                            total_coin += coin_cost
+                            total_battery += battery_cost
+                            remaining_pts -= pts_from_this
+
+                            chosen_rows.append({
+                                "symbol": e["symbol"],
+                                "units": units,
+                                "points": pts_from_this,
+                                "coin_cost": coin_cost,
+                                "battery_cost": battery_cost,
+                                "coin_per_point": e["coin_per_point"],
+                            })
+
+                        if chosen_rows:
+                            achieved_points = points_needed - max(0.0, remaining_pts)
+                            mix_plan = {
+                                "rows": chosen_rows,
+                                "target_points": points_needed,
+                                "achieved_points": achieved_points,
+                                "enough": remaining_pts <= 0.0,
+                                "total_coin": total_coin,
+                                "total_battery": total_battery,
+                            }
 
                     rank_result = {
                         "mp": mp,
@@ -1348,6 +1417,7 @@ def snipe():
                         "my_points": my_points,
                         "points_needed": points_needed,
                         "options": options,
+                        "mix_plan": mix_plan,  # NEW
                     }
 
                 except Exception as e:
@@ -1577,6 +1647,38 @@ def snipe():
                   {% endfor %}
                 </table>
               </div>
+                            {% if rank_result.mix_plan %}
+                <h4 style="margin-top:12px;">Cheapest mix (multi-resource)</h4>
+                <p class="subtle">
+                  Target points: {{ "{:,.0f}".format(rank_result.mix_plan.target_points) }}<br>
+                  Achieved points: {{ "{:,.0f}".format(rank_result.mix_plan.achieved_points) }}<br>
+                  Enough to pass? {{ '✅' if rank_result.mix_plan.enough else '❌' }}<br>
+                  Total COIN: {{ "{:,.4f}".format(rank_result.mix_plan.total_coin) }}<br>
+                  Total battery: {{ "{:,.2f}".format(rank_result.mix_plan.total_battery) }}
+                </p>
+                <div class="scroll-x">
+                  <table>
+                    <tr>
+                      <th>Resource</th>
+                      <th>Units to donate</th>
+                      <th>Points from this</th>
+                      <th>COIN / point</th>
+                      <th>Total COIN</th>
+                      <th>Total battery</th>
+                    </tr>
+                    {% for r in rank_result.mix_plan.rows %}
+                      <tr>
+                        <td>{{ r.symbol }}</td>
+                        <td>{{ "{:,.0f}".format(r.units) }}</td>
+                        <td>{{ "{:,.0f}".format(r.points) }}</td>
+                        <td>{{ "{:,.8f}".format(r.coin_per_point) }}</td>
+                        <td>{{ "{:,.4f}".format(r.coin_cost) }}</td>
+                        <td>{{ "{:,.2f}".format(r.battery_cost) }}</td>
+                      </tr>
+                    {% endfor %}
+                  </table>
+                </div>
+              {% endif %}
             {% else %}
               <p class="subtle">No usable resources found (no remaining room or no price data).</p>
             {% endif %}
@@ -2258,3 +2360,4 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
