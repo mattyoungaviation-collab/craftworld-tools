@@ -1642,7 +1642,6 @@ def boosts():
     return html
 
 # -------- Masterpieces tab --------
-# -------- Masterpieces tab --------
 @app.route("/masterpieces", methods=["GET", "POST"])
 def masterpieces_view():
     """
@@ -1725,7 +1724,9 @@ def masterpieces_view():
             try:
                 mp_id = None
                 if masterpieces_data:
-                    mp_id = masterpieces_data[0].get("id")
+                    # just pick the first masterpiece id for predict_reward
+                    first_mp = masterpieces_data[0]
+                    mp_id = first_mp.get("id") if isinstance(first_mp, dict) else getattr(first_mp, "id", None)
 
                 if mp_id:
                     contrib = [
@@ -1761,7 +1762,7 @@ def masterpieces_view():
                 points_to_next = None
                 progress_to_next = 1.0
 
-            # Pre-format strings so Jinja doesn't try weird format filters
+            # Pre-format strings so Jinja only prints them, no .format in template
             calc_result = {
                 "total_points": total_points,
                 "total_points_str": f"{total_points:,.0f}",
@@ -1785,6 +1786,12 @@ def masterpieces_view():
     # Hidden JSON state for the form
     calc_state_json = json.dumps(calc_resources)
 
+    # Pre-format tier rows so template doesn’t use "{:,.0f}".format(...)
+    tier_rows = [
+        {"tier": i + 1, "req_str": f"{req:,.0f}"}
+        for i, req in enumerate(MP_TIER_THRESHOLDS)
+    ]
+
     # ---------- Template for MP list + calculator ----------
     content = """
     <div class="card">
@@ -1795,7 +1802,7 @@ def masterpieces_view():
         <strong>tier</strong> you'll land in.
       </p>
 
-      <div class="grid-2">
+      <div class="two-col">
         <!-- Left: Tier table -->
         <div class="section">
           <h2>Masterpiece Tier Requirements</h2>
@@ -1804,10 +1811,10 @@ def masterpieces_view():
               <th>Tier</th>
               <th>Required Points</th>
             </tr>
-            {% for idx, req in enumerate(MP_TIER_THRESHOLDS, start=1) %}
+            {% for row in tier_rows %}
               <tr>
-                <td>Tier {{ idx }}</td>
-                <td>{{ "{:,.0f}".format(req) }}</td>
+                <td>Tier {{ row.tier }}</td>
+                <td>{{ row.req_str }}</td>
               </tr>
             {% endfor %}
           </table>
@@ -1816,8 +1823,7 @@ def masterpieces_view():
         <!-- Right: input form + results -->
         <div class="section">
           <form method="post">
-            <input type="hidden" name="calc_state" value='{{ calc_state_json|tojson }}'>
-
+            <input type="hidden" name="calc_state" value='{{ calc_state_json }}'>
             <h2 style="margin-top:0;">Build a Bundle</h2>
 
             <label for="calc_token">Select Resource:</label>
@@ -1831,9 +1837,9 @@ def masterpieces_view():
             <label for="calc_amount" style="margin-top:8px;">Quantity:</label>
             <input id="calc_amount" name="calc_amount" type="number" step="1" min="1" placeholder="Enter amount">
 
-            <div class="grid-2" style="margin-top:10px; gap:8px;">
+            <div class="two-col" style="margin-top:10px; gap:8px;">
               <button type="submit" name="calc_action" value="add">➕ Add Resource</button>
-              <button type="submit" name="calc_action" value="clear" class="secondary">🗑️ Clear All</button>
+              <button type="submit" name="calc_action" value="clear">🗑️ Clear All</button>
             </div>
 
             <h3 style="margin-top:16px;">📋 Added Resources</h3>
@@ -1846,7 +1852,7 @@ def masterpieces_view():
                 {% for row in calc_resources %}
                   <tr>
                     <td>{{ row.token }}</td>
-                    <td style="text-align:right;">{{ "{:,.0f}".format(row.amount) }}</td>
+                    <td style="text-align:right;">{{ row.amount }}</td>
                   </tr>
                 {% endfor %}
               </table>
@@ -1856,7 +1862,7 @@ def masterpieces_view():
 
             <h3 style="margin-top:16px;">📊 Calculation Results</h3>
             {% if calc_result %}
-              <div class="summary-grid">
+              <div class="two-col">
                 <div>
                   <div class="stat-label">TOTAL POINTS</div>
                   <div class="stat-value">{{ calc_result.total_points_str }}</div>
@@ -1884,7 +1890,7 @@ def masterpieces_view():
               {% if calc_result.next_tier_index %}
                 <p style="margin-top:8px;">
                   <strong>Progress to Tier {{ calc_result.next_tier_index }}:</strong><br>
-                  {{ calc_result.progress_to_next_pct }}% &mdash;
+                  {{ calc_result.progress_to_next_pct }}% —
                   {{ calc_result.points_to_next_str }} more points needed.
                 </p>
               {% else %}
@@ -1909,24 +1915,26 @@ def masterpieces_view():
       {% if masterpieces %}
         <div class="section">
           <div class="hint">Data pulled directly from Craft World (via GraphQL).</div>
-          <table>
-            <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Ends</th>
-              <th>Reward</th>
-            </tr>
-            {% for mp in masterpieces %}
+          <div class="mp-table-wrap">
+            <table>
               <tr>
-                <td>{{ mp.id }}</td>
-                <td>{{ mp.title }}</td>
-                <td>{{ mp.status }}</td>
-                <td>{{ mp.endsAt or '—' }}</td>
-                <td>{{ mp.rewardSummary or '—' }}</td>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Ends</th>
+                <th>Reward</th>
               </tr>
-            {% endfor %}
-          </table>
+              {% for mp in masterpieces %}
+                <tr>
+                  <td>{{ mp.id }}</td>
+                  <td>{{ mp.name or mp.id }}</td>
+                  <td>{{ mp.status }}</td>
+                  <td>{{ mp.endsAt or '—' }}</td>
+                  <td>{{ mp.rewardSummary or '—' }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          </div>
         </div>
       {% else %}
         <p>No masterpieces found.</p>
@@ -1935,11 +1943,11 @@ def masterpieces_view():
     """
 
     # Render inner content with context
-    content = render_template_string(
+    inner = render_template_string(
         content,
         error=error,
         masterpieces=masterpieces_data,
-        MP_TIER_THRESHOLDS=MP_TIER_THRESHOLDS,
+        tier_rows=tier_rows,
         ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
         calc_resources=calc_resources,
         calc_result=calc_result,
@@ -1949,11 +1957,12 @@ def masterpieces_view():
     # Wrap in base template
     html = render_template_string(
         BASE_TEMPLATE,
-        content=content,
+        content=inner,
         active_page="masterpieces",
         has_uid=has_uid_flag(),
     )
     return html
+
 
 # -------- Snipe Calculator tab --------
 @app.route("/snipe", methods=["GET", "POST"])
@@ -3092,6 +3101,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
