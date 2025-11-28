@@ -18,9 +18,7 @@ from craftworld_api import (
 )
 # ---------------- Database setup (users + saved boosts) ----------------
 
-import os
-DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
-
+DB_PATH = "craftworld_tools.db"
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -1039,6 +1037,17 @@ def logout():
 
 
 # -------- Profitability tab (manual mastery + workshop) --------
+
+def attr_or_key(obj, name, default=None):
+    """
+    Safely get obj.name OR obj['name'], with a default.
+    Works for both dicts and simple objects.
+    """
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
 @app.route("/profitability", methods=["GET", "POST"])
 def profitability():
     # Require UID set in Overview (so we know whose factories to pull)
@@ -1069,22 +1078,29 @@ def profitability():
         cw = fetch_craftworld(uid)
         owned: Dict[tuple, int] = {}
 
-        for plot in cw.get("landPlots", []) or []:
-            for area in plot.get("areas", []) or []:
-                for facwrap in area.get("factories", []) or []:
-                    fac = facwrap.get("factory")
+        # landPlots: supports both cw["landPlots"] and cw.landPlots
+        land_plots = attr_or_key(cw, "landPlots", []) or []
+        for plot in land_plots:
+            areas = attr_or_key(plot, "areas", []) or []
+            for area in areas:
+                factories = attr_or_key(area, "factories", []) or []
+                for facwrap in factories:
+                    fac = attr_or_key(facwrap, "factory", None)
                     if not fac:
                         continue
-                    definition = fac.get("definition") or {}
-                    token = definition.get("id")
+
+                    definition = attr_or_key(fac, "definition", {}) or {}
+                    token = attr_or_key(definition, "id", None)
                     if not token:
                         continue
-                    api_level = int(fac.get("level", 0) or 0)
+
+                    api_level = int(attr_or_key(fac, "level", 0) or 0)
                     csv_level = api_level + 1  # API 0-based → CSV 1-based
-                    key = (token.upper(), csv_level)
+                    key = (str(token).upper(), csv_level)
                     owned[key] = owned.get(key, 0) + 1
 
         for (token, level), count in owned.items():
+            token = str(token).upper()
             if token in FACTORIES_FROM_CSV and level in FACTORIES_FROM_CSV[token]:
                 player_factories.append(
                     {"token": token, "level": level, "count": count}
@@ -1112,7 +1128,6 @@ def profitability():
     # Sort mode: "standard", "gain_loss", "loss_gain"
     saved_sort_mode: str = session.get("profit_sort_mode", "gain_loss")
     sort_mode: str = saved_sort_mode
-
 
     global_speed = saved_speed
     global_yield = saved_global_yield  # fallback if mastery level not in table
@@ -1145,6 +1160,7 @@ def profitability():
             global_yield = float(request.form.get("yield_pct", global_yield))
         except ValueError:
             global_yield = saved_global_yield
+
         # Sort mode from form
         mode = (request.form.get("sort_mode") or sort_mode or "gain_loss").strip()
         if mode not in ("standard", "gain_loss", "loss_gain"):
@@ -1239,7 +1255,9 @@ def profitability():
 
             # ----- MASTERY → INPUT COST (with per-token default) -----
             token_upper = token.upper()
-            default_levels = boost_levels.get(token_upper, {"mastery_level": 0, "workshop_level": 0})
+            default_levels = boost_levels.get(
+                token_upper, {"mastery_level": 0, "workshop_level": 0}
+            )
             default_mastery_level = int(default_levels.get("mastery_level", 0))
 
             # If user hasn't overridden this row, use per-token default from Boosts tab
@@ -1274,8 +1292,8 @@ def profitability():
                 int(level),
                 target_level=None,
                 count=1,
-                yield_pct=yield_pct,               # mastery → input reduction
-                speed_factor=effective_speed_factor,  # workshop + AD → time reduction
+                yield_pct=yield_pct,                 # mastery → input reduction
+                speed_factor=effective_speed_factor, # workshop + AD → time reduction
                 workers=workers,
             )
 
@@ -1313,19 +1331,10 @@ def profitability():
                 }
             )
 
-                # sort by your fixed factory display order, then by level
-        def _row_sort_key(r: dict) -> tuple[int, int]:
-            token = str(r["token"]).upper()
-            level = int(r["level"])
-            idx = FACTORY_DISPLAY_INDEX.get(token, len(FACTORY_DISPLAY_INDEX))
-            return (idx, level)
-
-                # Apply selected sort mode
+        # Apply selected sort mode
         if sort_mode == "gain_loss":
-            # Highest profit/hr first (current behavior)
             rows.sort(key=lambda r: r["profit_hour_total"], reverse=True)
         elif sort_mode == "loss_gain":
-            # Most negative first
             rows.sort(key=lambda r: r["profit_hour_total"])
         else:
             # "standard" → your factory order, then level
@@ -1336,8 +1345,6 @@ def profitability():
                 return (idx, lvl)
 
             rows.sort(key=_std_key)
-
-
 
     except Exception as e:
         error = f"{error or ''}\nProfit calculation failed: {e}"
@@ -1352,7 +1359,7 @@ def profitability():
         and applied using the official tables.
       </p>
 
-            <form method="post" style="margin-bottom:12px;">
+      <form method="post" style="margin-bottom:12px;">
         <div style="display:flex;flex-wrap:wrap;gap:16px;">
           <div style="min-width:160px;">
             <label for="speed_factor">Global Speed (AD / boosts)</label>
@@ -1390,7 +1397,6 @@ def profitability():
             <div class="hint">USD/day: {{ '%.4f'|format(total_usd_day) }}</div>
           </div>
         </div>
-
 
         {% if error %}
           <div class="error">{{error}}</div>
@@ -1482,6 +1488,7 @@ def profitability():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 # -------- Boosts tab (per-token mastery / workshop levels) --------
 
@@ -2821,7 +2828,6 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
