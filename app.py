@@ -1290,7 +1290,7 @@ def snipe():
                     target_points = float(target_entry.get("masterpiecePoints") or 0.0)
                     points_needed = max(0.0, target_points + 1.0 - my_points)
 
-                    resources = mp.get("resources") or []
+                     resources = mp.get("resources") or []
                     options: List[Dict[str, Any]] = []
 
                     for r in resources:
@@ -1339,7 +1339,7 @@ def snipe():
                             "max_points": max_points,
                         })
 
-                                        options.sort(key=lambda o: o["coin_cost"] if o["coin_cost"] > 0 else 1e18)
+                    options.sort(key=lambda o: o["coin_cost"] if o["coin_cost"] > 0 else 1e18)
 
                     # ----- Cheapest multi-resource mix plan (greedy by COIN/point) -----
                     mix_plan: Optional[Dict[str, Any]] = None
@@ -1417,8 +1417,9 @@ def snipe():
                         "my_points": my_points,
                         "points_needed": points_needed,
                         "options": options,
-                        "mix_plan": mix_plan,  # NEW
+                        "mix_plan": mix_plan,
                     }
+
 
                 except Exception as e:
                     error = f"Error calculating rank snipe: {e}"
@@ -2360,4 +2361,5 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
