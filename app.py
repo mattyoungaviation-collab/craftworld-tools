@@ -18,7 +18,9 @@ from craftworld_api import (
 )
 # ---------------- Database setup (users + saved boosts) ----------------
 
-DB_PATH = "craftworld_tools.db"
+import os
+DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
+
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -1037,6 +1039,7 @@ def logout():
 
 
 # -------- Profitability tab (manual mastery + workshop) --------
+@app.route("/profitability", methods=["GET", "POST"])
 
 def attr_or_key(obj, name, default=None):
     """
@@ -1047,8 +1050,6 @@ def attr_or_key(obj, name, default=None):
         return obj.get(name, default)
     return getattr(obj, name, default)
 
-
-@app.route("/profitability", methods=["GET", "POST"])
 def profitability():
     # Require UID set in Overview (so we know whose factories to pull)
     if not has_uid_flag():
@@ -1072,7 +1073,7 @@ def profitability():
     error = None
     uid = session.get("voya_uid")
 
-    # 1) Load factories from Craft World (by UID)
+        # 1) Load factories from Craft World (by UID)
     player_factories: List[dict] = []
     try:
         cw = fetch_craftworld(uid)
@@ -1110,6 +1111,7 @@ def profitability():
         error = f"Error fetching CraftWorld factories: {e}"
         player_factories = []
 
+
     # Fallback: if nothing from account, list everything from CSV
     if not player_factories:
         for t, lvls in FACTORIES_FROM_CSV.items():
@@ -1128,6 +1130,7 @@ def profitability():
     # Sort mode: "standard", "gain_loss", "loss_gain"
     saved_sort_mode: str = session.get("profit_sort_mode", "gain_loss")
     sort_mode: str = saved_sort_mode
+
 
     global_speed = saved_speed
     global_yield = saved_global_yield  # fallback if mastery level not in table
@@ -1160,7 +1163,6 @@ def profitability():
             global_yield = float(request.form.get("yield_pct", global_yield))
         except ValueError:
             global_yield = saved_global_yield
-
         # Sort mode from form
         mode = (request.form.get("sort_mode") or sort_mode or "gain_loss").strip()
         if mode not in ("standard", "gain_loss", "loss_gain"):
@@ -1255,9 +1257,7 @@ def profitability():
 
             # ----- MASTERY → INPUT COST (with per-token default) -----
             token_upper = token.upper()
-            default_levels = boost_levels.get(
-                token_upper, {"mastery_level": 0, "workshop_level": 0}
-            )
+            default_levels = boost_levels.get(token_upper, {"mastery_level": 0, "workshop_level": 0})
             default_mastery_level = int(default_levels.get("mastery_level", 0))
 
             # If user hasn't overridden this row, use per-token default from Boosts tab
@@ -1292,8 +1292,8 @@ def profitability():
                 int(level),
                 target_level=None,
                 count=1,
-                yield_pct=yield_pct,                 # mastery → input reduction
-                speed_factor=effective_speed_factor, # workshop + AD → time reduction
+                yield_pct=yield_pct,               # mastery → input reduction
+                speed_factor=effective_speed_factor,  # workshop + AD → time reduction
                 workers=workers,
             )
 
@@ -1331,10 +1331,19 @@ def profitability():
                 }
             )
 
-        # Apply selected sort mode
+                # sort by your fixed factory display order, then by level
+        def _row_sort_key(r: dict) -> tuple[int, int]:
+            token = str(r["token"]).upper()
+            level = int(r["level"])
+            idx = FACTORY_DISPLAY_INDEX.get(token, len(FACTORY_DISPLAY_INDEX))
+            return (idx, level)
+
+                # Apply selected sort mode
         if sort_mode == "gain_loss":
+            # Highest profit/hr first (current behavior)
             rows.sort(key=lambda r: r["profit_hour_total"], reverse=True)
         elif sort_mode == "loss_gain":
+            # Most negative first
             rows.sort(key=lambda r: r["profit_hour_total"])
         else:
             # "standard" → your factory order, then level
@@ -1345,6 +1354,8 @@ def profitability():
                 return (idx, lvl)
 
             rows.sort(key=_std_key)
+
+
 
     except Exception as e:
         error = f"{error or ''}\nProfit calculation failed: {e}"
@@ -1359,7 +1370,7 @@ def profitability():
         and applied using the official tables.
       </p>
 
-      <form method="post" style="margin-bottom:12px;">
+            <form method="post" style="margin-bottom:12px;">
         <div style="display:flex;flex-wrap:wrap;gap:16px;">
           <div style="min-width:160px;">
             <label for="speed_factor">Global Speed (AD / boosts)</label>
@@ -1397,6 +1408,7 @@ def profitability():
             <div class="hint">USD/day: {{ '%.4f'|format(total_usd_day) }}</div>
           </div>
         </div>
+
 
         {% if error %}
           <div class="error">{{error}}</div>
@@ -1488,7 +1500,6 @@ def profitability():
         has_uid=has_uid_flag(),
     )
     return html
-
 
 # -------- Boosts tab (per-token mastery / workshop levels) --------
 
