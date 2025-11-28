@@ -1127,6 +1127,11 @@ def profitability():
     saved_sort_mode: str = session.get("profit_sort_mode", "gain_loss")
     sort_mode: str = saved_sort_mode
 
+    # On a fresh GET, ignore any old per-row overrides so we start
+    # from the per-token Boosts defaults for the logged-in user.
+    if request.method == "GET":
+        saved_mastery = {}
+        saved_workshop = {}
 
     global_speed = saved_speed
     global_yield = saved_global_yield  # fallback if mastery level not in table
@@ -2835,6 +2840,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
