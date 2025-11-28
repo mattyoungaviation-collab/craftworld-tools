@@ -1284,26 +1284,33 @@ def masterpieces_view():
 
             <h3>Top 25 leaderboard</h3>
             {% set lb = mp.leaderboard or [] %}
-            {% if lb %}
-              <div class="mp-table-wrap">
-                <table>
-                  <tr>
-                    <th>#</th>
-                    <th>Player</th>
-                    <th>UID</th>
-                    <th>MP</th>
-                  </tr>
-                  {% for entry in lb[:25] %}
-                    <tr>
-                      <td>{{ entry.position }}</td>
-                      <td>{{ entry.profile.displayName or '—' }}</td>
-                      <td class="subtle">{{ entry.profile.uid }}</td>
-                      <td>{{ "{:,.0f}".format(entry.masterpiecePoints) }}</td>
-                    </tr>
-                  {% endfor %}
-                </table>
-              </div>
-            {% else %}
+{% if lb %}
+  <div class="mp-table-wrap">
+    <table>
+      <tr>
+        <th>#</th>
+        <th>Player</th>
+        <th>UID</th>
+        <th>MP</th>
+      </tr>
+      {% for entry in lb[:25] %}
+        <tr>
+          <td>{{ entry.position }}</td>
+          <td>{{ entry.profile.displayName or '—' }}</td>
+          <td class="subtle">{{ entry.profile.uid }}</td>
+          <td>{{ "{:,.0f}".format(entry.masterpiecePoints) }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <p class="subtle" style="margin-top:6px;">
+    Event MP total (bottom):
+    <strong>{{ "{:,.0f}".format(mp.collectedPoints) }}</strong>
+    of {{ "{:,.0f}".format(mp.requiredPoints) }} required.
+  </p>
+{% endif %}
+
 
             <p class="subtle" style="margin-top:6px;">
               Event MP total (bottom):
@@ -2470,6 +2477,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
