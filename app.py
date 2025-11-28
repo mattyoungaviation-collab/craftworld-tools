@@ -2,8 +2,11 @@ from typing import Dict, Any, List, Optional
 
 import json
 import math
+import sqlite3
 import requests
-from flask import Flask, request, render_template_string, session, url_for
+from flask import Flask, request, render_template_string, session, url_for, redirect
+
+from werkzeug.security import generate_password_hash, check_password_hash
 
 from craftworld_api import (
     fetch_craftworld,
@@ -13,6 +16,51 @@ from craftworld_api import (
     get_jwt,
     GRAPHQL_URL,
 )
+# ---------------- Database setup (users + saved boosts) ----------------
+
+DB_PATH = "craftworld_tools.db"
+
+
+def get_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # Simple users table: username + password hash
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        '''
+    )
+    # Per-user boosts: one row per token per user
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS boosts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT NOT NULL,
+            mastery_level INTEGER NOT NULL,
+            workshop_level INTEGER NOT NULL,
+            UNIQUE(user_id, token),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        '''
+    )
+    conn.commit()
+    conn.close()
+
+
+init_db()
+
 
 from pricing import fetch_live_prices_in_coin
 
@@ -111,17 +159,82 @@ def _current_uid() -> str:
     return str(uid)
 
 
-def get_boost_levels() -> dict[str, dict[str, int]]:
-    """
-    Load per-token mastery/workshop levels for the CURRENT UID.
+def _load_boost_levels_from_db(user_id: int) -> dict[str, dict[str, int]]:
+    """Return per-token levels from the database for a given user_id."""
+    levels = _default_boost_levels()
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT token, mastery_level, workshop_level FROM boosts WHERE user_id = ?",
+            (user_id,),
+        )
+        for row in cur.fetchall():
+            token = row["token"]
+            if token in levels:
+                try:
+                    m = int(row["mastery_level"])
+                except (TypeError, ValueError):
+                    m = 0
+                try:
+                    w = int(row["workshop_level"])
+                except (TypeError, ValueError):
+                    w = 0
+                levels[token]["mastery_level"] = max(0, min(10, m))
+                levels[token]["workshop_level"] = max(0, min(10, w))
+    finally:
+        conn.close()
+    return levels
 
-    Structure:
-      {
-        "MUD": {"mastery_level": 5, "workshop_level": 3},
-        "CLAY": {"mastery_level": 7, "workshop_level": 4},
-        ...
-      }
+
+def _save_boost_levels_to_db(user_id: int, levels: dict[str, dict[str, int]]) -> None:
+    """Persist per-token levels to the database for a given user_id."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        for token in ALL_FACTORY_TOKENS:
+            vals = levels.get(token, {})
+            try:
+                m = int(vals.get("mastery_level", 0) or 0)
+            except (TypeError, ValueError):
+                m = 0
+            try:
+                w = int(vals.get("workshop_level", 0) or 0)
+            except (TypeError, ValueError):
+                w = 0
+            m = max(0, min(10, m))
+            w = max(0, min(10, w))
+            cur.execute(
+                '''
+                INSERT INTO boosts (user_id, token, mastery_level, workshop_level)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, token) DO UPDATE SET
+                    mastery_level = excluded.mastery_level,
+                    workshop_level = excluded.workshop_level
+                ''',
+                (user_id, token, m, w),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_boost_levels() -> dict[str, dict[str, int]]:
+    """Load per-token mastery/workshop levels.
+
+    If a user is logged in, we load from the per-account database.
+    Otherwise, we fall back to the older per-UID-in-session storage so
+    the tool still works anonymously and when 'spying' via another UID.
     """
+    user_id = session.get("user_id")
+    if user_id:
+        try:
+            return _load_boost_levels_from_db(int(user_id))
+        except Exception:
+            # If DB read fails for any reason, fall back to session-based.
+            pass
+
+    # ---- Legacy per-UID-in-session behaviour (no login) ----
     all_boosts = session.get("boost_levels_by_uid_v1", {})
     if not isinstance(all_boosts, dict):
         all_boosts = {}
@@ -143,24 +256,36 @@ def get_boost_levels() -> dict[str, dict[str, int]]:
                 w = int(vals.get("workshop_level", 0) or 0)
             except (TypeError, ValueError):
                 w = 0
-
             levels[token]["mastery_level"] = max(0, min(10, m))
             levels[token]["workshop_level"] = max(0, min(10, w))
 
     return levels
 
+
 def save_boost_levels(levels: dict[str, dict[str, int]]) -> None:
+    """Persist per-token mastery/workshop levels.
+
+    If a user is logged in, we store these levels in the per-account
+    database. Otherwise we keep the older behaviour of storing them
+    per-UID in the Flask session, so boosts still work without an
+    account and while 'spying' another UID.
     """
-    Persist per-token mastery/workshop levels for the CURRENT UID.
-    Stored in session["boost_levels_by_uid_v1"][uid] = {...}
-    """
+    user_id = session.get("user_id")
+    if user_id:
+        # Save to DB for this account
+        try:
+            _save_boost_levels_to_db(int(user_id), levels)
+        except Exception:
+            # If DB write fails, fall back to session-based storage
+            pass
+
+    # ---- Legacy per-UID-in-session storage (kept for compatibility) ----
     all_boosts = session.get("boost_levels_by_uid_v1", {})
     if not isinstance(all_boosts, dict):
         all_boosts = {}
 
     uid = _current_uid()
 
-    # Only store tokens we know from the CSV
     cleaned: dict[str, dict[str, int]] = {}
     for token in ALL_FACTORY_TOKENS:
         vals = levels.get(token, {})
@@ -179,6 +304,7 @@ def save_boost_levels(levels: dict[str, dict[str, int]]) -> None:
 
     all_boosts[uid] = cleaned
     session["boost_levels_by_uid_v1"] = all_boosts
+
 
 
 app = Flask(__name__)
@@ -262,6 +388,13 @@ BASE_TEMPLATE = """
       border: 1px dashed rgba(75,85,99,0.9);
       cursor: not-allowed;
     }
+        .nav-user {
+      font-size: 13px;
+      color: #e5e7eb;
+      margin-left: 8px;
+      margin-right: 4px;
+    }
+
 
     /* ---------- LAYOUT ---------- */
     .container {
@@ -567,8 +700,15 @@ BASE_TEMPLATE = """
       <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
       <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
       <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
+      {% if session.get('username') %}
+        <span class="nav-user">👤 {{ session['username'] }}</span>
+        <a href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a href="{{ url_for('login') }}" class="{{ 'active' if active_page=='login' else '' }}">Login</a>
+      {% endif %}
     </div>
   </div>
+
   <div class="container">
     {{ content|safe }}
   </div>
@@ -722,6 +862,178 @@ def index():
         has_uid=has_uid_flag(),
     )
     return html
+    # ---------------- Authentication: register / login / logout ----------------
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    error: Optional[str] = None
+
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = (request.form.get("password") or "").strip()
+        confirm = (request.form.get("confirm") or "").strip()
+
+        if not username or not password:
+            error = "Username and password are required."
+        elif password != confirm:
+            error = "Passwords do not match."
+        else:
+            conn = get_db_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT id FROM users WHERE username = ?", (username,))
+                existing = cur.fetchone()
+                if existing:
+                    error = "That username is already taken."
+                else:
+                    pwd_hash = generate_password_hash(password)
+                    cur.execute(
+                        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                        (username, pwd_hash),
+                    )
+                    conn.commit()
+                    user_id = cur.lastrowid
+                    session["user_id"] = user_id
+                    session["username"] = username
+                    return redirect(url_for("boosts"))
+            finally:
+                conn.close()
+
+    content = """
+    <div class="card">
+      <h1>Create Account</h1>
+      <p class="subtle">
+        Create a login so your <strong>Mastery &amp; Workshop</strong> boosts are saved
+        to your account, independent of which Voya UID you're looking at.
+      </p>
+
+      <form method="post" class="section">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required maxlength="64" value="{{ request.form.get('username','') }}">
+        <div class="hint">This is just for this site. It does not need to match your in-game name.</div>
+
+        <label for="password" style="margin-top:10px;">Password</label>
+        <input id="password" name="password" type="password" required>
+
+        <label for="confirm" style="margin-top:10px;">Confirm password</label>
+        <input id="confirm" name="confirm" type="password" required>
+
+        <button type="submit">Create account</button>
+      </form>
+
+      <p class="hint" style="margin-top:10px;">
+        Already have an account?
+        <a href="{{ url_for('login') }}">Log in</a>.
+      </p>
+
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+    </div>
+    """
+
+
+    # First render the inner content template so Jinja tags inside it work
+    inner = render_template_string(
+        content,
+        error=error,
+    )
+
+    # Then inject that rendered HTML into the base template
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=inner,
+        active_page="login",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error: Optional[str] = None
+
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = (request.form.get("password") or "").strip()
+
+        if not username or not password:
+            error = "Username and password are required."
+        else:
+            conn = get_db_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT id, password_hash FROM users WHERE username = ?",
+                    (username,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    error = "Invalid username or password."
+                else:
+                    user_id = row["id"]
+                    pwd_hash = row["password_hash"]
+                    if not check_password_hash(pwd_hash, password):
+                        error = "Invalid username or password."
+                    else:
+                        session["user_id"] = user_id
+                        session["username"] = username
+                        return redirect(url_for("boosts"))
+            finally:
+                conn.close()
+
+    content = """
+    <div class="card">
+      <h1>Log In</h1>
+      <p class="subtle">
+        Log into your account so your <strong>Mastery &amp; Workshop</strong> boosts
+        follow you, even while you swap Voya UIDs to spy on other accounts.
+      </p>
+
+      <form method="post" class="section">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required maxlength="64" value="{{ request.form.get('username','') }}">
+
+        <label for="password" style="margin-top:10px;">Password</label>
+        <input id="password" name="password" type="password" required>
+
+        <button type="submit">Log in</button>
+      </form>
+
+      <p class="hint" style="margin-top:10px;">
+        Need an account?
+        <a href="{{ url_for('register') }}">Create one</a>.
+      </p>
+
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+    </div>
+    """
+
+
+    inner = render_template_string(
+        content,
+        error=error,
+    )
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=inner,
+        active_page="login",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
+
+
+@app.route("/logout")
+def logout():
+    session.pop("user_id", None)
+    session.pop("username", None)
+    return redirect(url_for("index"))
+
 
 
 # -------- Profitability tab (manual mastery + workshop) --------
