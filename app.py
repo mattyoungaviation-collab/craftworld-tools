@@ -2097,9 +2097,13 @@ def masterpieces_view():
             <div class="card" style="margin-top:12px;">
               <h3>{{ mp.name }} <span class="subtle">({{ mp.addressableLabel or mp.id }})</span></h3>
               <p class="subtle">
-                Type: {{ mp.type }} · Event: {{ mp.eventId }}<br>
-                Event MP: {{ mp.collectedPoints | int }} / {{ mp.requiredPoints | int }}
-              </p>
+  Type: {{ mp.type }} · Event: {{ mp.eventId }}<br>
+  Event MP:
+  {{ (mp.collectedPoints | default(0, true)) | int }}
+  /
+  {{ (mp.requiredPoints | default(0, true)) | int }}
+</p>
+
 
               <h4>Top 25 leaderboard</h4>
               {% set lb = mp.leaderboard or [] %}
@@ -2125,10 +2129,11 @@ def masterpieces_view():
               {% endif %}
 
               <p class="subtle" style="margin-top:6px;">
-                Event MP total (bottom):
-                <strong>{{ "{:,.0f}".format(mp.collectedPoints) }}</strong>
-                of {{ "{:,.0f}".format(mp.requiredPoints) }} required.
-              </p>
+  Event MP total (bottom):
+  <strong>{{ "{:,.0f}".format(mp.collectedPoints or 0) }}</strong>
+  of {{ "{:,.0f}".format(mp.requiredPoints or 0) }} required.
+</p>
+
             </div>
           {% endfor %}
         {% else %}
@@ -3301,6 +3306,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
