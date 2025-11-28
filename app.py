@@ -423,6 +423,36 @@ BASE_TEMPLATE = """
       color: #9ca3af;
       margin-top: 4px;
     }
+        /* Mobile improvements for Masterpieces */
+    @media (max-width: 768px) {
+
+      /* Limit UID width and font */
+      td.subtle {
+        max-width: 110px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11px;
+      }
+
+      /* Shrink MP column */
+      td:last-child {
+        white-space: nowrap;
+        font-size: 12px;
+      }
+
+      /* Make table rows tighter */
+      th, td {
+        padding: 4px 6px;
+      }
+
+      /* Keep MP tables readable and scrollable */
+      .mp-table-wrap table {
+        min-width: 480px;
+      }
+
+    }
+
         /* Mobile tweaks */
     @media (max-width: 768px) {
       body {
@@ -2477,6 +2507,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
