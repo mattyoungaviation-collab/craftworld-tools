@@ -1631,516 +1631,91 @@ def boosts():
     return html
 
 # -------- Masterpieces tab --------
-@app.route("/masterpieces", methods=["GET", "POST"])
+# -------- Masterpieces tab --------
+@app.route("/masterpieces")
 def masterpieces_view():
-    """Masterpieces overview + donation calculator.
-
-    - Shows live masterpieces data (top 25 + event MP).
-    - Includes a Masterpiece Level calculator with tier table.
-    - Lets you add multiple resources, see total points / XP / COIN cost.
-    - Color-coded tier badge + animated progress bar.
-    - If logged in, you can save/load/delete donation presets.
-    - When spying another account, only *your* boosts and presets are used.
-    """
     error: Optional[str] = None
     masterpieces_data: List[Dict[str, Any]] = []
 
-    # Load masterpieces from API
     try:
         masterpieces_data = fetch_masterpieces()
     except Exception as e:
         error = f"Error fetching masterpieces: {e}"
 
-    # --- Tier table (static) ---
-    MP_TIERS = [
-        (1, 10_000),
-        (2, 35_000),
-        (3, 85_000),
-        (4, 250_000),
-        (5, 1_000_000),
-        (6, 3_250_000),
-        (7, 15_000_000),
-        (8, 50_000_000),
-        (9, 100_000_000),
-        (10, 200_000_000),
-    ]
-
-    # Current logged-in user (for presets)
-    current_user_id: Optional[int] = session.get("user_id")
-    current_username: Optional[str] = session.get("username")
-
-    # Session-backed calculator state so we can click around without losing it
-    calc_resources: List[Dict[str, Any]] = session.get("mp_calc_resources") or []
-    if not isinstance(calc_resources, list):
-        calc_resources = []
-
-    selected_mp_id = session.get("mp_calc_masterpiece_id")
-
-    # If nothing selected yet, auto-pick the first masterpiece as "active"
-    if not selected_mp_id and masterpieces_data:
-        selected_mp_id = masterpieces_data[0].get("id")
-        session["mp_calc_masterpiece_id"] = selected_mp_id
-
-    # --- Handle POST actions (add/remove/clear/calc + presets) ---
-    calc_result: Optional[Dict[str, Any]] = None
-    calc_summary: Optional[Dict[str, Any]] = None
-    presets: List[Dict[str, Any]] = []
-
-    # Load presets for the current user (if any)
-    if current_user_id:
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute(
-                """SELECT id, name, masterpiece_id, payload
-                       FROM mp_presets
-                      WHERE user_id = ?
-                   ORDER BY created_at DESC, id DESC""",
-                (current_user_id,),
-            )
-            rows = cur.fetchall()
-            for r in rows:
-                presets.append(
-                    {
-                        "id": r[0],
-                        "name": r[1],
-                        "masterpiece_id": r[2],
-                        "payload": r[3],
-                    }
-                )
-        except Exception as db_err:
-            # Don't kill the page if presets fail
-            error = error or f"Preset load error: {db_err}"
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    if request.method == "POST":
-        form = request.form
-        action = form.get("calc_action") or ""
-        preset_action = form.get("preset_action") or ""
-
-        # Update selected masterpiece (if sent)
-        mp_id_raw = form.get("calc_masterpiece_id") or form.get("mp_id") or ""
-        if mp_id_raw:
-            try:
-                selected_mp_id = int(mp_id_raw)
-                session["mp_calc_masterpiece_id"] = selected_mp_id
-            except ValueError:
-                pass
-
-        # ------- Handle resource add / remove / clear / calculate -------
-        if action:
-            if action == "add":
-                symbol = (form.get("resource_symbol") or "").strip().upper()
-                qty_raw = (form.get("resource_quantity") or "").replace(",", "").strip()
-                try:
-                    qty_val = float(qty_raw)
-                except ValueError:
-                    qty_val = 0.0
-
-                if symbol and qty_val > 0:
-                    # Points are computed via predict_reward (per resource)
-                    try:
-                        reward = predict_reward(symbol, qty_val)
-                        points = float(reward.get("points", 0.0) or 0.0)
-                        xp = float(reward.get("xp", 0.0) or 0.0)
-                        coin_cost = float(reward.get("coin", 0.0) or 0.0)
-                    except Exception as e:
-                        error = f"Error predicting reward for {symbol}: {e}"
-                        points = xp = coin_cost = 0.0
-
-                    calc_resources.append(
-                        {
-                            "symbol": symbol,
-                            "quantity": qty_val,
-                            "points": points,
-                            "xp": xp,
-                            "coin": coin_cost,
-                        }
-                    )
-
-            elif action.startswith("remove_"):
-                # Remove a single resource row by index
-                try:
-                    idx = int(action.split("_", 1)[1])
-                    if 0 <= idx < len(calc_resources):
-                        calc_resources.pop(idx)
-                except Exception:
-                    pass
-
-            elif action == "clear":
-                calc_resources = []
-
-            elif action == "calculate":
-                # Sum up current resources
-                total_points = sum(float(r.get("points", 0.0) or 0.0) for r in calc_resources)
-                total_xp = sum(float(r.get("xp", 0.0) or 0.0) for r in calc_resources)
-                total_coin = sum(float(r.get("coin", 0.0) or 0.0) for r in calc_resources)
-
-                # Find current tier and progress to next
-                current_tier = 0
-                next_tier_points = None
-                for tier, req in MP_TIERS:
-                    if total_points >= req:
-                        current_tier = tier
-                    elif next_tier_points is None:
-                        next_tier_points = req
-
-                # Color for tier badge
-                if current_tier >= 9:
-                    tier_color = "#fbbf24"  # gold
-                elif current_tier >= 7:
-                    tier_color = "#22c55e"  # green
-                elif current_tier >= 4:
-                    tier_color = "#38bdf8"  # cyan/blue
-                else:
-                    tier_color = "#64748b"  # grey
-
-                if next_tier_points is not None:
-                    points_to_next = max(0.0, next_tier_points - total_points)
-                    tier_progress = min(100.0, max(0.0, (total_points / next_tier_points) * 100.0))
-                else:
-                    points_to_next = 0.0
-                    tier_progress = 100.0
-
-                calc_result = {
-                    "total_points": total_points,
-                    "total_xp": total_xp,
-                    "total_coin": total_coin,
-                }
-                calc_summary = {
-                    "tier": current_tier,
-                    "tier_color": tier_color,
-                    "points_to_next": points_to_next,
-                    "next_tier_points": next_tier_points,
-                    "progress_pct": tier_progress,
-                }
-
-        # ------- Handle presets (save / load / delete) -------
-        if preset_action and current_user_id:
-            try:
-                conn = get_db_connection()
-                cur = conn.cursor()
-                if preset_action == "save":
-                    name = (form.get("preset_name") or "").strip()
-                    if not name:
-                        name = "Preset"
-                    payload = json.dumps(
-                        {
-                            "selected_mp_id": selected_mp_id,
-                            "resources": calc_resources,
-                        }
-                    )
-                    cur.execute(
-                        """INSERT INTO mp_presets (user_id, name, masterpiece_id, payload)
-                               VALUES (?, ?, ?, ?)""",
-                        (current_user_id, name, selected_mp_id, payload),
-                    )
-                    conn.commit()
-                else:
-                    preset_id_raw = form.get("preset_id") or ""
-                    try:
-                        preset_id = int(preset_id_raw)
-                    except ValueError:
-                        preset_id = None
-
-                    if preset_id is not None:
-                        if preset_action == "delete":
-                            cur.execute(
-                                "DELETE FROM mp_presets WHERE id = ? AND user_id = ?",
-                                (preset_id, current_user_id),
-                            )
-                            conn.commit()
-                        elif preset_action == "load":
-                            cur.execute(
-                                "SELECT payload FROM mp_presets WHERE id = ? AND user_id = ?",
-                                (preset_id, current_user_id),
-                            )
-                            row = cur.fetchone()
-                            if row:
-                                data = json.loads(row[0])
-                                selected_mp_id = data.get("selected_mp_id") or selected_mp_id
-                                resources_loaded = data.get("resources") or []
-                                if isinstance(resources_loaded, list):
-                                    calc_resources = resources_loaded
-                                session["mp_calc_masterpiece_id"] = selected_mp_id
-                # reload presets list after change
-                presets = []
-                cur.execute(
-                    """SELECT id, name, masterpiece_id, payload
-                           FROM mp_presets
-                          WHERE user_id = ?
-                       ORDER BY created_at DESC, id DESC""",
-                    (current_user_id,),
-                )
-                for r in cur.fetchall():
-                    presets.append(
-                        {
-                            "id": r[0],
-                            "name": r[1],
-                            "masterpiece_id": r[2],
-                            "payload": r[3],
-                        }
-                    )
-            except Exception as db_err:
-                error = error or f"Preset save/load error: {db_err}"
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-
-    # Persist calculator state back into the session
-    session["mp_calc_resources"] = calc_resources
-
-    # Find the selected masterpiece object (if any)
-    selected_mp = None
-    if selected_mp_id and masterpieces_data:
-        for mp in masterpieces_data:
-            try:
-                if int(mp.get("id")) == int(selected_mp_id):
-                    selected_mp = mp
-                    break
-            except Exception:
-                continue
-
     content = """
     <div class="card">
       <h1>Masterpieces</h1>
       <p class="subtle">
-        Live <code>masterpieces</code> data from Craft World with top 25 and event MP at the bottom of each.<br>
-        Plus a <strong>Masterpiece Level Calculator</strong> so you can plan donations without exposing your boosts.
+        Live <code>masterpieces</code> data from Craft World with top 25 and event MP at the bottom of each.
       </p>
       {% if error %}
         <div class="error">{{ error }}</div>
       {% endif %}
 
-      <div class="section" style="margin-top:10px;">
-        <h2>🏆 Masterpiece Level Calculator</h2>
-
-        <div class="section" style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;padding:0;margin-top:10px;">
-          <!-- Left: Tier table -->
-          <div style="flex:1 1 260px;min-width:240px;">
-            <h3 class="subtle" style="margin-top:0;margin-bottom:6px;">Masterpiece Tier Requirements</h3>
-            <table>
-              <tr>
-                <th>Tier</th>
-                <th>Required Points</th>
-              </tr>
-              {% for tier, req in mp_tiers %}
-                <tr>
-                  <td>Tier {{ tier }}</td>
-                  <td>{{ "{:,.0f}".format(req) }}</td>
-                </tr>
-              {% endfor %}
-            </table>
-          </div>
-
-          <!-- Right: Calculator controls -->
-          <div style="flex:1 1 320px;min-width:280px;">
-            <form method="post" class="section">
-              <label for="calc_masterpiece_id">Masterpiece</label>
-              <select id="calc_masterpiece_id" name="calc_masterpiece_id">
-                {% for mp in masterpieces %}
-                  <option value="{{ mp.id }}" {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
-                    {{ mp.name }} ({{ mp.addressableLabel or mp.id }})
-                  </option>
-                {% endfor %}
-              </select>
-
-              <label for="resource_symbol" style="margin-top:8px;">Select Resource</label>
-              <input id="resource_symbol" name="resource_symbol" placeholder="e.g. FUEL, GAS, CEMENT">
-
-              <label for="resource_quantity" style="margin-top:8px;">Quantity</label>
-              <input id="resource_quantity" name="resource_quantity" type="number" step="1" min="1" placeholder="Enter amount">
-
-              <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
-                <button type="submit" name="calc_action" value="add">➕ Add Resource</button>
-                <button type="submit" name="calc_action" value="calculate">📊 Calculate</button>
-                <button type="submit" name="calc_action" value="clear" class="secondary">🗑️ Clear All</button>
-              </div>
-            </form>
-          </div>
-        </div>
-
-        {% if calc_resources %}
-          <div class="section" style="margin-top:12px;">
-            <h3>📋 Added Resources</h3>
-            <form method="post">
-              <input type="hidden" name="calc_masterpiece_id" value="{{ selected_mp.id if selected_mp else (selected_mp_id or '') }}">
-              <table>
-                <tr>
-                  <th>Resource</th>
-                  <th>Quantity</th>
-                  <th>Points</th>
-                  <th>XP</th>
-                  <th>Cost (COIN)</th>
-                  <th></th>
-                </tr>
-                {% for r in calc_resources %}
-                  <tr>
-                    <td>{{ r["symbol"] }}</td>
-                    <td>{{ "{:,.0f}".format(r["quantity"]) }}</td>
-                    <td>{{ "{:,.0f}".format(r["points"]) }}</td>
-                    <td>{{ "{:,.0f}".format(r["xp"]) }}</td>
-                    <td>{{ "{:,.1f}".format(r["coin"]) }}</td>
-                    <td style="text-align:center;">
-                      <button type="submit" name="calc_action" value="remove_{{ loop.index0 }}">🗑️</button>
-                    </td>
-                  </tr>
-                {% endfor %}
-              </table>
-            </form>
-          </div>
-        {% endif %}
-
-        {% if calc_result %}
-          <div class="section" style="margin-top:12px;">
-            <h3>📊 Calculation Results</h3>
-            <p>
-              <strong>TOTAL POINTS</strong><br>
-              {{ "{:,.0f}".format(calc_result["total_points"]) }}
-            </p>
-            <p>
-              <strong>TOTAL XP</strong><br>
-              {{ "{:,.0f}".format(calc_result["total_xp"]) }}
-            </p>
-            <p>
-              <strong>TOTAL COST</strong><br>
-              COIN {{ "{:,.1f}".format(calc_result["total_coin"]) }}
-            </p>
-
-            <hr style="border:none;border-top:1px solid rgba(148,163,184,0.4);margin:10px 0;">
-
-            <p style="margin-top:6px;">
-              <strong>MASTERPIECE TIER</strong><br>
-              {% if calc_summary %}
-                {% if calc_summary["tier"] > 0 %}
-                  <span style="display:inline-flex;align-items:center;gap:6px;">
-                    <span style="padding:2px 10px;border-radius:999px;background:{{ calc_summary["tier_color"] }};color:#020617;font-size:13px;font-weight:600;">
-                      Tier {{ calc_summary["tier"] }}
-                    </span>
-                    {% if calc_summary["next_tier_points"] %}
-                      <span class="subtle">
-                        {{ "{:,.0f}".format(calc_summary["points_to_next"]) }} more points needed for Tier {{ calc_summary["tier"] + 1 }}<br>
-                        ({{ "{:,.1f}".format((calc_summary["progress_pct"] or 0)) }}% to next tier)
-                      </span>
-                    {% else %}
-                      <span class="subtle">Max tier reached</span>
-                    {% endif %}
-                  </span>
-                {% else %}
-                  <span class="subtle">Not enough points for Tier 1 yet.</span>
-                {% endif %}
-              {% else %}
-                <span class="subtle">Press "Calculate" to see tier &amp; progress.</span>
-              {% endif %}
-            </p>
-
-            {% if calc_summary %}
-              <div style="margin-top:8px;background:#020617;border-radius:999px;border:1px solid rgba(148,163,184,0.5);height:10px;overflow:hidden;">
-                <div style="height:100%;width:{{ calc_summary["progress_pct"] }}%;max-width:100%;background:linear-gradient(90deg,#22c55e,#0ea5e9);transition:width 0.35s ease-out;"></div>
-              </div>
-            {% endif %}
-          </div>
-        {% endif %}
-
-        <div class="section" style="margin-top:12px;">
-          <h3>💾 Saved Presets</h3>
-          {% if not current_user_id %}
+      {% if masterpieces %}
+        {% for mp in masterpieces %}
+          <div class="card" style="margin-top:12px;">
+            <h2>
+              {{ mp.name }}
+              <span class="subtle">({{ mp.addressableLabel or mp.id }})</span>
+            </h2>
             <p class="subtle">
-              Log in to save/load presets. Your presets are tied to your CraftWorld Tools account,
-              not to the Voya ID you're spying on.
+              Type: {{ mp.type }} · Event: {{ mp.eventId }}<br>
+              Event MP:
+              {{ (mp.collectedPoints | default(0, true)) | int }}
+              /
+              {{ (mp.requiredPoints | default(0, true)) | int }}
             </p>
-          {% else %}
-            <form method="post" class="section" style="padding-top:0;">
-              <p class="subtle" style="margin-top:0;">
-                Logged in as <strong>{{ current_username }}</strong>
-              </p>
-              <label for="preset_name">Preset name</label>
-              <input id="preset_name" name="preset_name" placeholder="e.g. MP6 Fuel Push">
 
-              <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
-                <button type="submit" name="preset_action" value="save">💾 Save current as preset</button>
-              </div>
-
-              {% if presets %}
-                <div style="margin-top:10px;">
-                  <label for="preset_id">Existing presets</label>
-                  <select id="preset_id" name="preset_id">
-                    {% for p in presets %}
-                      <option value="{{ p.id }}">
-                        {{ p.name }}{% if p.masterpiece_id %} (MP {{ p.masterpiece_id }}){% endif %}
-                      </option>
-                    {% endfor %}
-                  </select>
-                  <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
-                    <button type="submit" name="preset_action" value="load">📥 Load</button>
-                    <button type="submit" name="preset_action" value="delete" class="secondary">🗑️ Delete</button>
-                  </div>
-                </div>
-              {% else %}
-                <p class="subtle" style="margin-top:6px;">No presets yet.</p>
-              {% endif %}
-            </form>
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="section" style="margin-top:18px;">
-        <h2>📈 Live Masterpieces Leaderboards</h2>
-        {% if masterpieces %}
-          {% for mp in masterpieces %}
-            <div class="card" style="margin-top:12px;">
-              <h3>{{ mp.name }} <span class="subtle">({{ mp.addressableLabel or mp.id }})</span></h3>
-              <p class="subtle">
-  Type: {{ mp.type }} · Event: {{ mp.eventId }}<br>
-  Event MP:
-  {{ (mp.collectedPoints | default(0, true)) | int }}
-  /
-  {{ (mp.requiredPoints | default(0, true)) | int }}
-</p>
-
-
-              <h4>Top 25 leaderboard</h4>
-              {% set lb = mp.leaderboard or [] %}
-              {% if lb %}
-                <div class="mp-table-wrap">
-                  <table>
+            <h3>Top 25 leaderboard</h3>
+            {% set lb = mp.leaderboard or [] %}
+            {% if lb %}
+              <div class="mp-table-wrap">
+                <table>
+                  <tr>
+                    <th>#</th>
+                    <th>Player</th>
+                    <th>UID</th>
+                    <th>MP</th>
+                  </tr>
+                  {% for entry in lb[:25] %}
                     <tr>
-                      <th>#</th>
-                      <th>Player</th>
-                      <th>Points</th>
+                      <td>{{ entry.position or loop.index }}</td>
+                      <td>
+                        {% if entry.profile %}
+                          {{ entry.profile.displayName or '—' }}
+                        {% else %}
+                          —
+                        {% endif %}
+                      </td>
+                      <td class="subtle">
+                        {% if entry.profile %}
+                          {{ entry.profile.uid }}
+                        {% else %}
+                          —
+                        {% endif %}
+                      </td>
+                      <td>
+                        {{ (entry.masterpiecePoints | default(0, true)) | int }}
+                      </td>
                     </tr>
-                    {% for row in lb %}
-                      <tr>
-                        <td>{{ row.rank }}</td>
-                        <td>{{ row.playerName }}</td>
-                        <td>{{ "{:,.0f}".format(row.points or 0) }}</td>
-                      </tr>
-                    {% endfor %}
-                  </table>
-                </div>
-              {% else %}
-                <p class="subtle">No leaderboard data.</p>
-              {% endif %}
+                  {% endfor %}
+                </table>
+              </div>
+            {% else %}
+              <p class="subtle">No leaderboard data yet.</p>
+            {% endif %}
 
- <p class="subtle" style="margin-top:6px;">
-  Event MP total (bottom):
-  <strong>{{ (mp.collectedPoints | default(0, true)) | int }}</strong>
-  of {{ (mp.requiredPoints | default(0, true)) | int }} required.
-</p>
-
-
-            </div>
-          {% endfor %}
-        {% else %}
-          <p class="subtle">No masterpieces data returned.</p>
-        {% endif %}
-      </div>
+            <p class="subtle" style="margin-top:6px;">
+              Event MP total (bottom):
+              <strong>{{ (mp.collectedPoints | default(0, true)) | int }}</strong>
+              of {{ (mp.requiredPoints | default(0, true)) | int }} required.
+            </p>
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="subtle">No masterpieces data returned.</p>
+      {% endif %}
     </div>
     """
 
@@ -2148,15 +1723,6 @@ def masterpieces_view():
         content,
         masterpieces=masterpieces_data,
         error=error,
-        mp_tiers=MP_TIERS,
-        calc_resources=calc_resources,
-        calc_result=calc_result,
-        calc_summary=calc_summary,
-        selected_mp=selected_mp,
-        selected_mp_id=selected_mp_id,
-        current_user_id=current_user_id,
-        current_username=current_username,
-        presets=presets,
     )
 
     html = render_template_string(
@@ -2166,6 +1732,7 @@ def masterpieces_view():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -3307,6 +2874,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
