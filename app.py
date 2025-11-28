@@ -423,6 +423,66 @@ BASE_TEMPLATE = """
       color: #9ca3af;
       margin-top: 4px;
     }
+        /* Mobile tweaks */
+    @media (max-width: 768px) {
+      body {
+        font-size: 14px;
+      }
+
+      .nav {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+
+      .nav-title {
+        font-size: 16px;
+      }
+
+      .nav-links {
+        display: flex;
+        flex-wrap: wrap;
+        width: 100%;
+        gap: 6px;
+      }
+
+      .nav-links a,
+      .nav-links span {
+        font-size: 13px;
+        padding: 5px 9px;
+        margin-left: 0;
+      }
+
+      .container {
+        max-width: 100%;
+        padding: 0 10px 20px;
+      }
+
+      .card {
+        padding: 14px 12px;
+        margin-bottom: 12px;
+      }
+
+      table {
+        font-size: 12px;
+      }
+
+      th, td {
+        padding: 4px 6px;
+      }
+
+      /* Horizontal scroll for wide tables (like Masterpieces) */
+      .mp-table-wrap {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .mp-table-wrap table {
+        min-width: 520px; /* keeps columns readable, can tweak */
+      }
+    }
+
 
     /* ---------- MOBILE TWEAKS ---------- */
     @media (max-width: 768px) {
@@ -1225,25 +1285,25 @@ def masterpieces_view():
             <h3>Top 25 leaderboard</h3>
             {% set lb = mp.leaderboard or [] %}
             {% if lb %}
-              <table>
-                <tr>
-                  <th>#</th>
-                  <th>Player</th>
-                  <th>UID</th>
-                  <th>MP</th>
-                </tr>
-                {% for entry in lb[:25] %}
+              <div class="mp-table-wrap">
+                <table>
                   <tr>
-                    <td>{{ entry.position }}</td>
-                    <td>{{ entry.profile.displayName or '—' }}</td>
-                    <td class="subtle">{{ entry.profile.uid }}</td>
-                    <td>{{ "{:,.0f}".format(entry.masterpiecePoints) }}</td>
+                    <th>#</th>
+                    <th>Player</th>
+                    <th>UID</th>
+                    <th>MP</th>
                   </tr>
-                {% endfor %}
-              </table>
+                  {% for entry in lb[:25] %}
+                    <tr>
+                      <td>{{ entry.position }}</td>
+                      <td>{{ entry.profile.displayName or '—' }}</td>
+                      <td class="subtle">{{ entry.profile.uid }}</td>
+                      <td>{{ "{:,.0f}".format(entry.masterpiecePoints) }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
             {% else %}
-              <p class="subtle">No leaderboard data yet.</p>
-            {% endif %}
 
             <p class="subtle" style="margin-top:6px;">
               Event MP total (bottom):
@@ -2410,6 +2470,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
