@@ -18,7 +18,9 @@ from craftworld_api import (
 )
 # ---------------- Database setup (users + saved boosts) ----------------
 
-DB_PATH = "craftworld_tools.db"
+import os
+DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
+
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -2819,6 +2821,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
