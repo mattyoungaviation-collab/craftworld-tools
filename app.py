@@ -150,8 +150,19 @@ STANDARD_FACTORY_ORDER: List[str] = [
 STANDARD_ORDER_INDEX: Dict[str, int] = {
     name.upper(): idx for idx, name in enumerate(STANDARD_FACTORY_ORDER)
 }
-
-
+# Masterpiece tier thresholds (points required per tier)
+MP_TIER_THRESHOLDS = [
+    10_000,        # Tier 1
+    35_000,        # Tier 2
+    85_000,        # Tier 3
+    250_000,       # Tier 4
+    1_000_000,     # Tier 5
+    3_250_000,     # Tier 6
+    15_000_000,    # Tier 7
+    50_000_000,    # Tier 8
+    100_000_000,   # Tier 9
+    200_000_000,   # Tier 10
+]
 
 def _default_boost_levels() -> dict[str, dict[str, int]]:
     """
@@ -1632,99 +1643,310 @@ def boosts():
 
 # -------- Masterpieces tab --------
 # -------- Masterpieces tab --------
-@app.route("/masterpieces")
+@app.route("/masterpieces", methods=["GET", "POST"])
 def masterpieces_view():
+    """
+    Show current masterpieces AND a Masterpiece Level Calculator.
+
+    - The calculator uses your selected resources to:
+        * call predict_reward(...) once to get total points + XP
+        * use live prices to estimate total COIN cost
+        * map total points to tier + progress
+    - The "spying" UID does NOT matter for the calculator; it uses the
+      first active masterpiece just to satisfy the Craft World API.
+    """
     error: Optional[str] = None
     masterpieces_data: List[Dict[str, Any]] = []
 
+    # Load MP list
     try:
         masterpieces_data = fetch_masterpieces()
     except Exception as e:
         error = f"Error fetching masterpieces: {e}"
+        masterpieces_data = []
 
+    # ---------- Calculator state (list of {token, amount}) ----------
+    calc_resources: List[Dict[str, Any]] = []
+    calc_result: Optional[Dict[str, Any]] = None
+
+    if request.method == "POST":
+        action = (request.form.get("calc_action") or "").strip().lower()
+        state_raw = request.form.get("calc_state") or "[]"
+
+        # Load previous state from hidden JSON field
+        try:
+            loaded = json.loads(state_raw)
+            if isinstance(loaded, list):
+                for row in loaded:
+                    if not isinstance(row, dict):
+                        continue
+                    tok = str(row.get("token", "")).upper().strip()
+                    try:
+                        amt = float(row.get("amount", 0) or 0)
+                    except (TypeError, ValueError):
+                        amt = 0.0
+                    if tok and amt > 0:
+                        calc_resources.append({"token": tok, "amount": amt})
+        except Exception:
+            # bad JSON, just ignore / reset
+            calc_resources = []
+
+        # Apply current action
+        if action == "add":
+            tok = (request.form.get("calc_token") or "").upper().strip()
+            amt_raw = (request.form.get("calc_amount") or "").replace(",", "").strip()
+            try:
+                amt = float(amt_raw or "0")
+            except ValueError:
+                amt = 0.0
+            if tok and amt > 0:
+                calc_resources.append({"token": tok, "amount": amt})
+
+        elif action == "clear":
+            calc_resources = []
+
+        # ---------- Compute totals if we have resources ----------
+        if calc_resources and not error:
+            # 1) Live prices → COIN cost
+            try:
+                prices = fetch_live_prices_in_coin()
+            except Exception:
+                prices = {}
+
+            total_cost = 0.0
+            for row in calc_resources:
+                price = prices.get(row["token"], 0.0) or 0.0
+                total_cost += float(row["amount"]) * float(price)
+
+            # 2) Total points + XP via predict_reward
+            total_points = 0.0
+            total_xp = 0.0
+
+            try:
+                mp_id = None
+                if masterpieces_data:
+                    mp_id = masterpieces_data[0].get("id")
+
+                if mp_id:
+                    contrib = [
+                        {"symbol": r["token"], "amount": float(r["amount"])}
+                        for r in calc_resources
+                    ]
+                    reward = predict_reward(mp_id, contrib) or {}
+                    total_points = float(reward.get("masterpiecePoints") or 0)
+                    total_xp = float(reward.get("experiencePoints") or 0)
+            except Exception:
+                # If predict_reward fails, we just leave totals at 0
+                total_points = 0.0
+                total_xp = 0.0
+
+            # 3) Map to tiers
+            tier = 0
+            next_tier_index: Optional[int] = None
+            points_to_next: Optional[float] = None
+            progress_to_next: Optional[float] = None
+
+            for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
+                if total_points >= req:
+                    tier = i
+                else:
+                    next_tier_index = i
+                    points_to_next = max(0.0, float(req) - total_points)
+                    progress_to_next = total_points / float(req) if req > 0 else 0.0
+                    break
+
+            if tier == len(MP_TIER_THRESHOLDS):
+                # Already max tier
+                next_tier_index = None
+                points_to_next = None
+                progress_to_next = 1.0
+
+            # Pre-format strings so Jinja doesn't try weird format filters
+            calc_result = {
+                "total_points": total_points,
+                "total_points_str": f"{total_points:,.0f}",
+                "total_xp": total_xp,
+                "total_xp_str": f"{total_xp:,.0f}",
+                "total_cost": total_cost,
+                "total_cost_str": f"{total_cost:,.2f}",
+                "tier": tier,
+                "next_tier_index": next_tier_index,
+                "points_to_next": points_to_next,
+                "points_to_next_str": (
+                    f"{points_to_next:,.0f}" if points_to_next is not None else None
+                ),
+                "progress_to_next_pct": (
+                    round(progress_to_next * 100, 1)
+                    if progress_to_next is not None
+                    else None
+                ),
+            }
+
+    # Hidden JSON state for the form
+    calc_state_json = json.dumps(calc_resources)
+
+    # ---------- Template for MP list + calculator ----------
     content = """
     <div class="card">
-      <h1>Masterpieces</h1>
+      <h1>🏆 Masterpiece Level Calculator</h1>
       <p class="subtle">
-        Live <code>masterpieces</code> data from Craft World with top 25 and event MP at the bottom of each.
+        Plan your donations across resources and see your
+        <strong>total points, XP, COIN cost</strong> and which
+        <strong>tier</strong> you'll land in.
       </p>
+
+      <div class="grid-2">
+        <!-- Left: Tier table -->
+        <div class="section">
+          <h2>Masterpiece Tier Requirements</h2>
+          <table>
+            <tr>
+              <th>Tier</th>
+              <th>Required Points</th>
+            </tr>
+            {% for idx, req in enumerate(MP_TIER_THRESHOLDS, start=1) %}
+              <tr>
+                <td>Tier {{ idx }}</td>
+                <td>{{ "{:,.0f}".format(req) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+
+        <!-- Right: input form + results -->
+        <div class="section">
+          <form method="post">
+            <input type="hidden" name="calc_state" value='{{ calc_state_json|tojson }}'>
+
+            <h2 style="margin-top:0;">Build a Bundle</h2>
+
+            <label for="calc_token">Select Resource:</label>
+            <select id="calc_token" name="calc_token">
+              <option value="">-- Choose a Resource --</option>
+              {% for tok in ALL_FACTORY_TOKENS %}
+                <option value="{{ tok }}">{{ tok }}</option>
+              {% endfor %}
+            </select>
+
+            <label for="calc_amount" style="margin-top:8px;">Quantity:</label>
+            <input id="calc_amount" name="calc_amount" type="number" step="1" min="1" placeholder="Enter amount">
+
+            <div class="grid-2" style="margin-top:10px; gap:8px;">
+              <button type="submit" name="calc_action" value="add">➕ Add Resource</button>
+              <button type="submit" name="calc_action" value="clear" class="secondary">🗑️ Clear All</button>
+            </div>
+
+            <h3 style="margin-top:16px;">📋 Added Resources</h3>
+            {% if calc_resources %}
+              <table>
+                <tr>
+                  <th>Token</th>
+                  <th style="text-align:right;">Quantity</th>
+                </tr>
+                {% for row in calc_resources %}
+                  <tr>
+                    <td>{{ row.token }}</td>
+                    <td style="text-align:right;">{{ "{:,.0f}".format(row.amount) }}</td>
+                  </tr>
+                {% endfor %}
+              </table>
+            {% else %}
+              <p class="hint">No resources added yet. Add some above to see the results.</p>
+            {% endif %}
+
+            <h3 style="margin-top:16px;">📊 Calculation Results</h3>
+            {% if calc_result %}
+              <div class="summary-grid">
+                <div>
+                  <div class="stat-label">TOTAL POINTS</div>
+                  <div class="stat-value">{{ calc_result.total_points_str }}</div>
+                </div>
+                <div>
+                  <div class="stat-label">TOTAL XP</div>
+                  <div class="stat-value">{{ calc_result.total_xp_str }}</div>
+                </div>
+                <div>
+                  <div class="stat-label">MASTERPIECE TIER</div>
+                  <div class="stat-value">
+                    {% if calc_result.tier > 0 %}
+                      Tier {{ calc_result.tier }}
+                    {% else %}
+                      Below Tier 1
+                    {% endif %}
+                  </div>
+                </div>
+                <div>
+                  <div class="stat-label">TOTAL COST</div>
+                  <div class="stat-value">COIN {{ calc_result.total_cost_str }}</div>
+                </div>
+              </div>
+
+              {% if calc_result.next_tier_index %}
+                <p style="margin-top:8px;">
+                  <strong>Progress to Tier {{ calc_result.next_tier_index }}:</strong><br>
+                  {{ calc_result.progress_to_next_pct }}% &mdash;
+                  {{ calc_result.points_to_next_str }} more points needed.
+                </p>
+              {% else %}
+                <p style="margin-top:8px;">
+                  <strong>You are at the maximum tier based on these donations.</strong>
+                </p>
+              {% endif %}
+            {% else %}
+              <p class="hint">Add at least one resource and submit to see tier and cost.</p>
+            {% endif %}
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h1>Current Masterpieces</h1>
       {% if error %}
         <div class="error">{{ error }}</div>
       {% endif %}
 
       {% if masterpieces %}
-        {% for mp in masterpieces %}
-          <div class="card" style="margin-top:12px;">
-            <h2>
-              {{ mp.name }}
-              <span class="subtle">({{ mp.addressableLabel or mp.id }})</span>
-            </h2>
-            <p class="subtle">
-              Type: {{ mp.type }} · Event: {{ mp.eventId }}<br>
-              Event MP:
-              {{ (mp.collectedPoints | default(0, true)) | int }}
-              /
-              {{ (mp.requiredPoints | default(0, true)) | int }}
-            </p>
-
-            <h3>Top 25 leaderboard</h3>
-            {% set lb = mp.leaderboard or [] %}
-            {% if lb %}
-              <div class="mp-table-wrap">
-                <table>
-                  <tr>
-                    <th>#</th>
-                    <th>Player</th>
-                    <th>UID</th>
-                    <th>MP</th>
-                  </tr>
-                  {% for entry in lb[:25] %}
-                    <tr>
-                      <td>{{ entry.position or loop.index }}</td>
-                      <td>
-                        {% if entry.profile %}
-                          {{ entry.profile.displayName or '—' }}
-                        {% else %}
-                          —
-                        {% endif %}
-                      </td>
-                      <td class="subtle">
-                        {% if entry.profile %}
-                          {{ entry.profile.uid }}
-                        {% else %}
-                          —
-                        {% endif %}
-                      </td>
-                      <td>
-                        {{ (entry.masterpiecePoints | default(0, true)) | int }}
-                      </td>
-                    </tr>
-                  {% endfor %}
-                </table>
-              </div>
-            {% else %}
-              <p class="subtle">No leaderboard data yet.</p>
-            {% endif %}
-
-            <p class="subtle" style="margin-top:6px;">
-              Event MP total (bottom):
-              <strong>{{ (mp.collectedPoints | default(0, true)) | int }}</strong>
-              of {{ (mp.requiredPoints | default(0, true)) | int }} required.
-            </p>
-          </div>
-        {% endfor %}
+        <div class="section">
+          <div class="hint">Data pulled directly from Craft World (via GraphQL).</div>
+          <table>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Ends</th>
+              <th>Reward</th>
+            </tr>
+            {% for mp in masterpieces %}
+              <tr>
+                <td>{{ mp.id }}</td>
+                <td>{{ mp.title }}</td>
+                <td>{{ mp.status }}</td>
+                <td>{{ mp.endsAt or '—' }}</td>
+                <td>{{ mp.rewardSummary or '—' }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
       {% else %}
-        <p class="subtle">No masterpieces data returned.</p>
+        <p>No masterpieces found.</p>
       {% endif %}
     </div>
     """
 
+    # Render inner content with context
     content = render_template_string(
         content,
-        masterpieces=masterpieces_data,
         error=error,
+        masterpieces=masterpieces_data,
+        MP_TIER_THRESHOLDS=MP_TIER_THRESHOLDS,
+        ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
+        calc_resources=calc_resources,
+        calc_result=calc_result,
+        calc_state_json=calc_state_json,
     )
 
+    # Wrap in base template
     html = render_template_string(
         BASE_TEMPLATE,
         content=content,
@@ -1732,10 +1954,6 @@ def masterpieces_view():
         has_uid=has_uid_flag(),
     )
     return html
-
-
-
-
 
 # -------- Snipe Calculator tab --------
 @app.route("/snipe", methods=["GET", "POST"])
@@ -2874,6 +3092,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
