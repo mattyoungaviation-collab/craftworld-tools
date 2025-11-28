@@ -2119,7 +2119,7 @@ def masterpieces_view():
                       <tr>
                         <td>{{ row.rank }}</td>
                         <td>{{ row.playerName }}</td>
-                        <td>{{ "{:,.0f}".format(row.points) }}</td>
+                        <td>{{ "{:,.0f}".format(row.points or 0) }}</td>
                       </tr>
                     {% endfor %}
                   </table>
@@ -3307,6 +3307,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
