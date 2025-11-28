@@ -411,7 +411,6 @@ BASE_TEMPLATE = """
       <a href="{{ url_for('boosts') }}" class="{{ 'active' if active_page=='boosts' else '' }}">Boosts</a>
       <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
       <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
-      <a href="{{ url_for('tester') }}" class="{{ 'active' if active_page=='tester' else '' }}">GraphQL Tester</a>
       <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
 
     </div>
@@ -1939,126 +1938,6 @@ def snipe():
     return html
 
 
-
-# -------- GraphQL Tester tab --------
-@app.route("/tester", methods=["GET", "POST"])
-def tester():
-    default_query = """query FetchCraftWorld($uid: ID!) {
-  fetchCraftWorld(uid: $uid) {
-    landPlots {
-      areas {
-        symbol
-        factories {
-          factory {
-            level
-            definition {
-              id
-            }
-          }
-        }
-      }
-    }
-    mines {
-      level
-      definition {
-        id
-      }
-    }
-    dynos {
-      meta {
-        displayName
-        rarity
-      }
-      production {
-        amount
-        symbol
-      }
-    }
-    resources {
-      symbol
-      amount
-    }
-  }
-}"""
-    default_vars = '{\\n  "uid": "YOUR-VOYA-UID-HERE"\\n}'
-
-    query_text = default_query
-    variables_text = default_vars
-    result_text: Optional[str] = None
-    error: Optional[str] = None
-
-    if request.method == "POST":
-        query_text = request.form.get("query", "").strip() or default_query
-        variables_text = request.form.get("variables", "").strip() or default_vars
-
-        try:
-            vars_obj = json.loads(variables_text)
-        except Exception as e:
-            error = f"Invalid JSON for variables: {e}"
-            vars_obj = None
-
-        if vars_obj is not None:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {get_jwt()}",
-                    "Content-Type": "application/json",
-                }
-                payload = {"query": query_text, "variables": vars_obj}
-                resp = requests.post(GRAPHQL_URL, json=payload, headers=headers, timeout=20)
-                resp.raise_for_status()
-                result_text = json.dumps(resp.json(), indent=2)
-            except Exception as e:
-                error = f"Error calling GraphQL: {e}"
-
-    content = """
-    <div class="card">
-      <h1>GraphQL Tester</h1>
-      <p class="subtle">
-        Raw playground for Craft World&apos;s <code>/graphql</code> endpoint using your JWT.
-      </p>
-
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
-
-      <form method="post">
-        <div class="section">
-          <label for="query">Query</label>
-          <textarea id="query" name="query" rows="12" style="width:100%;font-family:ui-monospace;font-size:12px;background:rgba(15,23,42,0.95);color:#e5e7eb;border-radius:10px;border:1px solid rgba(30,64,175,0.7);padding:8px;">{{ query_text }}</textarea>
-        </div>
-        <div class="section">
-          <label for="variables">Variables (JSON)</label>
-          <textarea id="variables" name="variables" rows="5" style="width:100%;font-family:ui-monospace;font-size:12px;background:rgba(15,23,42,0.95);color:#e5e7eb;border-radius:10px;border:1px solid rgba(30,64,175,0.7);padding:8px;">{{ variables_text }}</textarea>
-        </div>
-        <button type="submit">Run</button>
-      </form>
-
-      {% if result_text %}
-        <div class="section">
-          <h3>Result</h3>
-          <pre>{{ result_text }}</pre>
-        </div>
-      {% endif %}
-    </div>
-    """
-
-    content = render_template_string(
-        content,
-        query_text=query_text,
-        variables_text=variables_text,
-        result_text=result_text,
-        error=error,
-    )
-
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=content,
-        active_page="tester",
-        has_uid=has_uid_flag(),
-    )
-    return html
-
-
 # -------- Calculate tab (CSV-based) --------
 @app.route("/calculate", methods=["GET", "POST"])
 def calculate():
@@ -2466,6 +2345,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
