@@ -1703,13 +1703,15 @@ def masterpieces_view():
         masterpieces_data = []
 
     # Pick a default masterpiece id for calculator / per-unit scoring
+    # Use the *latest* masterpiece (last in the list), which is usually the active one.
     mp_id_for_calc: Optional[str] = None
     if masterpieces_data:
-        first_mp = masterpieces_data[0]
-        if isinstance(first_mp, dict):
-            mp_id_for_calc = str(first_mp.get("id") or "")
+        target_mp = masterpieces_data[-1]
+        if isinstance(target_mp, dict):
+            mp_id_for_calc = str(target_mp.get("id") or "")
         else:
-            mp_id_for_calc = str(getattr(first_mp, "id", "") or "")
+            mp_id_for_calc = str(getattr(target_mp, "id", "") or "")
+
 
 
     # ---------- Calculator state (list of {token, amount}) ----------
@@ -3180,6 +3182,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
