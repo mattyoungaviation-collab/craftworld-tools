@@ -164,6 +164,44 @@ MP_TIER_THRESHOLDS = [
     200_000_000,   # Tier 10
 ]
 
+
+def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[str, float]]:
+    """
+    Pre-compute masterpiece points and XP per 1 unit for each symbol in `symbols`.
+
+    This is a thin wrapper around predict_reward(...) that calls it once per
+    unique token with amount = 1.0.
+
+    Returns a dict:
+      {
+        "points": { "SEAWATER": 4_200_000.0, ... },
+        "xp":     { "SEAWATER":   350_000.0, ... },
+      }
+    """
+    unique_syms = sorted({(s or "").upper() for s in symbols if s})
+    points: Dict[str, float] = {}
+    xp: Dict[str, float] = {}
+
+    if not mp_id or not unique_syms:
+        return {"points": points, "xp": xp}
+
+    for sym in unique_syms:
+        try:
+            pr = predict_reward(mp_id, [{"symbol": sym, "amount": 1.0}]) or {}
+            points[sym] = float(pr.get("masterpiecePoints") or 0.0)
+            xp[sym] = float(pr.get("experiencePoints") or 0.0)
+        except Exception:
+            # If anything fails, just treat this token as 0 points / 0 XP per unit
+            points[sym] = 0.0
+            xp[sym] = 0.0
+
+    return {"points": points, "xp": xp}
+
+
+def _default_boost_levels() -> dict[str, dict[str, int]]:
+    ...
+
+
 def _default_boost_levels() -> dict[str, dict[str, int]]:
     """
     Default per-token mastery/workshop levels (0–10).
@@ -1664,6 +1702,16 @@ def masterpieces_view():
         error = f"Error fetching masterpieces: {e}"
         masterpieces_data = []
 
+    # Pick a default masterpiece id for calculator / per-unit scoring
+    mp_id_for_calc: Optional[str] = None
+    if masterpieces_data:
+        first_mp = masterpieces_data[0]
+        if isinstance(first_mp, dict):
+            mp_id_for_calc = str(first_mp.get("id") or "")
+        else:
+            mp_id_for_calc = str(getattr(first_mp, "id", "") or "")
+
+
     # ---------- Calculator state (list of {token, amount}) ----------
     calc_resources: List[Dict[str, Any]] = []
     calc_result: Optional[Dict[str, Any]] = None
@@ -1720,26 +1768,52 @@ def masterpieces_view():
             # 2) Total points + XP via predict_reward
             total_points = 0.0
             total_xp = 0.0
+            per_unit_points: Dict[str, float] = {}
+            per_unit_xp: Dict[str, float] = {}
 
-            try:
-                mp_id = None
-                if masterpieces_data:
-                    # just pick the first masterpiece id for predict_reward
-                    first_mp = masterpieces_data[0]
-                    mp_id = first_mp.get("id") if isinstance(first_mp, dict) else getattr(first_mp, "id", None)
-
-                if mp_id:
+            if mp_id_for_calc:
+                # First: total points / XP for the whole bundle
+                try:
                     contrib = [
                         {"symbol": r["token"], "amount": float(r["amount"])}
                         for r in calc_resources
                     ]
-                    reward = predict_reward(mp_id, contrib) or {}
+                    reward = predict_reward(mp_id_for_calc, contrib) or {}
                     total_points = float(reward.get("masterpiecePoints") or 0)
                     total_xp = float(reward.get("experiencePoints") or 0)
-            except Exception:
-                # If predict_reward fails, we just leave totals at 0
-                total_points = 0.0
-                total_xp = 0.0
+                except Exception:
+                    # If predict_reward fails, we just leave totals at 0
+                    total_points = 0.0
+                    total_xp = 0.0
+
+                # Then: per-unit cache so each row can show its own contribution
+                try:
+                    per_unit = get_mp_per_unit_rewards(
+                        mp_id_for_calc,
+                        [r.get("token", "") for r in calc_resources],
+                    )
+                    per_unit_points = per_unit.get("points", {}) or {}
+                    per_unit_xp = per_unit.get("xp", {}) or {}
+                except Exception:
+                    per_unit_points = {}
+                    per_unit_xp = {}
+
+            # Per-row points / XP (safe even if we have no per-unit data)
+            for row in calc_resources:
+                tok = (row.get("token") or "").upper()
+                try:
+                    amt = float(row.get("amount") or 0.0)
+                except (TypeError, ValueError):
+                    amt = 0.0
+
+                p_unit = per_unit_points.get(tok, 0.0)
+                x_unit = per_unit_xp.get(tok, 0.0)
+                row_points = p_unit * amt
+                row_xp = x_unit * amt
+
+                row["points_str"] = f"{row_points:,.0f}" if row_points else "—"
+                row["xp_str"] = f"{row_xp:,.0f}" if row_xp else "—"
+
 
             # 3) Map to tiers
             tier = 0
@@ -1848,17 +1922,22 @@ def masterpieces_view():
                 <tr>
                   <th>Token</th>
                   <th style="text-align:right;">Quantity</th>
+                  <th style="text-align:right;">Points</th>
+                  <th style="text-align:right;">XP</th>
                 </tr>
                 {% for row in calc_resources %}
                   <tr>
                     <td>{{ row.token }}</td>
                     <td style="text-align:right;">{{ row.amount }}</td>
+                    <td style="text-align:right;">{{ row.points_str }}</td>
+                    <td style="text-align:right;">{{ row.xp_str }}</td>
                   </tr>
                 {% endfor %}
               </table>
             {% else %}
               <p class="hint">No resources added yet. Add some above to see the results.</p>
             {% endif %}
+
 
             <h3 style="margin-top:16px;">📊 Calculation Results</h3>
             {% if calc_result %}
@@ -3101,6 +3180,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
