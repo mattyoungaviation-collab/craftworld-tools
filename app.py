@@ -1702,15 +1702,46 @@ def masterpieces_view():
         error = f"Error fetching masterpieces: {e}"
         masterpieces_data = []
 
-    # Pick a default masterpiece id for calculator / per-unit scoring
-    # Use the *latest* masterpiece (last in the list), which is usually the active one.
+    # Pick the *current* masterpiece for calculator / per-unit scoring
     mp_id_for_calc: Optional[str] = None
+    current_mp: Optional[Dict[str, Any]] = None
+    current_mp_top50: List[Dict[str, Any]] = []
+
     if masterpieces_data:
-        target_mp = masterpieces_data[-1]
-        if isinstance(target_mp, dict):
-            mp_id_for_calc = str(target_mp.get("id") or "")
+        # Prefer a non-event masterpiece (eventId is null/empty).
+        chosen = None
+        for mp in masterpieces_data:
+            if isinstance(mp, dict):
+                ev = mp.get("eventId")
+            else:
+                ev = getattr(mp, "eventId", None)
+            if not ev:
+                chosen = mp
+                break
+
+        # Fallback: use the last masterpiece in the list
+        if chosen is None:
+            chosen = masterpieces_data[-1]
+
+        current_mp = chosen
+
+        # Resolve id as string
+        if isinstance(chosen, dict):
+            mp_id_for_calc = str(chosen.get("id") or "")
+            lb = chosen.get("leaderboard") or []
         else:
-            mp_id_for_calc = str(getattr(target_mp, "id", "") or "")
+            mp_id_for_calc = str(getattr(chosen, "id", "") or "")
+            lb = getattr(chosen, "leaderboard", []) or []
+
+        # Top 50 leaderboard entries for the current masterpiece
+        try:
+            current_mp_top50 = list(lb[:50])
+        except Exception:
+            current_mp_top50 = []
+    else:
+        current_mp = None
+        current_mp_top50 = []
+
 
 
 
@@ -2017,10 +2048,47 @@ def masterpieces_view():
             </table>
           </div>
         </div>
+
+        <div class="section" style="margin-top:16px;">
+          <h2>Leaderboard – Current Masterpiece</h2>
+          {% if current_mp_top50 and current_mp %}
+            <div class="hint">
+              Showing top {{ current_mp_top50|length }} positions for
+              <strong>{{ current_mp.name or current_mp.id }}</strong>.
+            </div>
+            <div class="mp-table-wrap">
+              <table>
+                <tr>
+                  <th>Pos</th>
+                  <th>Player</th>
+                  <th>Points</th>
+                </tr>
+                {% for row in current_mp_top50 %}
+                  <tr>
+                    <td>{{ row.position }}</td>
+                    <td>
+                      {% if row.profile and row.profile.displayName %}
+                        {{ row.profile.displayName }}
+                      {% elif row.profile and row.profile.uid %}
+                        {{ row.profile.uid }}
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                    <td>{{ row.masterpiecePoints | int }}</td>
+                  </tr>
+                {% endfor %}
+              </table>
+            </div>
+          {% else %}
+            <p class="hint">No leaderboard data available for the current masterpiece.</p>
+          {% endif %}
+        </div>
       {% else %}
         <p>No masterpieces found.</p>
       {% endif %}
     </div>
+
     """
 
     # Render inner content with context
@@ -2033,7 +2101,10 @@ def masterpieces_view():
         calc_resources=calc_resources,
         calc_result=calc_result,
         calc_state_json=calc_state_json,
+        current_mp=current_mp,
+        current_mp_top50=current_mp_top50,
     )
+
 
     # Wrap in base template
     html = render_template_string(
@@ -3182,6 +3253,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
