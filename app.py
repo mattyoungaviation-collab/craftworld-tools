@@ -345,6 +345,8 @@ BASE_TEMPLATE = """
           <a href="{{ url_for('profitability') }}" class="{% if active_page == 'profitability' %}active{% endif %}">Profitability</a>
           <a href="{{ url_for('boosts') }}" class="{% if active_page == 'boosts' %}active{% endif %}">Boosts</a>
           <a href="{{ url_for('masterpieces_view') }}" class="{% if active_page == 'masterpieces' %}active{% endif %}">Masterpieces</a>
+          <a href="{{ url_for('snipe') }}" class="{% if active_page == 'snipe' %}active{% endif %}">Snipe</a>
+
         </div>
       </div>
     </header>
@@ -1058,6 +1060,225 @@ def masterpieces_view():
         content=inner,
         active_page="masterpieces",
     )
+@app.route("/snipe", methods=["GET", "POST"])
+def snipe():
+    """
+    Simple Masterpiece snipe helper.
+
+    - Pick a masterpiece
+    - Pick a single resource token
+    - Enter target rank + your current points
+    - We read the live leaderboard and use predictReward + live COIN prices
+      to estimate how much you need.
+    """
+    error: Optional[str] = None
+    rank_result: Optional[Dict[str, Any]] = None
+
+    # Load masterpieces list for dropdown
+    try:
+        all_mps = fetch_masterpieces()
+    except Exception as e:
+        all_mps = []
+        error = f"Error fetching masterpieces list: {e}"
+
+    # Sort newest first by id
+    def _mp_id(mp: Dict[str, Any]) -> int:
+        try:
+            return int(mp.get("id") or 0)
+        except Exception:
+            return 0
+
+    all_mps = sorted(all_mps, key=_mp_id, reverse=True)
+
+    mp_choices = [
+        {
+            "id": str(mp.get("id")),
+            "label": f"MP{mp.get('id')} – {mp.get('name') or 'unknown'}",
+        }
+        for mp in all_mps
+    ]
+
+    selected_mp_id = ""
+    selected_symbol = ""
+    target_rank_str = ""
+    my_points_str = ""
+
+    if request.method == "POST":
+        selected_mp_id = (request.form.get("masterpiece_id") or "").strip()
+        selected_symbol = (request.form.get("symbol") or "").strip().upper()
+        target_rank_str = (request.form.get("target_rank") or "").strip()
+        my_points_str = (request.form.get("my_points") or "").strip()
+
+        if not selected_mp_id:
+            error = "Please choose a masterpiece."
+        elif not selected_symbol:
+            error = "Please enter a resource symbol (e.g. MUD, GAS)."
+        else:
+            # Parse numeric inputs
+            try:
+                target_rank = int(target_rank_str or "0")
+            except ValueError:
+                target_rank = 0
+            try:
+                my_points = float(my_points_str or "0")
+            except ValueError:
+                my_points = 0.0
+
+            if target_rank <= 0:
+                error = "Enter a target rank (e.g. 10)."
+            else:
+                try:
+                    mp = fetch_masterpiece_details(selected_mp_id)
+                    prices = fetch_live_prices_in_coin()
+
+                    leaderboard = mp.get("leaderboard") or []
+                    target_entry = None
+                    for row in leaderboard:
+                        if row.get("position") == target_rank:
+                            target_entry = row
+                            break
+
+                    if not target_entry:
+                        error = f"Could not find rank {target_rank} on this leaderboard."
+                    else:
+                        target_points = float(target_entry.get("masterpiecePoints") or 0.0)
+                        # Add +1 so you actually pass them
+                        points_needed = max(0.0, target_points - my_points + 1.0)
+
+                        # Use predictReward for 1 unit of this resource to get points per unit
+                        reward = predict_reward(
+                            str(selected_mp_id),
+                            [{"symbol": selected_symbol, "amount": 1}],
+                        )
+                        points_per_unit = float(reward.get("masterpiecePoints") or 0.0)
+                        battery_per_unit = float(reward.get("requiredPower") or 0.0)
+                        price_coin = float(prices.get(selected_symbol, 0.0))
+
+                        if points_per_unit <= 0:
+                            error = (
+                                f"predictReward returned 0 pts for 1 {selected_symbol}. "
+                                "This resource may not be valid for this masterpiece."
+                            )
+                        else:
+                            units_needed = math.ceil(points_needed / points_per_unit)
+                            total_points = units_needed * points_per_unit
+                            total_battery = units_needed * battery_per_unit
+                            total_coin = units_needed * price_coin
+
+                            rank_result = {
+                                "mp": mp,
+                                "target_rank": target_rank,
+                                "target_points": target_points,
+                                "my_points": my_points,
+                                "points_needed": points_needed,
+                                "symbol": selected_symbol,
+                                "points_per_unit": points_per_unit,
+                                "battery_per_unit": battery_per_unit,
+                                "price_coin": price_coin,
+                                "units_needed": units_needed,
+                                "total_points": total_points,
+                                "total_battery": total_battery,
+                                "total_coin": total_coin,
+                            }
+
+                except Exception as e:
+                    error = f"Error calculating snipe: {e}"
+
+    content = """
+    <h1>🎯 Masterpiece Rank Snipe (single resource)</h1>
+    <p class="subtle">
+      Pick a masterpiece, a resource token, and a target rank. We read the live leaderboard
+      and use <code>predictReward</code> + live COIN prices to estimate how much you need.
+    </p>
+
+    <form method="post" style="margin-top:12px;margin-bottom:16px;">
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+        <div style="flex:2;min-width:220px;">
+          <label for="masterpiece_id">Masterpiece</label>
+          <select id="masterpiece_id" name="masterpiece_id" style="width:100%;">
+            <option value="">(choose masterpiece)</option>
+            {% for mp in mp_choices %}
+              <option value="{{ mp.id }}" {% if mp.id == selected_mp_id %}selected{% endif %}>
+                {{ mp.label }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label for="symbol">Resource symbol</label>
+          <input id="symbol" name="symbol" value="{{ selected_symbol }}" placeholder="MUD, GAS, CEMENT…" />
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label for="target_rank">Target rank</label>
+          <input type="number" id="target_rank" name="target_rank" value="{{ target_rank_str }}" />
+        </div>
+        <div style="flex:1;min-width:160px;">
+          <label for="my_points">Your current points</label>
+          <input type="number" step="1" id="my_points" name="my_points" value="{{ my_points_str }}" />
+        </div>
+        <div style="flex:0;min-width:140px;display:flex;justify-content:flex-start;">
+          <button type="submit">Calc snipe</button>
+        </div>
+      </div>
+    </form>
+
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+
+    {% if rank_result %}
+      <div class="card" style="margin-top:10px;">
+        <h2>{{ rank_result.mp.name }} – snipe to rank {{ rank_result.target_rank }}</h2>
+        <p class="subtle">
+          Target points (rank {{ rank_result.target_rank }}):
+          {{ "{:,0f}".format(rank_result.target_points) }}<br>
+          Your current points:
+          {{ "{:,0f}".format(rank_result.my_points) }}<br>
+          <strong>Points needed to pass:</strong>
+          {{ "{:,0f}".format(rank_result.points_needed) }}
+        </p>
+
+        <h3>Resource choice</h3>
+        <p>
+          Resource: <code>{{ rank_result.symbol }}</code><br>
+          Points per 1 {{ rank_result.symbol }}:
+          {{ "{:.4f}".format(rank_result.points_per_unit) }} pts<br>
+          Battery per 1 {{ rank_result.symbol }}:
+          {{ "{:.4f}".format(rank_result.battery_per_unit) }}<br>
+          Price:
+          {{ "{:.6f}".format(rank_result.price_coin) }} COIN / unit
+        </p>
+
+        <h3>Totals</h3>
+        <p>
+          Units needed:
+          {{ "{:,}".format(rank_result.units_needed) }} {{ rank_result.symbol }}<br>
+          Total points gained:
+          {{ "{:,0f}".format(rank_result.total_points) }}<br>
+          Total battery:
+          {{ "{:,0f}".format(rank_result.total_battery) }}<br>
+          Total COIN cost:
+          {{ "{:.4f}".format(rank_result.total_coin) }} COIN
+        </p>
+      </div>
+    {% endif %}
+    """
+
+    inner = render_template_string(
+        content,
+        error=error,
+        mp_choices=mp_choices,
+        selected_mp_id=selected_mp_id,
+        selected_symbol=selected_symbol,
+        target_rank_str=target_rank_str,
+        my_points_str=my_points_str,
+        rank_result=rank_result,
+    )
+    return render_template_string(
+        BASE_TEMPLATE,
+        content=inner,
+        active_page="snipe",
+    )
 
 
 # -------------------------------------------------
@@ -1067,3 +1288,4 @@ def masterpieces_view():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
