@@ -2319,15 +2319,142 @@ def masterpieces_view():
     # Serialize calculator state back into hidden JSON field
     calc_state_json = json.dumps(calc_resources)
 
-    # Build static tier rows for display
+    # ---------- Tier thresholds (static ladder) ----------
     tier_rows = []
     for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
         prev_req = MP_TIER_THRESHOLDS[i - 2] if i > 1 else 0
-        tier_rows.append({
-            "tier": i,
-            "required": req,
-            "delta": req - prev_req,
-        })
+        tier_rows.append(
+            {
+                "tier": i,
+                "required": req,
+                "delta": req - prev_req,
+            }
+        )
+
+    # ---------- Tier rewards from the Masterpiece (rewardStages) ----------
+    reward_tier_rows: list[dict[str, object]] = []
+
+    # Use the planner MP as the "source of truth" for tier rewards
+    # (you can swap to selected_mp/current_mp if you want)
+    src_mp = planner_mp or selected_mp or current_mp
+
+    if isinstance(src_mp, dict):
+        raw_stages = src_mp.get("rewardStages") or []
+
+        # rewardStages can be either a list or dict; normalise to list
+        if isinstance(raw_stages, dict):
+            stages_iter = list(raw_stages.values())
+        elif isinstance(raw_stages, list):
+            stages_iter = raw_stages
+        else:
+            stages_iter = []
+
+        for idx, st in enumerate(stages_iter, start=1):
+            if not isinstance(st, dict):
+                continue
+
+            # Try to guess tier index and required points from common keys
+            tier_num = st.get("tier") or st.get("stage") or idx
+            required = (
+                st.get("requiredPoints")
+                or st.get("minPoints")
+                or st.get("minimumPoints")
+                or st.get("points")
+            )
+
+            rewards_list = st.get("rewards") or st.get("items") or []
+            reward_parts: list[str] = []
+
+            if isinstance(rewards_list, list):
+                for rw in rewards_list:
+                    if not isinstance(rw, dict):
+                        continue
+
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+
+                    label_bits: list[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
+
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        reward_parts.append(label)
+
+            if not reward_parts:
+                reward_parts.append("See in-game rewards")
+
+            reward_tier_rows.append(
+                {
+                    "tier": tier_num,
+                    "required": required,
+                    "rewards_text": ", ".join(reward_parts),
+                }
+            )
+
+    # ---------- Leaderboard placement rewards (leaderboardRewards) ----------
+    leaderboard_reward_rows: list[dict[str, object]] = []
+
+    if isinstance(selected_mp, dict):
+        raw_lb_rewards = (
+            selected_mp.get("leaderboardRewards")
+            or selected_mp.get("leaderboardRewardStages")
+            or []
+        )
+
+        if isinstance(raw_lb_rewards, dict):
+            lb_iter = list(raw_lb_rewards.values())
+        elif isinstance(raw_lb_rewards, list):
+            lb_iter = raw_lb_rewards
+        else:
+            lb_iter = []
+
+        for blk in lb_iter:
+            if not isinstance(blk, dict):
+                continue
+
+            from_rank = blk.get("from") or blk.get("fromRank")
+            to_rank = blk.get("to") or blk.get("toRank")
+
+            rewards_list = blk.get("rewards") or blk.get("items") or []
+            reward_parts: list[str] = []
+
+            if isinstance(rewards_list, list):
+                for rw in rewards_list:
+                    if not isinstance(rw, dict):
+                        continue
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+
+                    label_bits: list[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
+
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        reward_parts.append(label)
+
+            if not reward_parts:
+                reward_parts.append("See in-game rewards")
+
+            leaderboard_reward_rows.append(
+                {
+                    "from_rank": from_rank,
+                    "to_rank": to_rank,
+                    "rewards_text": ", ".join(reward_parts),
+                }
+            )
+
 
     # ---------- Render content for this tab ----------
     content = """
@@ -2617,6 +2744,42 @@ def masterpieces_view():
                 </table>
               </div>
             </div>
+            <div class="section" style="margin-top:10px;">
+              <h3 style="margin-top:0;">Tier rewards</h3>
+              <p class="subtle">
+                Guaranteed rewards for each completion tier (from the Masterpiece rewardStages API).
+              </p>
+
+              {% if reward_tier_rows %}
+                <div class="scroll-x">
+                  <table class="mp-tier-table">
+                    <tr>
+                      <th>Tier</th>
+                      <th>Required points</th>
+                      <th>Rewards</th>
+                    </tr>
+                    {% for row in reward_tier_rows %}
+                      <tr>
+                        <td>Tier {{ row.tier or loop.index }}</td>
+                        <td>
+                          {% if row.required %}
+                            {{ "{:,}".format(row.required) }}
+                          {% else %}
+                            —
+                          {% endif %}
+                        </td>
+                        <td>{{ row.rewards_text }}</td>
+                      </tr>
+                    {% endfor %}
+                  </table>
+                </div>
+              {% else %}
+                <p class="hint">
+                  No tier reward metadata in the API for this Masterpiece yet — check in-game rewards.
+                </p>
+              {% endif %}
+            </div>
+
 
             <!-- Right: planner form & results -->
             <div class="section">
@@ -2785,6 +2948,42 @@ def masterpieces_view():
                         Highlight: <code>{{ highlight_query }}</code>
                       </div>
                     </div>
+          <div class="section" style="margin-top:14px;">
+            <h3 style="margin-top:0;">Leaderboard rewards</h3>
+            <p class="subtle">
+              Placement rewards for this Masterpiece (from the <code>leaderboardRewards</code> API field).
+            </p>
+
+            {% if leaderboard_reward_rows %}
+              <div class="scroll-x">
+                <table>
+                  <tr>
+                    <th>Rank range</th>
+                    <th>Rewards</th>
+                  </tr>
+                  {% for row in leaderboard_reward_rows %}
+                    <tr>
+                      <td>
+                        {% if row.from_rank and row.to_rank and row.from_rank != row.to_rank %}
+                          #{{ row.from_rank }} &ndash; #{{ row.to_rank }}
+                        {% elif row.from_rank %}
+                          #{{ row.from_rank }}
+                        {% else %}
+                          (unknown)
+                        {% endif %}
+                      </td>
+                      <td>{{ row.rewards_text }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
+            {% else %}
+              <p class="hint">
+                No leaderboard reward metadata found for this Masterpiece in the API.
+              </p>
+            {% endif %}
+          </div>
+
 
                     {% if current_gap.gap_up is not none %}
                       <div class="mp-gap-block">
@@ -3088,31 +3287,31 @@ def masterpieces_view():
 
     # Render inner content with context
     inner = render_template_string(
-        content,
-        masterpieces=masterpieces_data,
-        general_mps=general_mps,
-        event_mps=event_mps,
-        history_mp_options=history_mp_options,
-        tier_rows=tier_rows,
-        ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
-        planner_tokens=planner_tokens,
-        calc_resources=calc_resources,
-        calc_result=calc_result,
-        calc_state_json=calc_state_json,
-        planner_mp_options=planner_mp_options,
-        planner_mp=planner_mp,
-        planner_mp_id=planner_mp_id,
-        current_mp=current_mp,
-        current_mp_top50=current_mp_top50,
-        selected_mp=selected_mp,
-        selected_mp_top50=selected_mp_top50,
-        selected_mp_id=selected_mp_id,
-        highlight_query=highlight_query,
+         content,
+         error=error,
+         masterpieces_data=masterpieces_data,
+         general_mps=general_mps,
+         event_mps=event_mps,
+         current_mp=current_mp,
+         current_mp_top50=current_mp_top50,
         current_gap=current_gap,
-        selected_gap=selected_gap,
-        top_n=top_n,
-        top_n_options=TOP_N_OPTIONS,
-    )
+         selected_mp=selected_mp,
+         selected_mp_top50=selected_mp_top50,
+         selected_gap=selected_gap,
+         planner_mp=planner_mp,
+         planner_mp_options=planner_mp_options,
+         planner_tokens=planner_tokens,
+         calc_resources=calc_resources,
+         calc_result=calc_result,
+         calc_state_json=calc_state_json,
+         tier_rows=tier_rows,
+         reward_tier_rows=reward_tier_rows,
+         leaderboard_reward_rows=leaderboard_reward_rows,
+         top_n=top_n,
+         TOP_N_OPTIONS=TOP_N_OPTIONS,
+         history_mp_options=history_mp_options,
+         highlight_query=highlight_query,
+     ),
 
 
     # Wrap in base template
@@ -4263,6 +4462,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
