@@ -1951,6 +1951,10 @@ def masterpieces_view():
         session["mp_highlight"] = highlight_query
     else:
         highlight_query = session.get("mp_highlight", "") or ""
+
+    # Which sub-tab is active: "planner", "current", or "history"?
+    tab = (request.args.get("tab") or request.form.get("tab") or "").strip() or "planner"
+
     
 
 
@@ -3280,11 +3284,6 @@ def masterpieces_view():
 </script>
     """
 
-    # ---------- Render content for this tab ----------
-    content = """
-    ... your huge HTML template ...
-    """
-
     # Render inner content with context
     inner = render_template_string(
         content,
@@ -4460,6 +4459,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
