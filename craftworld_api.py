@@ -224,9 +224,9 @@ def fetch_masterpiece_details(masterpiece_id: int | str) -> Dict[str, Any]:
     """
     Fetch a single masterpiece with resources + leaderboard.
     """
-    query = """
-    query MasterpieceDetails($id: ID!) {
-      masterpiece(id: $id) {
+MASTERPIECE_DETAILS_QUERY = """
+query Masterpiece($id: ID) {
+    masterpiece(id: $id) {
         id
         name
         type
@@ -234,25 +234,128 @@ def fetch_masterpiece_details(masterpiece_id: int | str) -> Dict[str, Any]:
         collectedPoints
         requiredPoints
         addressableLabel
+
         resources {
-          symbol
-          amount
-          target
-          consumedPowerPerUnit
+            symbol
+            amount
+            target
+            consumedPowerPerUnit
         }
+
         leaderboard {
-          position
-          masterpiecePoints
-          profile {
-            uid
-            walletAddress
-            avatarUrl
-            displayName
-          }
+            position
+            masterpiecePoints
+            profile {
+                uid
+                walletAddress
+                avatarUrl
+                displayName
+            }
         }
-      }
+
+        rewardStages {
+            requiredMasterpiecePoints
+
+            rewards {
+                __typename
+                ... on Resource {
+                    symbol
+                    amount
+                }
+                ... on Avatar {
+                    avatarUrl
+                    isEns
+                }
+                ... on Badge {
+                    badgeName
+                    url
+                    description
+                    displayName
+                    infoUrl
+                }
+                ... on OnChainToken {
+                    symbol
+                    infoUrl
+                }
+                ... on TradePack {
+                    amount
+                }
+                ... on BuildingReward {
+                    buildingType
+                    buildingSubType
+                }
+            }
+
+            battlePassRewards {
+                __typename
+                ... on Resource {
+                    symbol
+                    amount
+                }
+                ... on Avatar {
+                    avatarUrl
+                    isEns
+                }
+                ... on Badge {
+                    badgeName
+                    url
+                    description
+                    displayName
+                    infoUrl
+                }
+                ... on OnChainToken {
+                    symbol
+                    infoUrl
+                }
+                ... on TradePack {
+                    amount
+                }
+                ... on BuildingReward {
+                    buildingType
+                    buildingSubType
+                }
+            }
+        }
+
+        leaderboardRewards {
+            top
+
+            rewards {
+                __typename
+                ... on Resource {
+                    symbol
+                    amount
+                }
+                ... on Avatar {
+                    avatarUrl
+                    isEns
+                }
+                ... on Badge {
+                    badgeName
+                    url
+                    description
+                    displayName
+                    infoUrl
+                }
+                ... on OnChainToken {
+                    symbol
+                    infoUrl
+                }
+                ... on TradePack {
+                    amount
+                }
+                ... on BuildingReward {
+                    buildingType
+                    buildingSubType
+                }
+            }
+        }
+
+        startedAt
     }
-    """
+}
+"""
+
     data = call_graphql(query, {"id": str(masterpiece_id)})
     mp = data.get("masterpiece")
     if mp is None:
@@ -300,3 +403,4 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
