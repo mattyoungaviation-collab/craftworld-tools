@@ -1783,8 +1783,8 @@ def masterpieces_view():
     
 
 
-    # Pick the "current" masterpiece: latest general if available, otherwise latest event
-    mp_id_for_calc: Optional[str] = None
+    # Pick the "current" masterpiece (for the live leaderboard):
+    # latest general if available, otherwise latest event.
     current_mp: Optional[Dict[str, Any]] = None
     current_mp_top50: List[Dict[str, Any]] = []
 
@@ -1794,7 +1794,6 @@ def masterpieces_view():
         current_mp = event_mps[-1]
 
     if current_mp:
-        mp_id_for_calc = str(current_mp.get("id") or "")
         lb = current_mp.get("leaderboard") or []
         try:
             current_mp_top50 = list(lb[:top_n])
@@ -1802,6 +1801,29 @@ def masterpieces_view():
             current_mp_top50 = []
     else:
         current_mp_top50 = []
+
+    # This will be set after resolving the planner target masterpiece.
+    mp_id_for_calc: Optional[str] = None
+
+    # ----- Planner target masterpiece (Donation Planner uses this) -----
+    # Only use general masterpieces here (MP1 .. latest general).
+    planner_mp_options: List[Dict[str, Any]] = general_mps
+    planner_mp: Optional[Dict[str, Any]] = None
+    planner_mp_id: str = (request.args.get("planner_mp_id") or request.form.get("planner_mp_id") or "").strip()
+
+    if planner_mp_id:
+        for mp in planner_mp_options:
+            if str(mp.get("id")) == str(planner_mp_id):
+                planner_mp = mp
+                break
+
+    # Default to the latest general masterpiece if nothing selected or invalid.
+    if not planner_mp and general_mps:
+        planner_mp = general_mps[-1]
+
+    if planner_mp:
+        mp_id_for_calc = str(planner_mp.get("id") or "")
+        planner_mp_id = str(planner_mp.get("id") or "")
 
 
     # ----- Masterpiece selector for "History & Events" leaderboard browser -----
@@ -2245,11 +2267,28 @@ def masterpieces_view():
               <form method="post">
                 <input type="hidden" name="calc_state" value='{{ calc_state_json }}'>
 
+                <div style="margin-bottom:10px;">
+                  <label for="planner_mp_id">Masterpiece</label>
+                  <select id="planner_mp_id" name="planner_mp_id">
+                    {% if planner_mp_options %}
+                      {% for mp in planner_mp_options %}
+                        <option value="{{ mp.id }}"
+                          {% if planner_mp and mp.id == planner_mp.id %}selected{% endif %}>
+                          MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
+                        </option>
+                      {% endfor %}
+                    {% else %}
+                      <option value="">(no general masterpieces found)</option>
+                    {% endif %}
+                  </select>
+                </div>
+
                 <h2 style="margin-top:0;">Build a donation bundle</h2>
+
                 <p class="subtle">
                   Choose resources, set amounts, and we&apos;ll predict total
                   <strong>MP points</strong>, <strong>XP</strong>, and <strong>COIN cost</strong>
-                  using the current general Masterpiece.
+                  using the selected Masterpiece above.
                 </p>
 
                 <div class="two-col" style="gap:10px;">
@@ -2573,6 +2612,9 @@ def masterpieces_view():
         calc_resources=calc_resources,
         calc_result=calc_result,
         calc_state_json=calc_state_json,
+        planner_mp_options=planner_mp_options,
+        planner_mp=planner_mp,
+        planner_mp_id=planner_mp_id,
         current_mp=current_mp,
         current_mp_top50=current_mp_top50,
         mp_selector_options=mp_selector_options,
@@ -3732,6 +3774,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
