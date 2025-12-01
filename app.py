@@ -1,123 +1,124 @@
-from typing import Dict, Any, List, Optional
+from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
-import requests
-from flask import Flask, request, render_template_string, session, url_for, redirect
+from typing import Any, Dict, List, Optional, Tuple
 
-from werkzeug.security import generate_password_hash, check_password_hash
+from flask import (
+    Flask,
+    request,
+    render_template_string,
+    session,
+    redirect,
+    url_for,
+)
 
 from craftworld_api import (
     fetch_craftworld,
     fetch_masterpieces,
     fetch_masterpiece_details,
     predict_reward,
-    get_jwt,
-    GRAPHQL_URL,
 )
-# ---------------- Database setup (users + saved boosts) ----------------
-
-import os
-DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
-
-
-
-def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db() -> None:
-    conn = get_db_connection()
-    cur = conn.cursor()
-    # Simple users table: username + password hash
-    cur.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        '''
-    )
-    # Per-user boosts: one row per token per user
-    cur.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS boosts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            token TEXT NOT NULL,
-            mastery_level INTEGER NOT NULL,
-            workshop_level INTEGER NOT NULL,
-            UNIQUE(user_id, token),
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-        '''
-    )
-    # Saved MP donation presets per user
-    cur.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS mp_presets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            masterpiece_id INTEGER,
-            payload TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-        '''
-    )
-    conn.commit()
-    conn.close()
-
-
-
-init_db()
-
-
-from pricing import fetch_live_prices_in_coin
-
 from factories import (
-    my_factories,
-    profit_per_hour,
     FACTORIES_FROM_CSV,
     compute_factory_result_csv,
-    compute_best_setups_csv,
-    FACTORY_DISPLAY_ORDER,
-    FACTORY_DISPLAY_INDEX,
-    MASTERY_BONUSES,
-    WORKSHOP_MODIFIERS,
 )
+from pricing import fetch_live_prices_in_coin
 
-# ---- Fallback mastery / workshop tables ----
-# If factories.py doesn't define these yet, we provide safe defaults here.
+# -------------------------------------------------
+# Flask app + config
+# -------------------------------------------------
 
-if "MASTERY_BONUSES" not in globals():
-    # Mastery level 0–10 → multiplier on output (1.00x … 1.20x as a placeholder).
-    # You can tweak these later to match the exact in-game table.
-    MASTERY_BONUSES = {
-        0: 1.00,
-        1: 1.02,
-        2: 1.04,
-        3: 1.06,
-        4: 1.08,
-        5: 1.10,
-        6: 1.12,
-        7: 1.14,
-        8: 1.16,
-        9: 1.18,
-        10: 1.20,
-    }
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-please-change")
+
+DB_PATH = os.environ.get("DB_PATH", "craftworld_tools.db")
+
+# -------------------------------------------------
+# Helpers: DB for boosts (mastery/workshop per token)
+# -------------------------------------------------
 
 
+def _ensure_db() -> None:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS boost_levels (
+                user_id TEXT PRIMARY KEY,
+                data    TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
-ALL_FACTORY_TOKENS = sorted(FACTORIES_FROM_CSV.keys())
-# Standard display order for factories (used in "standard" sort mode)
+def _load_boost_levels(user_id: str) -> Dict[str, Dict[str, int]]:
+    _ensure_db()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT data FROM boost_levels WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        if not row or not row[0]:
+            return {}
+        return json.loads(row[0])
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+
+def _save_boost_levels(user_id: str, payload: Dict[str, Dict[str, int]]) -> None:
+    _ensure_db()
+    encoded = json.dumps(payload)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO boost_levels (user_id, data)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET data = excluded.data
+            """,
+            (user_id, encoded),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _current_uid() -> Optional[str]:
+    uid = session.get("voya_uid")
+    if uid and isinstance(uid, str) and uid.strip():
+        return uid.strip()
+    return None
+
+
+def _has_uid() -> bool:
+    return _current_uid() is not None
+
+
+def _get_boost_levels_for_uid(uid: str) -> Dict[str, Dict[str, int]]:
+    """Return dict like {TOKEN: {"mastery": int, "workshop": int}}."""
+    return _load_boost_levels(uid)
+
+
+def _set_boost_levels_for_uid(uid: str, levels: Dict[str, Dict[str, int]]) -> None:
+    _save_boost_levels(uid, levels)
+
+
+# -------------------------------------------------
+# Constants
+# -------------------------------------------------
+
+ALL_FACTORY_TOKENS: List[str] = sorted(FACTORIES_FROM_CSV.keys())
+
 STANDARD_FACTORY_ORDER: List[str] = [
     "MUD",
     "CLAY",
@@ -132,1633 +133,590 @@ STANDARD_FACTORY_ORDER: List[str] = [
     "OXYGEN",
     "GLASS",
     "GAS",
-    "STONE",
+    "CEMENT",
     "STEAM",
     "SCREWS",
     "FUEL",
-    "CEMENT",
     "OIL",
-    "ACID",
-    "SULFER",
     "PLASTICS",
     "FIBERGLASS",
     "ENERGY",
     "HYDROGEN",
     "DYNAMITE",
+    "TAPE",
+    "MAGICSHARD",
+    "PLUNGER",
+    "SPOON",
+    "TOYHAMMER",
+    "NINJASTAR",
+    "SWORD",
+    "MYSTICWEAPON",
+    "TARGET",
 ]
-
 STANDARD_ORDER_INDEX: Dict[str, int] = {
     name.upper(): idx for idx, name in enumerate(STANDARD_FACTORY_ORDER)
 }
-# Masterpiece tier thresholds (points required per tier)
-MP_TIER_THRESHOLDS = [
-    10_000,        # Tier 1
-    35_000,        # Tier 2
-    85_000,        # Tier 3
-    250_000,       # Tier 4
-    1_000_000,     # Tier 5
-    3_250_000,     # Tier 6
-    15_000_000,    # Tier 7
-    50_000_000,    # Tier 8
-    100_000_000,   # Tier 9
-    200_000_000,   # Tier 10
+
+MP_TIER_THRESHOLDS: List[int] = [
+    10_000,
+    35_000,
+    85_000,
+    200_000,
+    500_000,
+    1_000_000,
+    2_000_000,
+    5_000_000,
+    10_000_000,
+    20_000_000,
 ]
-def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[str, float]]:
-    """
-    Pre-compute masterpiece points and XP per 1 unit for each symbol in `symbols`.
 
-    This is a thin wrapper around predict_reward(...) that calls it once per
-    unique token with amount = 1.0.
+# -------------------------------------------------
+# Base template
+# -------------------------------------------------
 
-    Returns a dict:
-      {
-        "points": { "SEAWATER": 4_200_000.0, ... },
-        "xp":     { "SEAWATER":   350_000.0, ... },
-      }
-    """
-    unique_syms = sorted({(s or "").upper() for s in symbols if s})
-    points: Dict[str, float] = {}
-    xp: Dict[str, float] = {}
-
-    if not mp_id or not unique_syms:
-        return {"points": points, "xp": xp}
-
-    for sym in unique_syms:
-        try:
-            pr = predict_reward(mp_id, [{"symbol": sym, "amount": 1.0}]) or {}
-            points[sym] = float(pr.get("masterpiecePoints") or 0.0)
-            xp[sym] = float(pr.get("experiencePoints") or 0.0)
-        except Exception:
-            # If anything fails, just treat this token as 0 points / 0 XP per unit
-            points[sym] = 0.0
-            xp[sym] = 0.0
-
-    return {"points": points, "xp": xp}
-
-
-
-def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[str, float]]:
-    """
-    Pre-compute masterpiece points and XP per 1 unit for each symbol in `symbols`.
-
-    This is a thin wrapper around predict_reward(...) that calls it once per
-    unique token with amount = 1.0.
-
-    Returns a dict:
-      {
-        "points": { "SEAWATER": 4_200_000.0, ... },
-        "xp":     { "SEAWATER":   350_000.0, ... },
-      }
-    """
-    unique_syms = sorted({(s or "").upper() for s in symbols if s})
-    points: Dict[str, float] = {}
-    xp: Dict[str, float] = {}
-
-    if not mp_id or not unique_syms:
-        return {"points": points, "xp": xp}
-
-    for sym in unique_syms:
-        try:
-            pr = predict_reward(mp_id, [{"symbol": sym, "amount": 1.0}]) or {}
-            points[sym] = float(pr.get("masterpiecePoints") or 0.0)
-            xp[sym] = float(pr.get("experiencePoints") or 0.0)
-        except Exception:
-            # If anything fails, just treat this token as 0 points / 0 XP per unit
-            points[sym] = 0.0
-            xp[sym] = 0.0
-
-    return {"points": points, "xp": xp}
-
-
-def _default_boost_levels() -> dict[str, dict[str, int]]:
-    ...
-
-
-def _default_boost_levels() -> dict[str, dict[str, int]]:
-    """
-    Default per-token mastery/workshop levels (0–10).
-    These act like your account-wide boosts for each resource.
-    """
-    return {
-        token: {"mastery_level": 0, "workshop_level": 0}
-        for token in ALL_FACTORY_TOKENS
-    }
-
-
-def _current_uid() -> str:
-    """
-    Get the current Voya UID for this session.
-    Used so each UID has its own boost settings.
-    """
-    uid = session.get("voya_uid")
-    if not uid:
-        # fallback bucket if no UID set yet
-        return "_NO_UID_"
-    return str(uid)
-
-
-def _load_boost_levels_from_db(user_id: int) -> dict[str, dict[str, int]]:
-    """Return per-token levels from the database for a given user_id."""
-    levels = _default_boost_levels()
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT token, mastery_level, workshop_level FROM boosts WHERE user_id = ?",
-            (user_id,),
-        )
-        for row in cur.fetchall():
-            token = row["token"]
-            if token in levels:
-                try:
-                    m = int(row["mastery_level"])
-                except (TypeError, ValueError):
-                    m = 0
-                try:
-                    w = int(row["workshop_level"])
-                except (TypeError, ValueError):
-                    w = 0
-                levels[token]["mastery_level"] = max(0, min(10, m))
-                levels[token]["workshop_level"] = max(0, min(10, w))
-    finally:
-        conn.close()
-    return levels
-
-
-def _save_boost_levels_to_db(user_id: int, levels: dict[str, dict[str, int]]) -> None:
-    """Persist per-token levels to the database for a given user_id."""
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        for token in ALL_FACTORY_TOKENS:
-            vals = levels.get(token, {})
-            try:
-                m = int(vals.get("mastery_level", 0) or 0)
-            except (TypeError, ValueError):
-                m = 0
-            try:
-                w = int(vals.get("workshop_level", 0) or 0)
-            except (TypeError, ValueError):
-                w = 0
-            m = max(0, min(10, m))
-            w = max(0, min(10, w))
-            cur.execute(
-                '''
-                INSERT INTO boosts (user_id, token, mastery_level, workshop_level)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(user_id, token) DO UPDATE SET
-                    mastery_level = excluded.mastery_level,
-                    workshop_level = excluded.workshop_level
-                ''',
-                (user_id, token, m, w),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def get_boost_levels() -> dict[str, dict[str, int]]:
-    """Load per-token mastery/workshop levels.
-
-    If a user is logged in, we load from the per-account database.
-    Otherwise, we fall back to the older per-UID-in-session storage so
-    the tool still works anonymously and when 'spying' via another UID.
-    """
-    user_id = session.get("user_id")
-    if user_id:
-        try:
-            return _load_boost_levels_from_db(int(user_id))
-        except Exception:
-            # If DB read fails for any reason, fall back to session-based.
-            pass
-
-    # ---- Legacy per-UID-in-session behaviour (no login) ----
-    all_boosts = session.get("boost_levels_by_uid_v1", {})
-    if not isinstance(all_boosts, dict):
-        all_boosts = {}
-
-    uid = _current_uid()
-    raw = all_boosts.get(uid)
-
-    levels: dict[str, dict[str, int]] = _default_boost_levels()
-
-    if isinstance(raw, dict):
-        for token, vals in raw.items():
-            if token not in levels or not isinstance(vals, dict):
-                continue
-            try:
-                m = int(vals.get("mastery_level", 0) or 0)
-            except (TypeError, ValueError):
-                m = 0
-            try:
-                w = int(vals.get("workshop_level", 0) or 0)
-            except (TypeError, ValueError):
-                w = 0
-            levels[token]["mastery_level"] = max(0, min(10, m))
-            levels[token]["workshop_level"] = max(0, min(10, w))
-
-    return levels
-
-
-def save_boost_levels(levels: dict[str, dict[str, int]]) -> None:
-    """Persist per-token mastery/workshop levels.
-
-    If a user is logged in, we store these levels in the per-account
-    database. Otherwise we keep the older behaviour of storing them
-    per-UID in the Flask session, so boosts still work without an
-    account and while 'spying' another UID.
-    """
-    user_id = session.get("user_id")
-    if user_id:
-        # Save to DB for this account
-        try:
-            _save_boost_levels_to_db(int(user_id), levels)
-        except Exception:
-            # If DB write fails, fall back to session-based storage
-            pass
-
-    # ---- Legacy per-UID-in-session storage (kept for compatibility) ----
-    all_boosts = session.get("boost_levels_by_uid_v1", {})
-    if not isinstance(all_boosts, dict):
-        all_boosts = {}
-
-    uid = _current_uid()
-
-    cleaned: dict[str, dict[str, int]] = {}
-    for token in ALL_FACTORY_TOKENS:
-        vals = levels.get(token, {})
-        try:
-            m = int(vals.get("mastery_level", 0) or 0)
-        except (TypeError, ValueError):
-            m = 0
-        try:
-            w = int(vals.get("workshop_level", 0) or 0)
-        except (TypeError, ValueError):
-            w = 0
-        cleaned[token] = {
-            "mastery_level": max(0, min(10, m)),
-            "workshop_level": max(0, min(10, w)),
-        }
-
-    all_boosts[uid] = cleaned
-    session["boost_levels_by_uid_v1"] = all_boosts
-
-
-
-app = Flask(__name__)
-app.secret_key = "craftworld-tools-demo-secret"  # for session
-
-
-# -------- Helper: do we have a UID stored? --------
-def has_uid_flag() -> bool:
-    return bool(session.get("voya_uid"))
-
-
-# -------- Base HTML template (dark neon UI) --------
 BASE_TEMPLATE = """
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>CraftWorld Tools</title>
-  <!-- Make it mobile friendly -->
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #050816;
-      color: #f9fafb;
-      margin: 0;
-      padding: 0;
-    }
-
-    /* ---------- NAV ---------- */
-    .nav {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 20px;
-      background: radial-gradient(circle at top left, #0f172a 0, #020617 50%, #020617 100%);
-      border-bottom: 1px solid rgba(148,163,184,0.35);
-      box-shadow: 0 10px 30px rgba(15,23,42,0.9);
-      position: sticky;
-      top: 0;
-      z-index: 10;
-    }
-    .nav-title {
-      font-weight: 700;
-      font-size: 18px;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      color: #e5e7eb;
-    }
-    .nav-links {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-    .nav-links a,
-    .nav-links span {
-      text-decoration: none;
-      font-size: 14px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      transition: all 0.15s ease-out;
-    }
-    .nav-links a {
-      color: #cbd5f5;
-      border: 1px solid transparent;
-    }
-    .nav-links a:hover {
-      border-color: rgba(94,234,212,0.5);
-      background: rgba(15,23,42,0.9);
-    }
-    .nav-links a.active {
-      background: linear-gradient(135deg, #22c55e, #0ea5e9);
-      color: #020617;
-      border-color: transparent;
-      box-shadow: 0 0 0 1px rgba(34,197,94,0.6), 0 8px 25px rgba(34,197,94,0.45);
-    }
-    .nav-disabled {
-      color: #64748b;
-      border: 1px dashed rgba(75,85,99,0.9);
-      cursor: not-allowed;
-    }
-        .nav-user {
-      font-size: 13px;
-      color: #e5e7eb;
-      margin-left: 8px;
-      margin-right: 4px;
-    }
-
-
-    /* ---------- LAYOUT ---------- */
-    .container {
-      max-width: 1160px;
-      margin: 18px auto 40px;
-      padding: 0 16px 24px;
-      box-sizing: border-box;
-    }
-    .card {
-      background: radial-gradient(circle at top, #111827 0, #020617 50%, #020617 100%);
-      border-radius: 16px;
-      padding: 18px 20px;
-      margin-bottom: 18px;
-      border: 1px solid rgba(148,163,184,0.25);
-      box-shadow: 0 18px 45px rgba(15,23,42,0.85);
-    }
-    h1, h2, h3 {
-      font-weight: 600;
-      margin-top: 4px;
-      margin-bottom: 10px;
-    }
-    h1 { font-size: 22px; }
-    h2 { font-size: 18px; }
-    h3 { font-size: 16px; color: #e5e7eb; }
-
-    .two-col {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 12px;
-    }
-
-    /* ---------- TABLES ---------- */
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 8px;
-      font-size: 14px;
-    }
-    th, td {
-      padding: 6px 8px;
-      border-bottom: 1px solid rgba(30,64,175,0.5);
-      text-align: left;
-    }
-    th {
-      font-weight: 600;
-      color: #bfdbfe;
-      background: rgba(15,23,42,0.85);
-    }
-    tr:nth-child(even) td {
-      background: rgba(15,23,42,0.5);
-    }
-    tr:nth-child(odd) td {
-      background: rgba(15,23,42,0.25);
-    }
-
-    /* wrapper for horizontal scroll on small screens */
-    .scroll-x {
-      width: 100%;
-      overflow-x: auto;
-    }
-
-    .subtle {
-      color: #9ca3af;
-      font-size: 13px;
-    }
-    .error {
-      margin-top: 10px;
-      padding: 8px 10px;
-      border-radius: 10px;
-      background: rgba(248,113,113,0.15);
-      color: #fecaca;
-      border: 1px solid rgba(248,113,113,0.7);
-      font-size: 13px;
-      white-space: pre-wrap;
-    }
-    .pill {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: rgba(16,185,129,0.15);
-      color: #a7f3d0;
-      border: 1px solid rgba(16,185,129,0.6);
-      font-size: 12px;
-    }
-    .pill-bad {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: rgba(248,113,113,0.15);
-      color: #fecaca;
-      border: 1px solid rgba(248,113,113,0.6);
-      font-size: 12px;
-    }
-    button {
-      background: linear-gradient(135deg, #22c55e, #0ea5e9);
-      color: #020617;
-      border-radius: 999px;
-      padding: 7px 14px;
-      border: none;
-      font-weight: 600;
-      cursor: pointer;
-      font-size: 14px;
-      box-shadow: 0 10px 25px rgba(34,197,94,0.45);
-      margin-top: 6px;
-    }
-    button:hover {
-      filter: brightness(1.05);
-    }
-    code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      font-size: 12px;
-      background: rgba(15,23,42,0.9);
-      padding: 2px 4px;
-      border-radius: 4px;
-    }
-    pre {
-      background: rgba(15,23,42,0.95);
-      padding: 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(30,64,175,0.7);
-      overflow-x: auto;
-      font-size: 12px;
-      margin-top: 8px;
-      max-height: 420px;
-    }
-    .section {
-      margin-top: 12px;
-      padding-top: 8px;
-      border-top: 1px dashed #374151;
-      font-size: 14px;
-    }
-    label {
-      display: block;
-      font-size: 14px;
-      margin-bottom: 4px;
-      color: #e5e7eb;
-    }
-    input[type=text], input[type=number], select, textarea {
-      width: 100%;
-      padding: 8px 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(75,85,99,0.9);
-      background: rgba(15,23,42,0.9);
-      color: #e5e7eb;
-      font-size: 14px;
-      box-sizing: border-box;
-    }
-    input[type=text]::placeholder,
-    textarea::placeholder {
-      color: #6b7280;
-    }
-    .two-col {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 12px;
-    }
-    .hint {
-      font-size: 12px;
-      color: #9ca3af;
-      margin-top: 4px;
-    }
-        /* Mobile improvements for Masterpieces */
-    @media (max-width: 768px) {
-
-      /* Limit UID width and font */
-      td.subtle {
-        max-width: 110px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 11px;
-      }
-
-      /* Shrink MP column */
-      td:last-child {
-        white-space: nowrap;
-        font-size: 12px;
-      }
-
-      /* Make table rows tighter */
-      th, td {
-        padding: 4px 6px;
-      }
-
-      /* Keep MP tables readable and scrollable */
-      .mp-table-wrap table {
-        min-width: 480px;
-      }
-
-    }
-
-        /* Mobile tweaks */
-    @media (max-width: 768px) {
+  <head>
+    <meta charset="utf-8"/>
+    <title>CraftMath — Tools</title>
+    <style>
       body {
-        font-size: 14px;
+        background:#020617;
+        color:#e5e7eb;
+        font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+        margin:0;
+        padding:0;
       }
+      a { color:#60a5fa; text-decoration:none; }
+      a:hover { text-decoration:underline; }
 
+      header {
+        background:#020617;
+        border-bottom:1px solid rgba(148,163,184,0.3);
+        padding:10px 16px;
+        position:sticky;
+        top:0;
+        z-index:10;
+      }
       .nav {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 6px;
+        display:flex;
+        gap:16px;
+        align-items:center;
       }
-
       .nav-title {
-        font-size: 16px;
+        font-weight:700;
+        letter-spacing:0.03em;
+      }
+      .nav-links a {
+        padding:4px 8px;
+        border-radius:999px;
+        font-size:14px;
+        color:#9ca3af;
+      }
+      .nav-links a.active {
+        background:#1d4ed8;
+        color:#e5e7eb;
       }
 
-      .nav-links {
-        display: flex;
-        flex-wrap: wrap;
-        width: 100%;
-        gap: 6px;
-      }
-
-      .nav-links a,
-      .nav-links span {
-        font-size: 13px;
-        padding: 5px 9px;
-        margin-left: 0;
-      }
-
-      .container {
-        max-width: 100%;
-        padding: 0 10px 20px;
+      main {
+        max-width:1100px;
+        margin:16px auto 32px auto;
+        padding:0 16px;
       }
 
       .card {
-        padding: 14px 12px;
-        margin-bottom: 12px;
+        background:rgba(15,23,42,0.9);
+        border-radius:16px;
+        border:1px solid rgba(148,163,184,0.4);
+        padding:16px 20px;
+        box-shadow:0 18px 45px rgba(15,23,42,0.95);
       }
 
-      table {
-        font-size: 12px;
-      }
+      h1 { margin:0 0 6px 0; font-size:22px; }
+      h2 { margin-top:18px; font-size:18px; }
+      .subtle { color:#9ca3af; font-size:14px; }
+      .hint { color:#a5b4fc; font-size:13px; }
 
-      th, td {
-        padding: 4px 6px;
+      label { font-size:14px; }
+      input, select, button, textarea {
+        font-family:inherit;
+        font-size:14px;
       }
-
-      /* Horizontal scroll for wide tables (like Masterpieces) */
-      .mp-table-wrap {
-        width: 100%;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-      }
-
-      .mp-table-wrap table {
-        min-width: 520px; /* keeps columns readable, can tweak */
-      }
-    }
-
-
-    /* ---------- MOBILE TWEAKS ---------- */
-    @media (max-width: 768px) {
-      .nav {
-        flex-direction: column;
-        align-items: flex-start;
-        padding: 10px 12px;
-        gap: 6px;
-      }
-      .nav-title {
-        font-size: 16px;
-      }
-      .nav-links {
-        justify-content: flex-start;
-      }
-      .container {
-        margin: 12px auto 24px;
-        padding: 0 10px 16px;
-      }
-      .card {
-        padding: 12px 12px;
-        margin-bottom: 12px;
-      }
-      table {
-        font-size: 12px;
-      }
-      th, td {
-        padding: 4px 6px;
+      input[type="text"], input[type="number"], select, textarea {
+        background:#020617;
+        border:1px solid rgba(148,163,184,0.5);
+        color:#e5e7eb;
+        border-radius:8px;
+        padding:6px 8px;
       }
       button {
-        width: 100%;
-        text-align: center;
-        margin-top: 8px;
+        border-radius:999px;
+        border:none;
+        padding:6px 12px;
+        background:#1d4ed8;
+        color:white;
+        cursor:pointer;
       }
-      .two-col {
-        grid-template-columns: 1fr;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="nav">
-    <div class="nav-title">CraftWorld Tools</div>
-    <div class="nav-links">
-      <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
-      {% if has_uid %}
-        <a href="{{ url_for('profitability') }}" class="{{ 'active' if active_page=='profit' else '' }}">Profitability</a>
-      {% else %}
-        <span class="nav-disabled">Profitability</span>
-      {% endif %}
-      <a href="{{ url_for('boosts') }}" class="{{ 'active' if active_page=='boosts' else '' }}">Boosts</a>
-      <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
-      <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
-      <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
-      {% if session.get('username') %}
-        <span class="nav-user">👤 {{ session['username'] }}</span>
-        <a href="{{ url_for('logout') }}">Logout</a>
-      {% else %}
-        <a href="{{ url_for('login') }}" class="{{ 'active' if active_page=='login' else '' }}">Login</a>
-      {% endif %}
-    </div>
-  </div>
+      button:hover { background:#2563eb; }
 
-  <div class="container">
-    {{ content|safe }}
-  </div>
-</body>
+      table {
+        width:100%;
+        border-collapse:collapse;
+        margin-top:8px;
+      }
+      th, td {
+        padding:4px 6px;
+        border-bottom:1px solid rgba(30,64,175,0.4);
+        text-align:left;
+        font-size:13px;
+      }
+      th {
+        font-size:12px;
+        text-transform:uppercase;
+        letter-spacing:0.05em;
+        color:#9ca3af;
+      }
+
+      .error {
+        background:rgba(185,28,28,0.1);
+        border:1px solid rgba(185,28,28,0.5);
+        color:#fecaca;
+        padding:8px 10px;
+        border-radius:8px;
+        margin-bottom:10px;
+      }
+
+      .mp-tab-bar {
+        display:flex;
+        gap:8px;
+        margin-top:12px;
+        margin-bottom:10px;
+        border-bottom:1px solid rgba(30,64,175,0.5);
+        padding-bottom:6px;
+      }
+      .mp-tab {
+        padding:4px 10px;
+        border-radius:999px;
+        font-size:13px;
+        color:#9ca3af;
+        cursor:pointer;
+      }
+      .mp-tab.active {
+        background:#1d4ed8;
+        color:#f9fafb;
+      }
+      .mp-section { margin-top:4px; }
+
+      .mp-table-wrap { max-height:420px; overflow:auto; border-radius:8px; border:1px solid rgba(30,64,175,0.5); }
+
+      .mp-stat-label { font-size:11px; text-transform:uppercase; color:#9ca3af; letter-spacing:0.08em; }
+      .mp-stat-value { font-size:14px; font-weight:600; }
+
+      .mp-row-me {
+        background: linear-gradient(90deg, rgba(250,204,21,0.14), transparent);
+      }
+      .mp-row-me td {
+        border-top: 1px solid rgba(250,204,21,0.35);
+        border-bottom: 1px solid rgba(250,204,21,0.18);
+      }
+      .me-pill {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 6px;
+        border-radius: 999px;
+        font-size: 11px;
+        border: 1px solid rgba(250,204,21,0.7);
+        color: #facc15;
+        background: rgba(30,64,175,0.65);
+      }
+
+      @media (max-width: 768px) {
+        main { padding:0 10px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="nav">
+        <div class="nav-title">CraftMath</div>
+        <div class="nav-links">
+          <a href="{{ url_for('overview') }}" class="{% if active_page == 'overview' %}active{% endif %}">Overview</a>
+          <a href="{{ url_for('profitability') }}" class="{% if active_page == 'profitability' %}active{% endif %}">Profitability</a>
+          <a href="{{ url_for('boosts') }}" class="{% if active_page == 'boosts' %}active{% endif %}">Boosts</a>
+          <a href="{{ url_for('masterpieces_view') }}" class="{% if active_page == 'masterpieces' %}active{% endif %}">Masterpieces</a>
+        </div>
+      </div>
+    </header>
+    <main>
+      <div class="card">
+        {{ content|safe }}
+      </div>
+    </main>
+  </body>
 </html>
 """
 
+# -------------------------------------------------
+# Index / UID handling
+# -------------------------------------------------
 
 
-# -------- Overview tab --------
 @app.route("/", methods=["GET", "POST"])
 def index():
+    return redirect(url_for("overview"))
+
+
+@app.route("/overview", methods=["GET", "POST"])
+def overview():
     error: Optional[str] = None
-    result: Optional[Dict[str, Any]] = None
-    uid = session.get("voya_uid", "")
+    account: Optional[Dict[str, Any]] = None
+    uid = _current_uid()
 
     if request.method == "POST":
-        uid = request.form.get("uid", "").strip()
-        if not uid:
-            error = "Please enter your Voya UID."
-        else:
-            session["voya_uid"] = uid
-            try:
-                data = fetch_craftworld(uid)
-                result = data
-                
-            except Exception as e:
-                error = f"Error fetching CraftWorld data: {e}"
+        new_uid = (request.form.get("uid") or "").strip()
+        if new_uid:
+            session["voya_uid"] = new_uid
+            uid = new_uid
+
+    if uid:
+        try:
+            account = fetch_craftworld(uid)
+        except Exception as e:
+            error = f"Error fetching account: {e}"
 
     content = """
-    <div class="card">
-      <h1>Account Overview</h1>
-      <p class="subtle">
-        Enter your <strong>Voya UID</strong> and this page will fetch your land plots, factories,
-        mines, dynos and resources from Craft World.
-      </p>
-      <form method="post">
-        <label for="uid">Voya UID</label>
-        <input type="text" id="uid" name="uid" value="{{ uid }}" placeholder="e.g. GfUeRBCZv8OwuUKq7Tu9JVpA70l1">
-        <button type="submit">Fetch Craft World</button>
-      </form>
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
-    </div>
+    <h1>Account overview</h1>
+    <p class="subtle">Enter your Voya ID to load your Craft World account.</p>
 
-    {% if result %}
-      <div class="two-col">
-        <div class="card">
-          <h2>Land Plots & Factories</h2>
-          {% if result.landPlots %}
-            {% for plot in result.landPlots %}
-              {% for area in plot.areas %}
-                <h3>{{ area.symbol }}</h3>
-                {% if area.factories %}
-                  <table>
-                    <tr><th>Factory</th><th>Level</th></tr>
-                    {% for f in area.factories %}
-                      {% if f.factory and f.factory.definition %}
-                        <tr>
-                          <td>{{ f.factory.definition.id }}</td>
-                          <td>L{{ f.factory.level + 1 }}</td>
-                        </tr>
-                      {% endif %}
-                    {% endfor %}
-                  </table>
-                {% else %}
-                  <p class="subtle">No factories in this area.</p>
-                {% endif %}
-              {% endfor %}
-            {% endfor %}
-          {% else %}
-            <p class="subtle">No land plots found.</p>
-          {% endif %}
-        </div>
+    <form method="post" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+      <label for="uid">Voya ID / UID</label>
+      <input id="uid" name="uid" type="text" value="{{ uid or '' }}" style="min-width:260px;">
+      <button type="submit">Load</button>
+    </form>
 
-        <div class="card">
-          <h2>Dynos</h2>
-          {% if result.dynos %}
-            <table>
-              <tr><th>Name</th><th>Rarity</th><th>Production</th></tr>
-              {% for d in result.dynos %}
-                <tr>
-                  <td>{{ d.meta.displayName }}</td>
-                  <td>{{ d.meta.rarity }}</td>
-                  <td>
-                    {% if d.production %}
-                      {% for p in d.production %}
-                        {{ p.amount }} {{ p.symbol }}{% if not loop.last %}, {% endif %}
-                      {% endfor %}
-                    {% else %}
-                      <span class="subtle">none</span>
-                    {% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </table>
-          {% else %}
-            <p class="subtle">No dynos found.</p>
-          {% endif %}
-        </div>
-      </div>
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
 
-      <div class="two-col">
-        <div class="card">
-          <h2>Mines</h2>
-          <table>
-            <tr><th>Token</th><th>Level</th></tr>
-            {% for m in result.mines %}
-              {% if m.definition %}
-                <tr>
-                  <td>{{ m.definition.id }}</td>
-                  <td>L{{ m.level + 1 }}</td>
-                </tr>
-              {% endif %}
-            {% endfor %}
-          </table>
-        </div>
+    {% if account %}
+      <h2>Land plots</h2>
+      <table>
+        <tr><th>Name</th><th>Area</th><th>Factories</th></tr>
+        {% for lp in account.landPlots or [] %}
+          <tr>
+            <td>{{ lp.name or '-' }}</td>
+            <td>{{ lp.area or '-' }}</td>
+            <td>{{ (lp.factories or [])|length }}</td>
+          </tr>
+        {% endfor %}
+      </table>
 
-        <div class="card">
-          <h2>Resources</h2>
-          {% if result.resources %}
-            <table>
-              <tr><th>Symbol</th><th>Amount</th></tr>
-              {% for r in result.resources %}
-                <tr>
-                  <td>{{ r.symbol }}</td>
-                  <td>{{ "{:,.2f}".format(r.amount) }}</td>
-                </tr>
-              {% endfor %}
-            </table>
-          {% else %}
-            <p class="subtle">No resources found.</p>
-          {% endif %}
-        </div>
-      </div>
+      <h2>Resources</h2>
+      <table>
+        <tr><th>Symbol</th><th>Amount</th></tr>
+        {% for r in account.resources or [] %}
+          <tr>
+            <td>{{ r.symbol }}</td>
+            <td>{{ "%.3f"|format(r.amount or 0) }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% elif uid %}
+      <p class="hint">No account data available. Double-check your UID.</p>
     {% endif %}
     """
-
-    content = render_template_string(
-        content,
-        uid=uid,
-        error=error,
-        result=result,
-    )
-
-    html = render_template_string(
+    inner = render_template_string(content, uid=uid, account=account, error=error)
+    return render_template_string(
         BASE_TEMPLATE,
-        content=content,
+        content=inner,
         active_page="overview",
-        has_uid=has_uid_flag(),
-    )
-    return html
-    # ---------------- Authentication: register / login / logout ----------------
-
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    error: Optional[str] = None
-
-    if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        password = (request.form.get("password") or "").strip()
-        confirm = (request.form.get("confirm") or "").strip()
-
-        if not username or not password:
-            error = "Username and password are required."
-        elif password != confirm:
-            error = "Passwords do not match."
-        else:
-            conn = get_db_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-                existing = cur.fetchone()
-                if existing:
-                    error = "That username is already taken."
-                else:
-                    pwd_hash = generate_password_hash(password)
-                    cur.execute(
-                        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                        (username, pwd_hash),
-                    )
-                    conn.commit()
-                    user_id = cur.lastrowid
-                    session["user_id"] = user_id
-                    session["username"] = username
-                    return redirect(url_for("boosts"))
-            finally:
-                conn.close()
-
-    content = """
-    <div class="card">
-      <h1>Create Account</h1>
-      <p class="subtle">
-        Create a login so your <strong>Mastery &amp; Workshop</strong> boosts are saved
-        to your account, independent of which Voya UID you're looking at.
-      </p>
-
-      <form method="post" class="section">
-        <label for="username">Username</label>
-        <input id="username" name="username" type="text" required maxlength="64" value="{{ request.form.get('username','') }}">
-        <div class="hint">This is just for this site. It does not need to match your in-game name.</div>
-
-        <label for="password" style="margin-top:10px;">Password</label>
-        <input id="password" name="password" type="password" required>
-
-        <label for="confirm" style="margin-top:10px;">Confirm password</label>
-        <input id="confirm" name="confirm" type="password" required>
-
-        <button type="submit">Create account</button>
-      </form>
-
-      <p class="hint" style="margin-top:10px;">
-        Already have an account?
-        <a href="{{ url_for('login') }}">Log in</a>.
-      </p>
-
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
-    </div>
-    """
-
-
-    # First render the inner content template so Jinja tags inside it work
-    inner = render_template_string(
-        content,
-        error=error,
     )
 
-    # Then inject that rendered HTML into the base template
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=inner,
-        active_page="login",
-        has_uid=has_uid_flag(),
-    )
-    return html
 
+# -------------------------------------------------
+# Profitability
+# -------------------------------------------------
 
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    error: Optional[str] = None
-
-    if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        password = (request.form.get("password") or "").strip()
-
-        if not username or not password:
-            error = "Username and password are required."
-        else:
-            conn = get_db_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute(
-                    "SELECT id, password_hash FROM users WHERE username = ?",
-                    (username,),
-                )
-                row = cur.fetchone()
-                if not row:
-                    error = "Invalid username or password."
-                else:
-                    user_id = row["id"]
-                    pwd_hash = row["password_hash"]
-                    if not check_password_hash(pwd_hash, password):
-                        error = "Invalid username or password."
-                    else:
-                        session["user_id"] = user_id
-                        session["username"] = username
-                        return redirect(url_for("boosts"))
-            finally:
-                conn.close()
-
-    content = """
-    <div class="card">
-      <h1>Log In</h1>
-      <p class="subtle">
-        Log into your account so your <strong>Mastery &amp; Workshop</strong> boosts
-        follow you, even while you swap Voya UIDs to spy on other accounts.
-      </p>
-
-      <form method="post" class="section">
-        <label for="username">Username</label>
-        <input id="username" name="username" type="text" required maxlength="64" value="{{ request.form.get('username','') }}">
-
-        <label for="password" style="margin-top:10px;">Password</label>
-        <input id="password" name="password" type="password" required>
-
-        <button type="submit">Log in</button>
-      </form>
-
-      <p class="hint" style="margin-top:10px;">
-        Need an account?
-        <a href="{{ url_for('register') }}">Create one</a>.
-      </p>
-
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
-    </div>
-    """
-
-
-    inner = render_template_string(
-        content,
-        error=error,
-    )
-
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=inner,
-        active_page="login",
-        has_uid=has_uid_flag(),
-    )
-    return html
-
-
-
-@app.route("/logout")
-def logout():
-    session.pop("user_id", None)
-    session.pop("username", None)
-    return redirect(url_for("index"))
-
-# Helper: read either object.attribute or dict["key"]
-def attr_or_key(obj, name, default=None):
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
-
-
-# -------- Profitability tab (manual mastery + workshop) --------
 
 @app.route("/profitability", methods=["GET", "POST"])
 def profitability():
-    # Require UID set in Overview (so we know whose factories to pull)
-    if not has_uid_flag():
+    uid = _current_uid()
+    error: Optional[str] = None
+    rows: List[Dict[str, Any]] = []
+    prices: Dict[str, float] = {}
+    speed_factor = float(request.form.get("speed") or 1.0)
+    workers_default = int(request.form.get("workers") or 0)
+
+    if not uid:
         content = """
-        <div class="card">
-          <h1>Profitability (Locked)</h1>
-          <p class="subtle">
-            Enter your Voya UID on the <strong>Overview</strong> tab to unlock
-            automatic factory list. Mastery & Workshop are set manually here.
-          </p>
-        </div>
+        <h1>Profitability</h1>
+        <p class="subtle">You need to set your Voya ID in Overview first.</p>
+        <p class="hint"><a href="{{ url_for('overview') }}">Go to Overview</a> and enter your UID.</p>
         """
-        html = render_template_string(
-            BASE_TEMPLATE,
-            content=content,
-            active_page="profit",
-            has_uid=has_uid_flag(),
-        )
-        return html
+        inner = render_template_string(content)
+        return render_template_string(BASE_TEMPLATE, content=inner, active_page="profitability")
 
-    error = None
-    uid = session.get("voya_uid")
-
-        # 1) Load factories from Craft World (by UID)
-    player_factories: List[dict] = []
     try:
-        cw = fetch_craftworld(uid)
-        owned: Dict[tuple, int] = {}
+        account = fetch_craftworld(uid)
+    except Exception as e:
+        account = None
+        error = f"Error fetching account: {e}"
 
-        # landPlots: supports both cw["landPlots"] and cw.landPlots
-        land_plots = attr_or_key(cw, "landPlots", []) or []
-        for plot in land_plots:
-            areas = attr_or_key(plot, "areas", []) or []
-            for area in areas:
-                factories = attr_or_key(area, "factories", []) or []
-                for facwrap in factories:
-                    fac = attr_or_key(facwrap, "factory", None)
-                    if not fac:
-                        continue
+    if account:
+        try:
+            prices = fetch_live_prices_in_coin()
+        except Exception as e:
+            prices = {}
+            error = error or f"Error fetching prices: {e}"
 
-                    definition = attr_or_key(fac, "definition", {}) or {}
-                    token = attr_or_key(definition, "id", None)
-                    if not token:
-                        continue
+        coin_usd = float(prices.get("_COIN_USD", 0.0) or 0.0)
+        boosts = _get_boost_levels_for_uid(uid)
 
-                    api_level = int(attr_or_key(fac, "level", 0) or 0)
-                    csv_level = api_level + 1  # API 0-based → CSV 1-based
-                    key = (str(token).upper(), csv_level)
-                    owned[key] = owned.get(key, 0) + 1
+        # Iterate over factories reported by API
+        for lp in account.get("landPlots") or []:
+            for f in lp.get("factories") or []:
+                token = (f.get("token") or "").upper()
+                level = int(f.get("level") or 0) + 1  # API level is 0-based
+                count = int(f.get("count") or 1)
 
-        for (token, level), count in owned.items():
-            token = str(token).upper()
-            if token in FACTORIES_FROM_CSV and level in FACTORIES_FROM_CSV[token]:
-                player_factories.append(
-                    {"token": token, "level": level, "count": count}
+                levels = boosts.get(token, {})
+                mastery = int(levels.get("mastery", 0))
+                workshop = int(levels.get("workshop", 0))
+
+                try:
+                    result = compute_factory_result_csv(
+                        FACTORIES_FROM_CSV,
+                        prices,
+                        token,
+                        level,
+                        None,
+                        count,
+                        yield_pct=100.0,
+                        speed_factor=speed_factor,
+                        workers=workers_default,
+                    )
+                except Exception:
+                    continue
+
+                rows.append(
+                    {
+                        "token": token,
+                        "level": level,
+                        "count": count,
+                        "mastery": mastery,
+                        "workshop": workshop,
+                        "profit_hour": result.get("profit_per_hour_coin", 0.0),
+                        "profit_hour_usd": result.get("profit_per_hour_coin", 0.0) * coin_usd,
+                    }
                 )
 
-    except Exception as e:
-        error = f"Error fetching CraftWorld factories: {e}"
-        player_factories = []
+        # Sort by profit descending
+        rows.sort(key=lambda r: r["profit_hour"], reverse=True)
 
-
-    # Fallback: if nothing from account, list everything from CSV
-    if not player_factories:
-        for t, lvls in FACTORIES_FROM_CSV.items():
-            for lvl in sorted(lvls.keys()):
-                player_factories.append({"token": t, "level": lvl, "count": 1})
-
-    # 2) Load saved UI state from session
-    saved_workers: Dict[str, int] = session.get("profit_workers_csv", {})
-    saved_speed: float = float(session.get("profit_speed_csv", 1.0))
-    saved_global_yield: float = float(session.get("profit_yield_csv", 100.0))
-    saved_selected: Dict[str, bool] = session.get("profit_selected_csv", {})
-
-    # NEW: per-row mastery & workshop levels (manual)
-    saved_mastery: Dict[str, int] = session.get("profit_mastery_csv", {})
-    saved_workshop: Dict[str, int] = session.get("profit_workshop_csv", {})
-    # Sort mode: "standard", "gain_loss", "loss_gain"
-    saved_sort_mode: str = session.get("profit_sort_mode", "gain_loss")
-    sort_mode: str = saved_sort_mode
-
-    # On a fresh GET, ignore any old per-row overrides so we start
-    # from the per-token Boosts defaults for the logged-in user.
-    if request.method == "GET":
-        saved_mastery = {}
-        saved_workshop = {}
-
-    global_speed = saved_speed
-    global_yield = saved_global_yield  # fallback if mastery level not in table
-
-    # Per-token default mastery/workshop levels (Boosts tab)
-    boost_levels = get_boost_levels()
-
-    # Build row meta (key for each factory row)
-    rows_meta: List[dict] = []
-    for pf in player_factories:
-        key = f"{pf['token']}_L{pf['level']}"
-        rows_meta.append(
-            {
-                "key": key,
-                "token": pf["token"].upper(),
-                "level": pf["level"],
-                "count": pf["count"],
-            }
-        )
-
-    # 3) Handle POST (user updated speed, mastery, workshop, etc.)
-    if request.method == "POST":
-        # Global speed & global yield (used as fallback only)
-        try:
-            global_speed = float(request.form.get("speed_factor", global_speed))
-        except ValueError:
-            global_speed = saved_speed
-
-        try:
-            global_yield = float(request.form.get("yield_pct", global_yield))
-        except ValueError:
-            global_yield = saved_global_yield
-        # Sort mode from form
-        mode = (request.form.get("sort_mode") or sort_mode or "gain_loss").strip()
-        if mode not in ("standard", "gain_loss", "loss_gain"):
-            mode = "gain_loss"
-        sort_mode = mode
-        session["profit_sort_mode"] = sort_mode
-
-        new_workers: Dict[str, int] = {}
-        new_mastery: Dict[str, int] = {}
-        new_workshop: Dict[str, int] = {}
-        new_selected: set = set()
-
-        for meta in rows_meta:
-            key = meta["key"]
-
-            # Workers 0–4
-            w_str = request.form.get(f"workers_{key}", str(saved_workers.get(key, 0)))
-            try:
-                w = int(w_str)
-            except ValueError:
-                w = 0
-            w = max(0, min(4, w))
-            new_workers[key] = w
-
-            # Mastery level 0–10
-            m_str = request.form.get(
-                f"mastery_{key}", str(saved_mastery.get(key, 0))
-            )
-            try:
-                m_level = int(m_str)
-            except ValueError:
-                m_level = 0
-            m_level = max(0, min(10, m_level))
-            new_mastery[key] = m_level
-
-            # Workshop level 0–10
-            ws_str = request.form.get(
-                f"workshop_{key}", str(saved_workshop.get(key, 0))
-            )
-            try:
-                ws_level = int(ws_str)
-            except ValueError:
-                ws_level = 0
-            ws_level = max(0, min(10, ws_level))
-            new_workshop[key] = ws_level
-
-            # Run checkbox
-            if request.form.get(f"run_{key}") == "on":
-                new_selected.add(key)
-
-        # Save back to session
-        session["profit_workers_csv"] = new_workers
-        session["profit_speed_csv"] = global_speed
-        session["profit_yield_csv"] = global_yield
-        session["profit_mastery_csv"] = new_mastery
-        session["profit_workshop_csv"] = new_workshop
-
-        if new_selected:
-            session["profit_selected_csv"] = {
-                k: (k in new_selected) for k in [m["key"] for m in rows_meta]
-            }
-            saved_selected = session["profit_selected_csv"]
-        else:
-            # if nothing selected explicitly, assume all on
-            saved_selected = {m["key"]: True for m in rows_meta}
-            session["profit_selected_csv"] = saved_selected
-
-        saved_workers = new_workers
-        saved_mastery = new_mastery
-        saved_workshop = new_workshop
-
-    # 4) Compute profitability with MANUAL mastery & workshop
-    rows: List[dict] = []
-    total_coin_hour = 0.0
-    total_coin_day = 0.0
-    total_usd_hour = 0.0
-    total_usd_day = 0.0
-    coin_usd = 0.0
-
-    try:
-        prices = fetch_live_prices_in_coin()
-        coin_usd = float(prices.get("_COIN_USD", 0.0))
-
-        for meta in rows_meta:
-            key = meta["key"]
-            token = meta["token"]
-            level = meta["level"]
-            count = meta["count"]
-
-            selected = saved_selected.get(key, True)
-            workers = int(saved_workers.get(key, 0))
-
-            # ----- MASTERY → INPUT COST (with per-token default) -----
-            token_upper = token.upper()
-            default_levels = boost_levels.get(token_upper, {"mastery_level": 0, "workshop_level": 0})
-            default_mastery_level = int(default_levels.get("mastery_level", 0))
-
-            # If user hasn't overridden this row, use per-token default from Boosts tab
-            mastery_level = int(saved_mastery.get(key, default_mastery_level))
-            mastery_level = max(0, min(10, mastery_level))
-
-            mastery_factor = float(MASTERY_BONUSES.get(mastery_level, 1.0))
-            yield_pct = 100.0 * mastery_factor  # compute_factory_result_csv expects %
-
-            # Extra safety: if level not found in table, fall back to global yield
-            if mastery_level not in MASTERY_BONUSES:
-                yield_pct = global_yield
-
-            # ----- WORKSHOP → SPEED (with per-token default) -----
-            default_workshop_level = int(default_levels.get("workshop_level", 0))
-            workshop_level = int(saved_workshop.get(key, default_workshop_level))
-            workshop_level = max(0, min(10, workshop_level))
-
-            ws_table = WORKSHOP_MODIFIERS.get(token_upper)
-            workshop_pct = 0.0
-            if ws_table and 0 <= workshop_level < len(ws_table):
-                workshop_pct = float(ws_table[workshop_level])
-
-            workshop_speed = 1.0 + workshop_pct / 100.0
-            effective_speed_factor = global_speed * workshop_speed
-
-            # ----- CALC PROFIT -----
-            res = compute_factory_result_csv(
-                FACTORIES_FROM_CSV,
-                prices,
-                token,
-                int(level),
-                target_level=None,
-                count=1,
-                yield_pct=yield_pct,               # mastery → input reduction
-                speed_factor=effective_speed_factor,  # workshop + AD → time reduction
-                workers=workers,
-            )
-
-            prof_hour_per = float(res["profit_coin_per_hour"])
-            prof_hour_total = prof_hour_per * count
-            prof_day_total = prof_hour_total * 24.0
-
-            usd_hour_total = prof_hour_total * coin_usd
-            usd_day_total = prof_day_total * coin_usd
-
-            if selected:
-                total_coin_hour += prof_hour_total
-                total_coin_day += prof_day_total
-                total_usd_hour += usd_hour_total
-                total_usd_day += usd_day_total
-
-            rows.append(
-                {
-                    "key": key,
-                    "token": token,
-                    "level": level,
-                    "count": count,
-                    "workers": workers,
-                    "selected": selected,
-                    "mastery_level": mastery_level,
-                    "mastery_factor": mastery_factor,
-                    "yield_pct": yield_pct,
-                    "workshop_level": workshop_level,
-                    "workshop_pct": workshop_pct,
-                    "profit_hour_per": prof_hour_per,
-                    "profit_hour_total": prof_hour_total,
-                    "profit_day_total": prof_day_total,
-                    "usd_hour_total": usd_hour_total,
-                    "usd_day_total": usd_day_total,
-                }
-            )
-
-                # sort by your fixed factory display order, then by level
-        def _row_sort_key(r: dict) -> tuple[int, int]:
-            token = str(r["token"]).upper()
-            level = int(r["level"])
-            idx = FACTORY_DISPLAY_INDEX.get(token, len(FACTORY_DISPLAY_INDEX))
-            return (idx, level)
-
-                # Apply selected sort mode
-        if sort_mode == "gain_loss":
-            # Highest profit/hr first (current behavior)
-            rows.sort(key=lambda r: r["profit_hour_total"], reverse=True)
-        elif sort_mode == "loss_gain":
-            # Most negative first
-            rows.sort(key=lambda r: r["profit_hour_total"])
-        else:
-            # "standard" → your factory order, then level
-            def _std_key(r: dict) -> tuple[int, int]:
-                token_u = str(r["token"]).upper()
-                lvl = int(r["level"])
-                idx = STANDARD_ORDER_INDEX.get(token_u, len(STANDARD_ORDER_INDEX))
-                return (idx, lvl)
-
-            rows.sort(key=_std_key)
-
-
-
-    except Exception as e:
-        error = f"{error or ''}\nProfit calculation failed: {e}"
-
-    # 5) Render HTML
     content = """
-    <div class="card">
-      <h1>Factory Profitability (Manual Mastery + Workshop)</h1>
-      <p class="subtle">
-        Factory list is loaded from your UID via <code>fetchCraftWorld</code>.<br>
-        <strong>Mastery</strong> and <strong>Workshop</strong> levels are set manually per factory (0–10),
-        and applied using the official tables.
-      </p>
+    <h1>Profitability</h1>
+    <p class="subtle">Live profit per hour for your factories using current exchange prices.</p>
 
-            <form method="post" style="margin-bottom:12px;">
-        <div style="display:flex;flex-wrap:wrap;gap:16px;">
-          <div style="min-width:160px;">
-            <label for="speed_factor">Global Speed (AD / boosts)</label>
-            <input type="number" step="0.1" name="speed_factor" value="{{global_speed}}" />
-            <div class="hint">Multiplies base time before workshop &amp; workers.</div>
-          </div>
+    <form method="post" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+      <label for="speed">Global speed factor</label>
+      <input id="speed" name="speed" type="number" step="0.01" value="{{ speed_factor }}">
+      <label for="workers">Workers per factory</label>
+      <input id="workers" name="workers" type="number" step="1" value="{{ workers_default }}">
+      <button type="submit">Recalculate</button>
+    </form>
 
-          <div style="min-width:160px;">
-            <label for="yield_pct">Base Yield % (fallback)</label>
-            <input type="number" step="0.1" name="yield_pct" value="{{global_yield}}" />
-            <div class="hint">Used only if mastery level not in table.</div>
-          </div>
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
 
-          <div style="min-width:180px;">
-            <label for="sort_mode">Sort</label>
-            <select name="sort_mode" id="sort_mode">
-              <option value="standard" {% if sort_mode == 'standard' %}selected{% endif %}>
-                Standard (token order)
-              </option>
-              <option value="gain_loss" {% if sort_mode == 'gain_loss' %}selected{% endif %}>
-                Gain → Loss
-              </option>
-              <option value="loss_gain" {% if sort_mode == 'loss_gain' %}selected{% endif %}>
-                Loss → Gain
-              </option>
-            </select>
-            <div class="hint">Changes row ordering below.</div>
-          </div>
-
-          <div style="min-width:260px;">
-            <label>Totals (Selected)</label>
-            <div class="hint">COIN/hr: {{ '%.6f'|format(total_coin_hour) }}</div>
-            <div class="hint">COIN/day: {{ '%.6f'|format(total_coin_day) }}</div>
-            <div class="hint">USD/hr: {{ '%.4f'|format(total_usd_hour) }}</div>
-            <div class="hint">USD/day: {{ '%.4f'|format(total_usd_day) }}</div>
-          </div>
-        </div>
-
-
-        {% if error %}
-          <div class="error">{{error}}</div>
-        {% endif %}
-
-        <div style="margin-top:14px;overflow-x:auto;">
-          <table>
-            <tr>
-              <th>Run</th>
-              <th>Token</th>
-              <th>Lvl</th>
-              <th>Count</th>
-              <th>Mastery Lvl</th>
-              <th>Yield %</th>
-              <th>Workshop Lvl</th>
-              <th>WS Speed %</th>
-              <th>Workers</th>
-              <th>P/hr (1)</th>
-              <th>P/hr (All)</th>
-              <th>P/day</th>
-              <th>USD/hr</th>
-            </tr>
-
-            {% for r in rows %}
-            <tr>
-              <td>
-                <input type="checkbox" name="run_{{r.key}}" {% if r.selected %}checked{% endif %}>
-              </td>
-              <td>{{r.token}}</td>
-              <td>{{r.level}}</td>
-              <td>{{r.count}}</td>
-
-              <td>
-                <input type="number"
-                       min="0" max="10"
-                       name="mastery_{{r.key}}"
-                       value="{{r.mastery_level}}"
-                       style="width:60px;">
-              </td>
-              <td>{{ '%.2f'|format(r.yield_pct) }}</td>
-
-              <td>
-                <input type="number"
-                       min="0" max="10"
-                       name="workshop_{{r.key}}"
-                       value="{{r.workshop_level}}"
-                       style="width:60px;">
-              </td>
-              <td>{{ '%.2f'|format(r.workshop_pct) }}</td>
-
-              <td>
-                <input type="number"
-                       min="0" max="4"
-                       name="workers_{{r.key}}"
-                       value="{{r.workers}}"
-                       style="width:60px;">
-              </td>
-
-              <td>{{ '%.6f'|format(r.profit_hour_per) }}</td>
-              <td>{{ '%.6f'|format(r.profit_hour_total) }}</td>
-              <td>{{ '%.6f'|format(r.profit_day_total) }}</td>
-              <td>{{ '%.4f'|format(r.usd_hour_total) }}</td>
-            </tr>
-            {% endfor %}
-          </table>
-        </div>
-
-        <button type="submit" style="margin-top:12px;">Update</button>
-      </form>
-    </div>
+    {% if rows %}
+      <table>
+        <tr>
+          <th>Token</th>
+          <th>Level</th>
+          <th>Count</th>
+          <th>Profit / h (COIN)</th>
+          <th>Profit / h (USD)</th>
+        </tr>
+        {% for r in rows %}
+          <tr>
+            <td>{{ r.token }}</td>
+            <td>L{{ r.level }}</td>
+            <td>{{ r.count }}</td>
+            <td>{{ "%.4f"|format(r.profit_hour) }}</td>
+            <td>{{ "%.4f"|format(r.profit_hour_usd) }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% elif uid %}
+      <p class="hint">No factories found for your account.</p>
+    {% endif %}
     """
-
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=render_template_string(
-            content,
-            rows=rows,
-            error=error,
-            global_speed=global_speed,
-            global_yield=global_yield,
-            total_coin_hour=total_coin_hour,
-            total_coin_day=total_coin_day,
-            total_usd_hour=total_usd_hour,
-            total_usd_day=total_usd_day,
-            coin_usd=coin_usd,
-            sort_mode=sort_mode,
-        ),
-        active_page="profit",
-        has_uid=has_uid_flag(),
+    inner = render_template_string(
+        content,
+        rows=rows,
+        error=error,
+        speed_factor=speed_factor,
+        workers_default=workers_default,
     )
-    return html
+    return render_template_string(
+        BASE_TEMPLATE,
+        content=inner,
+        active_page="profitability",
+    )
 
-# -------- Boosts tab (per-token mastery / workshop levels) --------
+
+# -------------------------------------------------
+# Boosts editor
+# -------------------------------------------------
 
 
 @app.route("/boosts", methods=["GET", "POST"])
 def boosts():
-    """
-    Per-token Mastery & Workshop levels.
+    uid = _current_uid()
+    if not uid:
+        content = """
+        <h1>Boosts</h1>
+        <p class="subtle">You need to set your Voya ID in Overview first.</p>
+        <p class="hint"><a href="{{ url_for('overview') }}">Go to Overview</a>.</p>
+        """
+        inner = render_template_string(content)
+        return render_template_string(BASE_TEMPLATE, content=inner, active_page="boosts")
 
-    These levels act as your default boosts for each resource and are
-    automatically used as the baseline in the Profitability tab. You can
-    still override per factory-row there if you want to fine-tune.
-    """
-    factories = FACTORIES_FROM_CSV or {}
-# Use your fixed display order (MUD → ... → DYNAMITE)
-    tokens = FACTORY_DISPLAY_ORDER
-    levels_map = get_boost_levels()
+    current_levels = _get_boost_levels_for_uid(uid)
 
     if request.method == "POST":
-        for tok in tokens:
-            field_m = f"mastery_{tok}"
-            field_w = f"workshop_{tok}"
+        new_levels: Dict[str, Dict[str, int]] = {}
+        for token in ALL_FACTORY_TOKENS:
+            key_m = f"mastery_{token}"
+            key_w = f"workshop_{token}"
+            try:
+                m = int(request.form.get(key_m, "0") or 0)
+                w = int(request.form.get(key_w, "0") or 0)
+            except ValueError:
+                m = 0
+                w = 0
+            m = max(0, min(10, m))
+            w = max(0, min(10, w))
+            if m or w:
+                new_levels[token] = {"mastery": m, "workshop": w}
+        _set_boost_levels_for_uid(uid, new_levels)
+        current_levels = new_levels
 
-            # mastery level 0–10
-            if field_m in request.form:
-                raw_m = (request.form.get(field_m) or "").strip()
-                try:
-                    m_level = int(raw_m or "0")
-                except ValueError:
-                    m_level = levels_map[tok]["mastery_level"]
-                m_level = max(0, min(10, m_level))
-                levels_map[tok]["mastery_level"] = m_level
-
-            # workshop level 0–10
-            if field_w in request.form:
-                raw_w = (request.form.get(field_w) or "").strip()
-                try:
-                    w_level = int(raw_w or "0")
-                except ValueError:
-                    w_level = levels_map[tok]["workshop_level"]
-                w_level = max(0, min(10, w_level))
-                levels_map[tok]["workshop_level"] = w_level
-
-        save_boost_levels(levels_map)
+    # Build a simple list in standard order
+    rows: List[Dict[str, Any]] = []
+    for token in sorted(ALL_FACTORY_TOKENS, key=lambda t: STANDARD_ORDER_INDEX.get(t.upper(), 9999)):
+        levels = current_levels.get(token, {})
+        rows.append(
+            {
+                "token": token,
+                "mastery": int(levels.get("mastery", 0)),
+                "workshop": int(levels.get("workshop", 0)),
+            }
+        )
 
     content = """
-    <div class="card">
-      <h1>Mastery &amp; Workshop Boosts (Per Token)</h1>
-      <p class="subtle">
-        Set your <strong>account-wide</strong> Mastery &amp; Workshop levels per resource (0–10).<br>
-        These levels are used as defaults in the <strong>Profitability</strong> tab for every factory
-        that produces that token. You can still override a specific factory row there.
-      </p>
+    <h1>Boosts</h1>
+    <p class="subtle">Set your per-token Mastery and Workshop levels (0–10). These are used in Profitability.</p>
 
-      <form method="post">
-        <div style="max-height:500px;overflow:auto;">
-          <table>
-            <tr>
-              <th style="position:sticky;top:0;background:#020617;">Token</th>
-              <th style="position:sticky;top:0;background:#020617;">Mastery level (0–10)</th>
-              <th style="position:sticky;top:0;background:#020617;">Workshop level (0–10)</th>
-            </tr>
-            {% for tok in tokens %}
-              {% set lvl = levels_map.get(tok, {}) %}
-              <tr>
-                <td>{{ tok }}</td>
-                <td>
-                  <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    name="mastery_{{ tok }}"
-                    value="{{ lvl.get('mastery_level', 0) }}"
-                    style="width:80px;"
-                  >
-                </td>
-                <td>
-                  <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    name="workshop_{{ tok }}"
-                    value="{{ lvl.get('workshop_level', 0) }}"
-                    style="width:80px;"
-                  >
-                </td>
-              </tr>
-            {% endfor %}
-          </table>
-        </div>
-
-        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-          <div class="hint">
-            Mastery level uses the <code>MASTERY_BONUSES</code> table to reduce inputs.<br>
-            Workshop level uses <code>WORKSHOP_MODIFIERS</code> per token to speed up crafts.
-          </div>
-          <button type="submit">Save boosts</button>
-        </div>
-      </form>
-    </div>
+    <form method="post">
+      <table>
+        <tr>
+          <th>Token</th>
+          <th>Mastery</th>
+          <th>Workshop</th>
+        </tr>
+        {% for r in rows %}
+          <tr>
+            <td>{{ r.token }}</td>
+            <td>
+              <input type="number" name="mastery_{{ r.token }}" min="0" max="10" value="{{ r.mastery }}" style="width:60px;">
+            </td>
+            <td>
+              <input type="number" name="workshop_{{ r.token }}" min="0" max="10" value="{{ r.workshop }}" style="width:60px;">
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+      <div style="margin-top:10px;">
+        <button type="submit">Save boosts</button>
+      </div>
+    </form>
     """
-
-    html = render_template_string(
+    inner = render_template_string(content, rows=rows)
+    return render_template_string(
         BASE_TEMPLATE,
-        content=render_template_string(
-            content,
-            tokens=tokens,
-            levels_map=levels_map,
-        ),
+        content=inner,
         active_page="boosts",
-        has_uid=has_uid_flag(),
     )
-    return html
 
-# -------- Masterpieces tab --------
-@app.route("/masterpieces", methods=["GET", "POST"])
-def masterpieces_view():
-    """
-    Masterpiece Hub:
-      - Donation Planner (per-unit MP points, live COIN cost, tier progress)
-      - Live leaderboard for the current masterpiece (top 50)
-      - History & Event browser (top 50 by MP, grouped general/event)
-    """
-    error: Optional[str] = None
-    masterpieces_data: List[Dict[str, Any]] = []
 
-    # Load MP list from Craft World
-    try:
-        masterpieces_data = fetch_masterpieces()
-    except Exception as e:
-        error = f"Error fetching masterpieces: {e}"
-        masterpieces_data = []
+# -------------------------------------------------
+# Masterpieces hub (planner + leaderboards)
+# -------------------------------------------------
 
-    # Split masterpieces into general vs event
-    general_mps: List[Dict[str, Any]] = []
-    event_mps: List[Dict[str, Any]] = []
 
-    for mp in masterpieces_data:
-        event_id = mp.get("eventId")
-        if event_id:
-            event_mps.append(mp)
-        else:
-            general_mps.append(mp)
+def _pick_current_mp(masterpieces: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    general = [m for m in masterpieces if not m.get("eventId")]
+    event = [m for m in masterpieces if m.get("eventId")]
 
-    # Sort by ID so "latest" really is highest ID
-    def _mp_id(m: Dict[str, Any]) -> int:
+    def _id(m: Dict[str, Any]) -> int:
         try:
             return int(m.get("id") or 0)
-        except (TypeError, ValueError):
+        except Exception:
             return 0
 
-    general_mps = sorted(general_mps, key=_mp_id)
-    event_mps = sorted(event_mps, key=_mp_id)
+    if general:
+        return sorted(general, key=_id)[-1]
+    if event:
+        return sorted(event, key=_id)[-1]
+    return None
 
-    # ----- How many leaderboard entries to show? (Top 10 / 25 / 50 / 100) -----
+
+def _get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[str, float]]:
+    """Call predictReward once per token with amount=1 to get MP/XP per unit."""
+    results: Dict[str, Dict[str, float]] = {}
+    for sym in symbols:
+        resources = [{"symbol": sym, "amount": 1}]
+        try:
+            data = predict_reward(mp_id, resources)
+            results[sym] = {
+                "mp": float(data.get("masterpiecePoints", 0) or 0.0),
+                "xp": float(data.get("experiencePoints", 0) or 0.0),
+            }
+        except Exception:
+            results[sym] = {"mp": 0.0, "xp": 0.0}
+    return results
+
+
+@app.route("/masterpieces", methods=["GET", "POST"])
+def masterpieces_view():
+    error: Optional[str] = None
+    try:
+        all_mps = fetch_masterpieces()
+    except Exception as e:
+        all_mps = []
+        error = f"Error fetching masterpieces: {e}"
+
+    # Split into general / event
+    general_mps = [m for m in all_mps if not m.get("eventId")]
+    event_mps = [m for m in all_mps if m.get("eventId")]
+
+    def _id(m: Dict[str, Any]) -> int:
+        try:
+            return int(m.get("id") or 0)
+        except Exception:
+            return 0
+
+    general_mps = sorted(general_mps, key=_id)
+    event_mps = sorted(event_mps, key=_id)
+
+    # ----- Top N settings -----
     TOP_N_OPTIONS = [10, 25, 50, 100]
     DEFAULT_TOP_N = 50
-
-    # Try to read from query (GET/POST), then fall back to session
     top_n = session.get("mp_top_n", DEFAULT_TOP_N)
     top_n_str = (request.args.get("top_n") or request.form.get("top_n") or "").strip()
-
     if top_n_str:
         try:
             val = int(top_n_str)
@@ -1766,422 +724,349 @@ def masterpieces_view():
                 top_n = val
         except ValueError:
             pass
-
     if top_n not in TOP_N_OPTIONS:
         top_n = DEFAULT_TOP_N
-
-    # Persist per logged-in browser session
     session["mp_top_n"] = top_n
 
-    # ----- Highlight player (by name or UID) across MP leaderboards -----
+    # ----- Highlight name / UID -----
     highlight_query = (request.args.get("highlight") or request.form.get("highlight") or "").strip()
-
     if highlight_query:
-        # Keep it in the session so it sticks when you swap tabs or refresh
         session["mp_highlight"] = highlight_query
     else:
-        # Reuse last value if nothing new was submitted
         highlight_query = session.get("mp_highlight", "") or ""
 
-
-    # Pick the "current" masterpiece: latest general if available, otherwise latest event
-    mp_id_for_calc: Optional[str] = None
-    current_mp: Optional[Dict[str, Any]] = None
-    current_mp_top50: List[Dict[str, Any]] = []
-
-    if general_mps:
-        current_mp = general_mps[-1]
-    elif event_mps:
-        current_mp = event_mps[-1]
-
+    # Pick "current" MP
+    current_mp = _pick_current_mp(all_mps)
+    current_mp_top: List[Dict[str, Any]] = []
     if current_mp:
-        mp_id_for_calc = str(current_mp.get("id") or "")
         lb = current_mp.get("leaderboard") or []
-        try:
-            current_mp_top50 = list(lb[:top_n])
-        except Exception:
-            current_mp_top50 = []
-    else:
-        current_mp_top50 = []
+        current_mp_top = list(lb[:top_n])
 
-
-    # ----- Masterpiece selector for "History & Events" leaderboard browser -----
-
-    # We still build a combined list to drive the selected_mp resolution,
-    # but the UI dropdown will show separate optgroups for general vs event.
-    mp_selector_options: List[Dict[str, Any]] = []
-    mp_selector_options.extend(general_mps)
-    mp_selector_options.extend(event_mps)
-
-    # Which masterpiece should the browser leaderboard show?
-    selected_mp_id = request.args.get("mp_view_id")
-    if not selected_mp_id and current_mp:
-        selected_mp_id = str(current_mp.get("id") or "")
-
-    selected_mp: Optional[Dict[str, Any]] = None
-    selected_mp_top50: List[Dict[str, Any]] = []
-
+    # History selector
+    mp_selector_options = general_mps + event_mps
+    selected_mp_id = request.args.get("mp_view_id") or request.form.get("mp_view_id") or ""
+    selected_mp = None
+    selected_mp_top: List[Dict[str, Any]] = []
     if selected_mp_id:
         for mp in mp_selector_options:
             if str(mp.get("id")) == str(selected_mp_id):
                 selected_mp = mp
                 lb = mp.get("leaderboard") or []
-                try:
-                    selected_mp_top50 = list(lb[:top_n])
-                except Exception:
-                    selected_mp_top50 = []
+                selected_mp_top = list(lb[:top_n])
                 break
-
-
     if not selected_mp and current_mp:
-        # Fallback: show current_mp leaderboard if selector fails
         selected_mp = current_mp
-        selected_mp_top50 = current_mp_top50
+        selected_mp_top = current_mp_top
 
-
-    # ---------- Donation Planner state (list of {token, amount}) ----------
-    calc_resources: List[Dict[str, Any]] = []
-    calc_result: Optional[Dict[str, Any]] = None
-
-    if request.method == "POST":
-        action = (request.form.get("calc_action") or "").strip().lower()
-        state_raw = request.form.get("calc_state") or "[]"
-
-        # Load previous state from hidden JSON field
+    # Donation planner state (very simple version – just show totals)
+    planner_state_json = "[]"
+    planner_result: Optional[Dict[str, Any]] = None
+    if request.method == "POST" and (request.form.get("calc_action") == "recalc"):
+        planner_state_json = request.form.get("calc_state") or "[]"
         try:
-            loaded = json.loads(state_raw)
-            if isinstance(loaded, list):
-                for row in loaded:
-                    if not isinstance(row, dict):
-                        continue
-                    tok = str(row.get("token", "")).upper().strip()
-                    try:
-                        amt = float(row.get("amount", 0) or 0)
-                    except (TypeError, ValueError):
-                        amt = 0.0
-                    if tok and amt > 0:
-                        calc_resources.append({"token": tok, "amount": amt})
+            rows = json.loads(planner_state_json)
         except Exception:
-            calc_resources = []
-
-        # Apply the current action
-        if action == "add":
-            tok = (request.form.get("calc_token") or "").upper().strip()
-            amt_raw = (request.form.get("calc_amount") or "").replace(",", "").strip()
+            rows = []
+        resources = [
+            {"symbol": r.get("token"), "amount": float(r.get("amount") or 0.0)}
+            for r in rows
+            if r.get("token") and float(r.get("amount") or 0.0) > 0
+        ]
+        if resources and current_mp:
             try:
-                amt = float(amt_raw or "0")
-            except ValueError:
-                amt = 0.0
-            if tok and amt > 0:
-                calc_resources.append({"token": tok, "amount": amt})
+                data = predict_reward(str(current_mp["id"]), resources)
+                planner_result = {
+                    "mp": float(data.get("masterpiecePoints", 0) or 0.0),
+                    "xp": float(data.get("experiencePoints", 0) or 0.0),
+                }
+            except Exception as e:
+                error = error or f"Error predicting reward: {e}"
 
-        elif action == "clear":
-            calc_resources = []
-
-        # ---------- Compute totals if we have resources ----------
-        if calc_resources and not error:
-            # 1) Live prices → total COIN cost
-            try:
-                prices = fetch_live_prices_in_coin()
-            except Exception:
-                prices = {}
-
-            total_cost = 0.0
-            for row in calc_resources:
-                price = prices.get(row["token"], 0.0) or 0.0
-                total_cost += float(row["amount"]) * float(price)
-
-            # 2) Total points + XP via predict_reward
-            total_points = 0.0
-            total_xp = 0.0
-            per_unit_points: Dict[str, float] = {}
-            per_unit_xp: Dict[str, float] = {}
-
-            if mp_id_for_calc:
-                # First: total points / XP for the whole bundle
-                try:
-                    contrib = [
-                        {"symbol": r["token"], "amount": float(r["amount"])}
-                        for r in calc_resources
-                    ]
-                    reward = predict_reward(mp_id_for_calc, contrib) or {}
-                    total_points = float(reward.get("masterpiecePoints") or 0)
-                    total_xp = float(reward.get("experiencePoints") or 0)
-                except Exception:
-                    total_points = 0.0
-                    total_xp = 0.0
-
-                # Then: per-unit cache so each row can show its own contribution
-                try:
-                    per_unit = get_mp_per_unit_rewards(
-                        mp_id_for_calc,
-                        [r.get("token", "") for r in calc_resources],
-                    )
-                    per_unit_points = per_unit.get("points", {}) or {}
-                    per_unit_xp = per_unit.get("xp", {}) or {}
-                except Exception:
-                    per_unit_points = {}
-                    per_unit_xp = {}
-
-            # Per-row points / XP (safe even if we have no per-unit data)
-            for row in calc_resources:
-                tok = (row.get("token") or "").upper()
-                try:
-                    amt = float(row.get("amount") or 0.0)
-                except (TypeError, ValueError):
-                    amt = 0.0
-
-                p_unit = per_unit_points.get(tok, 0.0)
-                x_unit = per_unit_xp.get(tok, 0.0)
-                row_points = p_unit * amt
-                row_xp = x_unit * amt
-
-                row["points_str"] = f"{row_points:,.0f}" if row_points else "—"
-                row["xp_str"] = f"{row_xp:,.0f}" if row_xp else "—"
-
-            # 3) Map to tiers
-            tier = 0
-            next_tier_index: Optional[int] = None
-            points_to_next: Optional[float] = None
-            progress_to_next: Optional[float] = None
-
-            for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
-                if total_points >= req:
-                    tier = i
-                else:
-                    next_tier_index = i
-                    points_to_next = max(0.0, float(req) - total_points)
-                    progress_to_next = total_points / float(req) if req > 0 else 0.0
-                    break
-
-            if tier == len(MP_TIER_THRESHOLDS):
-                next_tier_index = None
-                points_to_next = None
-                progress_to_next = 1.0
-
-            calc_result = {
-                "total_points": total_points,
-                "total_points_str": f"{total_points:,.0f}",
-                "total_xp": total_xp,
-                "total_xp_str": f"{total_xp:,.0f}",
-                "total_cost": total_cost,
-                "total_cost_str": f"{total_cost:,.2f}",
-                "tier": tier,
-                "next_tier_index": next_tier_index,
-                "points_to_next": points_to_next,
-                "points_to_next_str": (
-                    f"{points_to_next:,.0f}" if points_to_next is not None else None
-                ),
-                "progress_to_next_pct": (
-                    round(progress_to_next * 100, 1)
-                    if progress_to_next is not None
-                    else None
-                ),
-            }
-
-    # Serialize calculator state back into hidden JSON field
-    calc_state_json = json.dumps(calc_resources)
-
-    # Build static tier rows for display
-    tier_rows = []
-    for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
-        prev_req = MP_TIER_THRESHOLDS[i - 2] if i > 1 else 0
-        tier_rows.append({
-            "tier": i,
-            "required": req,
-            "delta": req - prev_req,
-        })
-
-    # ---------- Render content for this tab ----------
     content = """
-    <div class="card">
-      <style>
-        .mp-top-summary {
-          margin-top: 8px;
-          margin-bottom: 10px;
-        }
-        .mp-summary-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 8px;
-        }
-        .mp-summary-tile {
-          border-radius: 12px;
-          padding: 8px 10px;
-          background: radial-gradient(circle at top, rgba(30,64,175,0.55), rgba(15,23,42,0.95));
-          border: 1px solid rgba(129,140,248,0.7);
-          font-size: 13px;
-        }
-        .mp-summary-title {
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          color: #bfdbfe;
-          margin-bottom: 2px;
-        }
-        .mp-summary-main {
-          font-size: 14px;
-          font-weight: 600;
-          color: #f9fafb;
-        }
-        .mp-summary-sub {
-          font-size: 12px;
-          color: #9ca3af;
-        }
+    <h1>🏛 Masterpiece Hub</h1>
+    <p class="subtle">
+      Plan donations, watch the live race, and browse past &amp; event Masterpieces —
+      all wired directly to <code>predictReward</code>.
+    </p>
 
-        .mp-subnav {
-          margin-top: 14px;
-          margin-bottom: 6px;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-        }
-        .mp-tab {
-          border-radius: 999px;
-          border: 1px solid rgba(148,163,184,0.7);
-          background: rgba(15,23,42,0.9);
-          padding: 5px 11px;
-          font-size: 13px;
-          color: #e5e7eb;
-          cursor: pointer;
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .mp-tab span.icon {
-          font-size: 14px;
-        }
-        .mp-tab.active {
-          border-color: transparent;
-          background: linear-gradient(135deg, #22c55e, #0ea5e9);
-          color: #020617;
-          box-shadow: 0 0 0 1px rgba(34,197,94,0.6), 0 8px 24px rgba(34,197,94,0.4);
-        }
+    <form method="get" class="section" style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+      <input type="hidden" name="tab" value="{{ request.args.get('tab') or 'planner' }}">
+      <label for="mp_highlight" class="subtle">Highlight my name / Voya ID (top 100 only):</label>
+      <input id="mp_highlight"
+             name="highlight"
+             type="text"
+             value="{{ highlight_query }}"
+             placeholder="Your display name or Voya ID"
+             style="min-width:220px;">
+      <button type="submit">Apply</button>
+      {% if highlight_query %}
+        <span class="hint">Highlighting rows matching: <strong>{{ highlight_query }}</strong></span>
+      {% else %}
+        <span class="hint">Works if you&apos;re in the visible top {{ top_n }}.</span>
+      {% endif %}
+    </form>
 
-        .mp-section {
-          margin-top: 10px;
-        }
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
 
-        .mp-pill {
-          display:inline-block;
-          padding: 2px 8px;
-          border-radius:999px;
-          font-size:11px;
-          border:1px solid rgba(52,211,153,0.7);
-          color:#a7f3d0;
-          background:rgba(6,95,70,0.35);
-        }
-        .mp-pill-secondary {
-          border-color: rgba(129,140,248,0.9);
-          color:#c7d2fe;
-          background:rgba(30,64,175,0.45);
-        }
+    <div class="mp-tab-bar">
+      <div class="mp-tab" data-mp-tab="planner">Planner</div>
+      <div class="mp-tab" data-mp-tab="current">Current</div>
+      <div class="mp-tab" data-mp-tab="history">History</div>
+    </div>
 
-        .mp-tier-table th,
-        .mp-tier-table td {
-          white-space: nowrap;
-        }
+    <!-- Planner (very simple for now) -->
+    <div class="mp-section" data-mp-section="planner">
+      {% if current_mp %}
+        <p class="subtle">
+          Current MP: <strong>MP {{ current_mp.id }}</strong> —
+          {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}
+        </p>
+        <p class="hint">
+          (Planner UI is simplified here; you can extend it later with full per-resource rows.)
+        </p>
+      {% else %}
+        <p class="hint">No active masterpiece detected.</p>
+      {% endif %}
+      {% if planner_result %}
+        <p class="hint">
+          Bundle total: <strong>{{ planner_result.mp|round(2) }}</strong> MP points,
+          <strong>{{ planner_result.xp|round(2) }}</strong> XP.
+        </p>
+      {% endif %}
+    </div>
 
-        .mp-planner-grid {
-          display:grid;
-          grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
-          gap: 10px;
-        }
+    <!-- Current leaderboard -->
+    <div class="mp-section" data-mp-section="current" style="display:none;">
+      {% if current_mp %}
+        <h2>Live leaderboard — current masterpiece</h2>
+        <p class="subtle">
+          MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}<br>
+          Showing top {{ current_mp_top|length }} players (Top {{ top_n }}).
+        </p>
 
-        .mp-stat-block {
-          display:flex;
-          flex-direction:row;
-          flex-wrap:wrap;
-          gap: 10px;
-          font-size:13px;
-        }
-        .mp-stat-label {
-          color:#9ca3af;
-          font-size:12px;
-        }
-        .mp-stat-value {
-          font-size:14px;
-          font-weight:600;
-        }
+        <form method="get" class="section" style="margin-bottom:8px; display:flex; align-items:center; gap:8px;">
+          <input type="hidden" name="tab" value="current">
+          <label for="top_n" class="subtle">Show:</label>
+          <select id="top_n" name="top_n">
+            {% for n in top_n_options %}
+              <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit">Apply</button>
+          <span class="hint">Up to Top 100.</span>
+        </form>
 
-        .mp-row-me {
-          background: linear-gradient(90deg, rgba(250,204,21,0.14), transparent);
-        }
-        .mp-row-me td {
-          border-top: 1px solid rgba(250,204,21,0.35);
-          border-bottom: 1px solid rgba(250,204,21,0.18);
-        }
-        .me-pill {
-          display: inline-block;
-          margin-left: 6px;
-          padding: 1px 6px;
-          border-radius: 999px;
-          font-size: 11px;
-          border: 1px solid rgba(250,204,21,0.7);
-          color: #facc15;
-          background: rgba(30,64,175,0.65);
-        }
+        {% if current_mp_top %}
+          <div class="mp-table-wrap">
+            <table>
+              <tr>
+                <th>Pos</th>
+                <th>Player</th>
+                <th>Points</th>
+              </tr>
+              {% for row in current_mp_top %}
+                {% set prof = row.profile or {} %}
+                {% set name = prof.displayName or "" %}
+                {% set uid = prof.uid or "" %}
+                {% set is_me = highlight_query and (
+                  highlight_query|lower in name|lower
+                  or highlight_query|lower in uid|lower
+                ) %}
+                <tr class="{% if is_me %}mp-row-me{% endif %}">
+                  <td>{{ row.position }}</td>
+                  <td class="subtle">
+                    {% if name %}
+                      {{ name }}
+                    {% elif uid %}
+                      {{ uid }}
+                    {% else %}
+                      —
+                    {% endif %}
+                    {% if is_me %}
+                      <span class="me-pill">← you</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ row.masterpiecePoints|int }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          </div>
+        {% else %}
+          <p class="hint">No leaderboard data yet.</p>
+        {% endif %}
+      {% else %}
+        <p class="hint">No active masterpiece detected.</p>
+      {% endif %}
+    </div>
 
-        @media (max-width: 768px) {
-          .mp-planner-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-      </style>
-
-
-      <h1>🏛 Masterpiece Hub</h1>
+    <!-- History -->
+    <div class="mp-section" data-mp-section="history" style="display:none;">
+      <h2>History &amp; events</h2>
       <p class="subtle">
-        Plan donations, watch the live race, and browse past &amp; event Masterpieces —
-        all wired directly to <code>predictReward</code> and live COIN prices.
+        Inspect the top <strong>{{ top_n }}</strong> positions for any general or event masterpiece.
       </p>
 
-      <form method="get" class="section" style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-        <input type="hidden" name="tab" value="{{ request.args.get('tab') or 'planner' }}">
-        <label for="mp_highlight" class="subtle">Highlight my name / Voya ID (top 100 only):</label>
-        <input id="mp_highlight"
-               name="highlight"
-               type="text"
-               value="{{ highlight_query }}"
-               placeholder="Your display name or Voya ID"
-               style="min-width:220px;">
-        <button type="submit">Apply</button>
-        {% if highlight_query %}
-          <span class="hint">Highlighting rows matching: <strong>{{ highlight_query }}</strong></span>
-        {% else %}
-          <span class="hint">Works if you&apos;re in the visible top {{ top_n }}.</span>
-        {% endif %}
-      </form>
+      {% if general_mps or event_mps %}
+        <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
+          <label for="mp_view_id">Choose a masterpiece</label>
+          <select id="mp_view_id" name="mp_view_id" style="max-width:320px;">
+            {% if general_mps %}
+              <optgroup label="General masterpieces">
+                {% for mp in general_mps %}
+                  <option value="{{ mp.id }}"
+                    {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
+                    MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
+                    {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
+                  </option>
+                {% endfor %}
+              </optgroup>
+            {% endif %}
+            {% if event_mps %}
+              <optgroup label="Event masterpieces">
+                {% for mp in event_mps %}
+                  <option value="{{ mp.id }}"
+                    {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
+                    MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
+                  </option>
+                {% endfor %}
+              </optgroup>
+            {% endif %}
+          </select>
 
-      {% if current_mp %}
+          <label for="history_top_n" style="margin-left:8px;">Show:</label>
+          <select id="history_top_n" name="top_n">
+            {% for n in top_n_options %}
+              <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
+            {% endfor %}
+          </select>
 
-        <div class="mp-top-summary">
-          <div class="mp-summary-grid">
-            <div class="mp-summary-tile">
-              <div class="mp-summary-title">Current masterpiece (used for planner)</div>
-              <div class="mp-summary-main">
-                MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}
-              </div>
-              <div class="mp-summary-sub">
-                {% if current_mp.eventId %}
-                  <span class="mp-pill">Event Masterpiece</span>
-                {% else %}
-                  <span class="mp-pill">General Masterpiece</span>
-                {% endif %}
-                <span style="margin-left:6px;" class="mp-pill mp-pill-secondary">
-                  Scoring source for 🧮 Planner
-                </span>
-              </div>
-            </div>
-            <div class="mp-summary-tile">
-              <div class="mp-summary-title">Masterpiece pool</div>
-              <div class="mp-summary-main">
-                {{ general_mps|length }} general · {{ event_mps|length }} event
-              </div>
-              <div class="mp-summary-sub">
-                History browser lets you inspect any MP&apos;s top 50 at any time.
-              </div>
-            </div>
+          <input type="hidden" name="tab" value="history">
+          <button type="submit" style="margin-left:6px;">View leaderboard</button>
+        </form>
+      {% else %}
+        <p class="hint">No masterpieces available to browse.</p>
+      {% endif %}
+
+      {% if selected_mp_top and selected_mp %}
+        <div class="hint" style="margin-bottom:6px;">
+          Showing top {{ selected_mp_top|length }} positions for
+          <strong>
+            MP {{ selected_mp.id }} — {{ selected_mp.name or selected_mp.addressableLabel or selected_mp.type }}
+          </strong>.
+        </div>
+        <div class="mp-table-wrap">
+          <table>
+            <tr>
+              <th>Pos</th>
+              <th>Player</th>
+              <th>Points</th>
+            </tr>
+            {% for row in selected_mp_top %}
+              {% set prof = row.profile or {} %}
+              {% set name = prof.displayName or "" %}
+              {% set uid = prof.uid or "" %}
+              {% set is_me = highlight_query and (
+                highlight_query|lower in name|lower
+                or highlight_query|lower in uid|lower
+              ) %}
+              <tr class="{% if is_me %}mp-row-me{% endif %}">
+                <td>{{ row.position }}</td>
+                <td class="subtle">
+                  {% if name %}
+                    {{ name }}
+                  {% elif uid %}
+                    {{ uid }}
+                  {% else %}
+                    —
+                  {% endif %}
+                  {% if is_me %}
+                    <span class="me-pill">← you</span>
+                  {% endif %}
+                </td>
+                <td>{{ row.masterpiecePoints|int }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+      {% elif general_mps or event_mps %}
+        <p class="hint">Select a masterpiece above to view its leaderboard.</p>
+      {% else %}
+        <p class="hint">No leaderboard data available.</p>
+      {% endif %}
+    </div>
+
+    <script>
+      (function() {
+        const tabs = document.querySelectorAll('.mp-tab');
+        const sections = document.querySelectorAll('.mp-section');
+
+        function activate(name) {
+          tabs.forEach(btn => {
+            const t = btn.getAttribute('data-mp-tab');
+            btn.classList.toggle('active', t === name);
+          });
+          sections.forEach(sec => {
+            const s = sec.getAttribute('data-mp-section');
+            sec.style.display = (s === name) ? 'block' : 'none';
+          });
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        let currentTab = params.get('tab') || 'planner';
+        activate(currentTab);
+
+        tabs.forEach(btn => {
+          btn.addEventListener('click', function() {
+            const t = this.getAttribute('data-mp-tab') || 'planner';
+            currentTab = t;
+            activate(t);
+            const url = new URL(window.location.href);
+            url.searchParams.set('tab', t);
+            window.history.replaceState({}, '', url);
+          });
+        });
+
+        const REFRESH_MS = 30000;
+        setInterval(() => {
+          if (currentTab !== 'current') return;
+          const url = new URL(window.location.href);
+          url.searchParams.set('tab', 'current');
+          window.location.href = url.toString();
+        }, REFRESH_MS);
+      })();
+    </script>
+    """
+
+    inner = render_template_string(
+        content,
+        error=error,
+        current_mp=current_mp,
+        current_mp_top=current_mp_top,
+        general_mps=general_mps,
+        event_mps=event_mps,
+        selected_mp=selected_mp,
+        selected_mp_top=selected_mp_top,
+        mp_selector_options=mp_selector_options,
+        top_n=top_n,
+        top_n_options=TOP_N_OPTIONS,
+        highlight_query=highlight_query,
+    )
+    return render_template_string(
+        BASE_TEMPLATE,
+        content=inner,
+        active_page="masterpieces",
+    )
+
+
+# -------------------------------------------------
+# Entry point
+# -------------------------------------------------
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
             <div class="mp-summary-tile">
               <div class="mp-summary-title">Live leaderboard snapshot</div>
               <div class="mp-summary-main">
@@ -3741,6 +2626,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
