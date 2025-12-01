@@ -1734,45 +1734,39 @@ def masterpieces_view():
         error = f"Error fetching masterpieces: {e}"
         masterpieces_data = []
 
-    # Pick the *current* masterpiece for calculator / per-unit scoring
+    # Split masterpieces into general vs event, and pick the current one
+    general_mps: List[Dict[str, Any]] = []
+    event_mps: List[Dict[str, Any]] = []
+
+    for mp in masterpieces_data:
+        # mp should be a dict from fetch_masterpieces()
+        event_id = mp.get("eventId")
+        if event_id:
+            event_mps.append(mp)
+        else:
+            general_mps.append(mp)
+
     mp_id_for_calc: Optional[str] = None
     current_mp: Optional[Dict[str, Any]] = None
     current_mp_top50: List[Dict[str, Any]] = []
 
-    if masterpieces_data:
-        # Prefer a non-event masterpiece (eventId is null/empty).
-        chosen = None
-        for mp in masterpieces_data:
-            if isinstance(mp, dict):
-                ev = mp.get("eventId")
-            else:
-                ev = getattr(mp, "eventId", None)
-            if not ev:
-                chosen = mp
-                break
+    if general_mps:
+        # Current = latest general masterpiece (non-event)
+        current_mp = general_mps[-1]
+    elif event_mps:
+        # Fallback: if there are only event MPs, use the newest event one
+        current_mp = event_mps[-1]
 
-        # Fallback: use the last masterpiece in the list
-        if chosen is None:
-            chosen = masterpieces_data[-1]
-
-        current_mp = chosen
-
-        # Resolve id as string
-        if isinstance(chosen, dict):
-            mp_id_for_calc = str(chosen.get("id") or "")
-            lb = chosen.get("leaderboard") or []
-        else:
-            mp_id_for_calc = str(getattr(chosen, "id", "") or "")
-            lb = getattr(chosen, "leaderboard", []) or []
-
-        # Top 50 leaderboard entries for the current masterpiece
+    if current_mp:
+        mp_id_for_calc = str(current_mp.get("id") or "")
+        lb = current_mp.get("leaderboard") or []
         try:
             current_mp_top50 = list(lb[:50])
         except Exception:
             current_mp_top50 = []
     else:
-        current_mp = None
         current_mp_top50 = []
+
 
     # ---------- Calculator state (list of {token, amount}) ----------
     calc_resources: List[Dict[str, Any]] = []
@@ -2039,27 +2033,105 @@ def masterpieces_view():
       {% endif %}
 
       {% if masterpieces %}
+        <style>
+          .mp-tabs {
+            margin-top: 8px;
+          }
+          .mp-tabs-nav {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+          }
+          .mp-tab-btn {
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid #ccc;
+            font-size: 0.85rem;
+            cursor: pointer;
+          }
+          .mp-tab-btn.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+          }
+          .mp-tab-panel {
+            display: none;
+          }
+          .mp-tab-panel.active {
+            display: block;
+          }
+        </style>
+
         <div class="section">
           <div class="hint">Data pulled directly from Craft World (via GraphQL).</div>
-          <div class="mp-table-wrap">
-            <table>
-              <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Ends</th>
-                <th>Reward</th>
-              </tr>
-              {% for mp in masterpieces %}
-                <tr>
-                  <td>{{ mp.id }}</td>
-                  <td>{{ mp.name or mp.id }}</td>
-                  <td>{{ mp.status }}</td>
-                  <td>{{ mp.endsAt or '—' }}</td>
-                  <td>{{ mp.rewardSummary or '—' }}</td>
-                </tr>
-              {% endfor %}
-            </table>
+
+          <div class="mp-tabs" id="mp-tabs">
+            <div class="mp-tabs-nav">
+              <button type="button" class="mp-tab-btn active" data-tab="general">
+                General Masterpieces
+              </button>
+              <button type="button" class="mp-tab-btn" data-tab="events">
+                Event Masterpieces
+              </button>
+            </div>
+
+            <!-- General MPs (includes the current one) -->
+            <div class="mp-tab-panel active" data-tab-panel="general">
+              <div class="hint">
+                Showing all non-event masterpieces.
+                {% if current_mp %}
+                  Current MP: <strong>{{ current_mp.name or current_mp.id }}</strong>
+                  (ID {{ current_mp.id }})
+                {% endif %}
+              </div>
+              <div class="mp-table-wrap">
+                <table>
+                  <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>Ends</th>
+                    <th>Reward</th>
+                  </tr>
+                  {% for mp in general_mps %}
+                    <tr{% if current_mp and mp.id == current_mp.id %} style="font-weight:bold;"{% endif %}>
+                      <td>{{ mp.id }}</td>
+                      <td>{{ mp.name or mp.id }}</td>
+                      <td>{{ mp.status }}</td>
+                      <td>{{ mp.endsAt or '—' }}</td>
+                      <td>{{ mp.rewardSummary or '—' }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
+            </div>
+
+            <!-- Event MPs -->
+            <div class="mp-tab-panel" data-tab-panel="events">
+              <div class="hint">Completed / event masterpieces.</div>
+              <div class="mp-table-wrap">
+                <table>
+                  <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Ends</th>
+                    <th>Reward</th>
+                  </tr>
+                  {% for mp in event_mps %}
+                    <tr>
+                      <td>{{ mp.id }}</td>
+                      <td>{{ mp.name or mp.id }}</td>
+                      <td>{{ mp.type }}</td>
+                      <td>{{ mp.status }}</td>
+                      <td>{{ mp.endsAt or '—' }}</td>
+                      <td>{{ mp.rewardSummary or '—' }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2098,26 +2170,54 @@ def masterpieces_view():
             <p class="hint">No leaderboard data available for the current masterpiece.</p>
           {% endif %}
         </div>
+
+        <script>
+          (function () {
+            const tabsRoot = document.getElementById("mp-tabs");
+            if (!tabsRoot) return;
+            const buttons = tabsRoot.querySelectorAll(".mp-tab-btn");
+            const panels = tabsRoot.querySelectorAll(".mp-tab-panel");
+
+            buttons.forEach(btn => {
+              btn.addEventListener("click", () => {
+                const tab = btn.getAttribute("data-tab");
+
+                buttons.forEach(b => b.classList.remove("active"));
+                panels.forEach(p => p.classList.remove("active"));
+
+                btn.classList.add("active");
+                const panel = tabsRoot.querySelector(
+                  '.mp-tab-panel[data-tab-panel="' + tab + '"]'
+                );
+                if (panel) panel.classList.add("active");
+              });
+            });
+          })();
+        </script>
       {% else %}
         <p>No masterpieces found.</p>
       {% endif %}
     </div>
 
+
     """
 
     # Render inner content with context
-    inner = render_template_string(
-        content,
-        error=error,
-        masterpieces=masterpieces_data,
-        tier_rows=tier_rows,
-        ALL_FACTORY_TOKENS=FACTORY_DISPLAY_ORDER,
-        calc_resources=calc_resources,
-        calc_result=calc_result,
-        calc_state_json=calc_state_json,
-        current_mp=current_mp,
-        current_mp_top50=current_mp_top50,
-    )
+inner = render_template_string(
+    content,
+    error=error,
+    masterpieces=masterpieces_data,
+    general_mps=general_mps,
+    event_mps=event_mps,
+    tier_rows=tier_rows,
+    ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
+    calc_resources=calc_resources,
+    calc_result=calc_result,
+    calc_state_json=calc_state_json,
+    current_mp=current_mp,
+    current_mp_top50=current_mp_top50,
+)
+
 
     # Wrap in base template
     html = render_template_string(
@@ -3266,6 +3366,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
