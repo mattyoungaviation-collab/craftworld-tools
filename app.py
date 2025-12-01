@@ -2625,32 +2625,30 @@ def masterpieces_view():
     """
 
     # Render inner content with context
-    inner = render_template_string(
-        content,
-        error=error,
-        masterpieces=masterpieces_data,
-        general_mps=general_mps,
-        event_mps=event_mps,
-        history_mp_options=history_mp_options,
-        tier_rows=tier_rows,
-        ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
-        calc_resources=calc_resources,
-        calc_result=calc_result,
-        calc_state_json=calc_state_json,
-        planner_mp_options=planner_mp_options,
-        planner_mp=planner_mp,
-        planner_mp_id=planner_mp_id,
-        current_mp=current_mp,
-        current_mp_top50=current_mp_top50,
-        mp_selector_options=mp_selector_options,
-        selected_mp=selected_mp,
-        selected_mp_top50=selected_mp_top50,
-        selected_mp_id=selected_mp_id,
-        highlight_query=highlight_query,
-        top_n=top_n,
-        top_n_options=TOP_N_OPTIONS,
-
-    )
+inner = render_template_string(
+    content,
+    error=error,
+    masterpieces=masterpieces_data,
+    general_mps=general_mps,
+    event_mps=event_mps,
+    history_mp_options=history_mp_options,
+    tier_rows=tier_rows,
+    ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
+    calc_resources=calc_resources,
+    calc_result=calc_result,
+    calc_state_json=calc_state_json,
+    planner_mp_options=planner_mp_options,
+    planner_mp=planner_mp,
+    planner_mp_id=planner_mp_id,
+    current_mp=current_mp,
+    current_mp_top50=current_mp_top50,
+    selected_mp=selected_mp,
+    selected_mp_top50=selected_mp_top50,
+    selected_mp_id=selected_mp_id,
+    highlight_query=highlight_query,
+    top_n=top_n,
+    top_n_options=TOP_N_OPTIONS,
+)
 
     # Wrap in base template
     html = render_template_string(
@@ -3799,6 +3797,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
