@@ -2134,11 +2134,6 @@ def masterpieces_view():
         Plan donations, watch the live race, and browse past &amp; event Masterpieces —
         all wired directly to <code>predictReward</code> and live COIN prices.
       </p>
-      <h1>🏛 Masterpiece Hub</h1>
-      <p class="subtle">
-        Plan donations, watch the live race, and browse past &amp; event Masterpieces —
-        all wired directly to <code>predictReward</code> and live COIN prices.
-      </p>
 
       <form method="get" class="section" style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
         <input type="hidden" name="tab" value="{{ request.args.get('tab') or 'planner' }}">
@@ -2157,8 +2152,6 @@ def masterpieces_view():
         {% endif %}
       </form>
 
-      {% if current_mp %}
-        <div class="mp-top-summary">
 
       {% if current_mp %}
         <div class="mp-top-summary">
@@ -3739,6 +3732,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
