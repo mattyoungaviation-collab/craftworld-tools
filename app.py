@@ -1923,41 +1923,98 @@ def masterpieces_view():
             mp_by_id[mid] = dict(meta)
         if mid > max_mp_id:
             max_mp_id = mid
+def _build_reward_snapshot_for_mp(
+    mp: Optional[Dict[str, Any]],
+    rows: List[Dict[str, Any]],
+    highlight_query: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a 'your current reward' snapshot for a given masterpiece:
+      - Uses leaderboard rows + highlight_query to find your position & points
+      - Determines your completion tier (MP_TIER_THRESHOLDS)
+      - Looks up the leaderboard reward bracket you fall into.
+    Returns a dict or None if we can't find you.
+    """
+    highlight_query = (highlight_query or "").strip()
+    if not (mp and rows and highlight_query):
+        return None
 
-        def _build_reward_summary_for_mp(
-            mp: Optional[Dict[str, Any]],
-            rows: List[Dict[str, Any]],
-            highlight_query: str,
-        ) -> Optional[Dict[str, Any]]:
-            """
-            Build a 'your current reward' snapshot for a given masterpiece:
-              - Uses leaderboard rows + highlight_query to find your position & points
-              - Determines your completion tier (MP_TIER_THRESHOLDS)
-              - Looks up the leaderboard reward bracket you fall into
-            Returns a dict or None if we can't find you.
-            """
-            highlight_query = (highlight_query or "").strip()
-            if not (mp and rows and highlight_query):
-                return None
+    gap = compute_leaderboard_gap_for_highlight(rows, highlight_query)
+    if not gap or not gap.get("position"):
+        return None
 
-            gap = compute_leaderboard_gap_for_highlight(rows, highlight_query)
-            if not gap or not gap.get("position"):
-                return None
+    my_position = gap["position"]
+    try:
+        my_position_int = int(str(my_position).strip())
+    except Exception:
+        my_position_int = None
 
-            my_position = gap["position"]
+    my_points = gap.get("points")
+
+    # Figure out completion tier
+    tier_label, tier_min, tier_max = None, None, None
+    if my_points is not None:
+        # thresholds sorted by min MP descending, so first match is highest tier you've reached
+        for tier in MP_TIER_THRESHOLDS:
+            if my_points >= tier["min_mp"]:
+                tier_label = tier["label"]
+                tier_min = tier["min_mp"]
+                tier_max = tier["max_mp"]
+                break
+
+    # Figure out reward bracket we fall into
+    reward_bracket: Optional[Dict[str, Any]] = None
+    if my_position_int is not None:
+        # mp["leaderboardRewards"] is a list of brackets like:
+        # { "minRank": 1, "maxRank": 1, "reward": { "experience": 500, ... } }
+        for bracket in mp.get("leaderboardRewards", []) or []:
+            min_rank = bracket.get("minRank")
+            max_rank = bracket.get("maxRank")
+            if min_rank is None or max_rank is None:
+                continue
             try:
-                my_position_int = int(str(my_position).strip())
-            except Exception:
-                my_position_int = None
+                # Treat these as inclusive rank ranges [minRank, maxRank]
+                if min_rank <= my_position_int <= max_rank:
+                    reward_bracket = bracket
+                    break
+            except TypeError:
+                continue
 
-            my_points = gap.get("points")
+    reward_label = None
+    if reward_bracket:
+        rr = reward_bracket.get("reward") or {}
+        label_parts = []
+        xp = rr.get("experience")
+        if xp is not None:
+            label_parts.append(f"{xp:,} XP")
+        mp_tokens = rr.get("masterpiecePoints")
+        if mp_tokens is not None:
+            label_parts.append(f"{mp_tokens:,} MP")
+        coins = rr.get("coins")
+        if coins is not None:
+            label_parts.append(f"{coins:,} coins")
 
-            # figure out completion tier
-            tier_label, tier_min, tier_max = None, None, None
-            if my_points is not None:
-                # thresholds sorted by min MP descending, so first match is highest tier you've reached
-                for tier in MP_TIER_THRESHOLDS:
-                    min_mp = tier.get("min_mp")
+        # Add 1-based rank range label
+        min_rank = reward_bracket.get("minRank")
+        max_rank = reward_bracket.get("maxRank")
+        if min_rank is not None and max_rank is not None:
+            if min_rank == max_rank:
+                label_parts.append(f"(Rank {min_rank})")
+            else:
+                label_parts.append(f"(Ranks {min_rank}–{max_rank})")
+
+        reward_label = " ".join(label_parts).strip()
+
+    return {
+        "position": my_position,
+        "points": my_points,
+        "tier_label": tier_label,
+        "tier_min": tier_min,
+        "tier_max": tier_max,
+        "reward_bracket": reward_bracket,
+        "reward_label": reward_label,
+    }
+
                     if min_mp is None:
                         continue
                     try:
@@ -4721,6 +4778,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
