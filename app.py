@@ -2495,7 +2495,7 @@ def masterpieces_view():
     }, REFRESH_MS);
   })();
 </script>
-
+    """
 
     # Render inner content with context
     inner = render_template_string(
@@ -3667,6 +3667,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
