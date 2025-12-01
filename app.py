@@ -3082,10 +3082,10 @@ def masterpieces_view():
         event_mps=event_mps,
         history_mp_options=history_mp_options,
         tier_rows=tier_rows,
-        tier_rows=tier_rows,
         ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
         planner_tokens=planner_tokens,
         calc_resources=calc_resources,
+        calc_result=calc_result,
         calc_state_json=calc_state_json,
         planner_mp_options=planner_mp_options,
         planner_mp=planner_mp,
@@ -3101,6 +3101,7 @@ def masterpieces_view():
         top_n=top_n,
         top_n_options=TOP_N_OPTIONS,
     )
+
 
     # Wrap in base template
     html = render_template_string(
@@ -4250,6 +4251,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
