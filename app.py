@@ -2370,6 +2370,46 @@ def masterpieces_view():
           font-size:14px;
           font-weight:600;
         }
+        .mp-gap-card {
+          margin-top: 8px;
+          margin-bottom: 8px;
+          padding: 10px 12px;
+          border-radius: 10px;
+          background: linear-gradient(90deg, rgba(56,189,248,0.09), rgba(56,189,248,0.02));
+          border: 1px solid rgba(56,189,248,0.45);
+        }
+        .mp-gap-title {
+          font-size: 13px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #38bdf8;
+          margin-bottom: 4px;
+        }
+        .mp-gap-grid {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          align-items: flex-end;
+        }
+        .mp-gap-block {
+          min-width: 140px;
+        }
+        .mp-gap-label {
+          font-size: 12px;
+          color: #9ca3af;
+          margin-bottom: 2px;
+        }
+        .mp-gap-number {
+          font-size: 20px;
+          font-weight: 800;
+          line-height: 1.1;
+        }
+        .mp-gap-sub {
+          font-size: 12px;
+          color: #e5e7eb;
+        }
+
 
         .mp-row-me {
           background: linear-gradient(90deg, rgba(250,204,21,0.14), transparent);
@@ -2657,27 +2697,68 @@ def masterpieces_view():
               </form>
               
               {% if highlight_query and current_gap %}
-                <p class="hint" style="margin-bottom:6px;">
-                  You are at position <strong>{{ current_gap.position }}</strong>
-                  with <strong>{{ current_gap.points | int }}</strong> points.
-                  {% if current_gap.gap_up is not none %}
-                    To pass
-                    <strong>{{ current_gap.above_name }}</strong>
-                    (#{{ current_gap.above_pos }}),
-                    you need
-                    <strong>{{ current_gap.gap_up | int }}</strong> more points.
-                  {% else %}
-                    You are currently at the top position.
-                  {% endif %}
-                  {% if current_gap.gap_down is not none %}
-                    The player behind you,
-                    <strong>{{ current_gap.below_name }}</strong>
-                    (#{{ current_gap.below_pos }}),
-                    is
-                    <strong>{{ current_gap.gap_down | int }}</strong> points behind.
-                  {% endif %}
-                </p>
+                <div class="mp-gap-card">
+                  <div class="mp-gap-title">Your position on this masterpiece</div>
+                  <div class="mp-gap-grid">
+                    <div class="mp-gap-block">
+                      <div class="mp-gap-label">Your rank &amp; points</div>
+                      <div class="mp-gap-number">
+                        #{{ current_gap.position }} · {{ current_gap.points | int }}
+                      </div>
+                      <div class="mp-gap-sub">
+                        Highlight: <code>{{ highlight_query }}</code>
+                      </div>
+                    </div>
+
+                    {% if current_gap.gap_up is not none %}
+                      <div class="mp-gap-block">
+                        <div class="mp-gap-label">Points to pass above</div>
+                        <div class="mp-gap-number">
+                          {{ current_gap.gap_up | int }}
+                        </div>
+                        <div class="mp-gap-sub">
+                          To pass <strong>{{ current_gap.above_name }}</strong>
+                          (#{{ current_gap.above_pos }})
+                        </div>
+                      </div>
+                    {% else %}
+                      <div class="mp-gap-block">
+                        <div class="mp-gap-label">Points to pass above</div>
+                        <div class="mp-gap-number">
+                          —
+                        </div>
+                        <div class="mp-gap-sub">
+                          You&apos;re currently at the top 👑
+                        </div>
+                      </div>
+                    {% endif %}
+
+                    {% if current_gap.gap_down is not none %}
+                      <div class="mp-gap-block">
+                        <div class="mp-gap-label">Lead over player behind</div>
+                        <div class="mp-gap-number">
+                          {{ current_gap.gap_down | int }}
+                        </div>
+                        <div class="mp-gap-sub">
+                          Ahead of <strong>{{ current_gap.below_name }}</strong>
+                          (#{{ current_gap.below_pos }})
+                        </div>
+                      </div>
+                    {% else %}
+                      <div class="mp-gap-block">
+                        <div class="mp-gap-label">Lead over player behind</div>
+                        <div class="mp-gap-number">
+                          —
+                        </div>
+                        <div class="mp-gap-sub">
+                          No one is listed behind you
+                        </div>
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
               {% endif %}
+
 
               {% if current_mp_top50 %}
                 <div class="mp-table-wrap">
@@ -2765,27 +2846,68 @@ def masterpieces_view():
                 {% if selected_mp_top50 %}
 
                   {% if highlight_query and selected_gap %}
-                    <p class="hint" style="margin-bottom:6px;">
-                      You are at position <strong>{{ selected_gap.position }}</strong>
-                      with <strong>{{ selected_gap.points | int }}</strong> points.
-                      {% if selected_gap.gap_up is not none %}
-                        To pass
-                        <strong>{{ selected_gap.above_name }}</strong>
-                        (#{{ selected_gap.above_pos }}),
-                        you need
-                        <strong>{{ selected_gap.gap_up | int }}</strong> more points.
-                      {% else %}
-                        You are currently at the top position.
-                      {% endif %}
-                      {% if selected_gap.gap_down is not none %}
-                        The player behind you,
-                        <strong>{{ selected_gap.below_name }}</strong>
-                        (#{{ selected_gap.below_pos }}),
-                        is
-                        <strong>{{ selected_gap.gap_down | int }}</strong> points behind.
-                      {% endif %}
-                    </p>
+                    <div class="mp-gap-card">
+                      <div class="mp-gap-title">Your position on this masterpiece</div>
+                      <div class="mp-gap-grid">
+                        <div class="mp-gap-block">
+                          <div class="mp-gap-label">Your rank &amp; points</div>
+                          <div class="mp-gap-number">
+                            #{{ selected_gap.position }} · {{ selected_gap.points | int }}
+                          </div>
+                          <div class="mp-gap-sub">
+                            Highlight: <code>{{ highlight_query }}</code>
+                          </div>
+                        </div>
+
+                        {% if selected_gap.gap_up is not none %}
+                          <div class="mp-gap-block">
+                            <div class="mp-gap-label">Points to pass above</div>
+                            <div class="mp-gap-number">
+                              {{ selected_gap.gap_up | int }}
+                            </div>
+                            <div class="mp-gap-sub">
+                              To pass <strong>{{ selected_gap.above_name }}</strong>
+                              (#{{ selected_gap.above_pos }})
+                            </div>
+                          </div>
+                        {% else %}
+                          <div class="mp-gap-block">
+                            <div class="mp-gap-label">Points to pass above</div>
+                            <div class="mp-gap-number">
+                              —
+                            </div>
+                            <div class="mp-gap-sub">
+                              You&apos;re currently at the top 👑
+                            </div>
+                          </div>
+                        {% endif %}
+
+                        {% if selected_gap.gap_down is not none %}
+                          <div class="mp-gap-block">
+                            <div class="mp-gap-label">Lead over player behind</div>
+                            <div class="mp-gap-number">
+                              {{ selected_gap.gap_down | int }}
+                            </div>
+                            <div class="mp-gap-sub">
+                              Ahead of <strong>{{ selected_gap.below_name }}</strong>
+                              (#{{ selected_gap.below_pos }})
+                            </div>
+                          </div>
+                        {% else %}
+                          <div class="mp-gap-block">
+                            <div class="mp-gap-label">Lead over player behind</div>
+                            <div class="mp-gap-number">
+                              —
+                            </div>
+                            <div class="mp-gap-sub">
+                              No one is listed behind you
+                            </div>
+                          </div>
+                        {% endif %}
+                      </div>
+                    </div>
                   {% endif %}
+
 
                   <div class="mp-table-wrap">
                     <table>
@@ -4060,6 +4182,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
