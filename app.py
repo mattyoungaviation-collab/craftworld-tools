@@ -1751,6 +1751,20 @@ def masterpieces_view():
     general_mps = sorted(general_mps, key=_mp_id)
     event_mps = sorted(event_mps, key=_mp_id)
 
+    # Build a lookup by ID and compute the highest MP ID we know about.
+    mp_by_id: Dict[int, Dict[str, Any]] = {}
+    max_mp_id = 0
+    for mp in masterpieces_data:
+        try:
+            mid = int(mp.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if mid > 0:
+            mp_by_id[mid] = mp
+            if mid > max_mp_id:
+                max_mp_id = mid
+
+
     # ----- How many leaderboard entries to show? (Top 10 / 25 / 50 / 100) -----
     TOP_N_OPTIONS = [10, 25, 50, 100]
     DEFAULT_TOP_N = 50
@@ -1806,9 +1820,18 @@ def masterpieces_view():
     mp_id_for_calc: Optional[str] = None
 
     # ----- Planner target masterpiece (Donation Planner uses this) -----
-    # Only use general masterpieces here (MP1 .. latest general).
-    planner_mp_options: List[Dict[str, Any]] = general_mps
+    # Build planner options as MP1 .. MP[max_mp_id], even if we haven't pulled them yet.
+    planner_mp_options: List[Dict[str, Any]] = []
+    if max_mp_id > 0:
+        for mid in range(1, max_mp_id + 1):
+            mp = mp_by_id.get(mid, {"id": mid})
+            planner_mp_options.append(mp)
+    else:
+        # Fallback if we somehow have no IDs: just use whatever general list we have.
+        planner_mp_options = list(general_mps)
+
     planner_mp: Optional[Dict[str, Any]] = None
+
     planner_mp_id: str = (request.args.get("planner_mp_id") or request.form.get("planner_mp_id") or "").strip()
 
     if planner_mp_id:
@@ -1828,36 +1851,47 @@ def masterpieces_view():
 
     # ----- Masterpiece selector for "History & Events" leaderboard browser -----
 
-    # We still build a combined list to drive the selected_mp resolution,
-    # but the UI dropdown will show separate optgroups for general vs event.
-    mp_selector_options: List[Dict[str, Any]] = []
-    mp_selector_options.extend(general_mps)
-    mp_selector_options.extend(event_mps)
+    # Build a simple list of MP1 .. MP[max_mp_id] for the dropdown, even if
+    # we don't yet have them in `masterpieces_data`.
+    history_mp_options: List[Dict[str, Any]] = []
+    if max_mp_id > 0:
+        for mid in range(1, max_mp_id + 1):
+            mp = mp_by_id.get(mid, {"id": mid})
+            history_mp_options.append(mp)
+    else:
+        # Fallback: just whatever masterpieces we have.
+        history_mp_options = list(masterpieces_data)
 
     # Which masterpiece should the browser leaderboard show?
     selected_mp_id = request.args.get("mp_view_id")
-    if not selected_mp_id and current_mp:
-        selected_mp_id = str(current_mp.get("id") or "")
+    if not selected_mp_id:
+        if current_mp:
+            selected_mp_id = str(current_mp.get("id") or "")
+        elif max_mp_id > 0:
+            selected_mp_id = str(max_mp_id)
 
     selected_mp: Optional[Dict[str, Any]] = None
     selected_mp_top50: List[Dict[str, Any]] = []
 
     if selected_mp_id:
-        for mp in mp_selector_options:
-            if str(mp.get("id")) == str(selected_mp_id):
-                selected_mp = mp
-                lb = mp.get("leaderboard") or []
-                try:
-                    selected_mp_top50 = list(lb[:top_n])
-                except Exception:
-                    selected_mp_top50 = []
-                break
-
+        try:
+            # Always fetch fresh details so it works even for MPs we don't have
+            # in the initial `masterpieces` list.
+            selected_mp = fetch_masterpiece_details(selected_mp_id)
+            lb = selected_mp.get("leaderboard") or []
+            try:
+                selected_mp_top50 = list(lb[:top_n])
+            except Exception:
+                selected_mp_top50 = []
+        except Exception:
+            selected_mp = None
+            selected_mp_top50 = []
 
     if not selected_mp and current_mp:
         # Fallback: show current_mp leaderboard if selector fails
         selected_mp = current_mp
         selected_mp_top50 = current_mp_top50
+
 
 
     # ---------- Donation Planner state (list of {token, amount}) ----------
@@ -2464,32 +2498,22 @@ def masterpieces_view():
               Inspect the top <strong>{{ top_n }}</strong> positions for any general or event masterpiece.
             </p>
 
-            {% if general_mps or event_mps %}
+            {% if history_mp_options %}
               <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
                 <label for="mp_view_id">Choose a masterpiece</label>
                 <select id="mp_view_id" name="mp_view_id" style="max-width:320px;">
-                  {% if general_mps %}
-                    <optgroup label="General masterpieces">
-                      {% for mp in general_mps %}
-                        <option value="{{ mp.id }}"
-                          {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
-                          MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
-                          {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
-                        </option>
-                      {% endfor %}
-                    </optgroup>
-                  {% endif %}
-                  {% if event_mps %}
-                    <optgroup label="Event masterpieces">
-                      {% for mp in event_mps %}
-                        <option value="{{ mp.id }}"
-                          {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
-                          MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
-                        </option>
-                      {% endfor %}
-                    </optgroup>
-                  {% endif %}
+                  {% for mp in history_mp_options %}
+                    <option value="{{ mp.id }}"
+                      {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
+                      MP {{ mp.id }}
+                      {% if mp.name or mp.addressableLabel or mp.type %}
+                        — {{ mp.name or mp.addressableLabel or mp.type }}
+                      {% endif %}
+                      {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
+                    </option>
+                  {% endfor %}
                 </select>
+
 
                 <label for="history_top_n" style="margin-left:8px;">Show:</label>
                 <select id="history_top_n" name="top_n">
@@ -2607,6 +2631,7 @@ def masterpieces_view():
         masterpieces=masterpieces_data,
         general_mps=general_mps,
         event_mps=event_mps,
+        history_mp_options=history_mp_options,
         tier_rows=tier_rows,
         ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
         calc_resources=calc_resources,
@@ -3774,6 +3799,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
