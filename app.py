@@ -365,11 +365,6 @@ def compute_leaderboard_gap_for_highlight(
     }
 
 
-
-def _default_boost_levels() -> dict[str, dict[str, int]]:
-    ...
-
-
 def _default_boost_levels() -> dict[str, dict[str, int]]:
     """
     Default per-token mastery/workshop levels (0–10).
@@ -3285,43 +3280,42 @@ def masterpieces_view():
 </script>
     """
 
-    # Render inner content with context
-    inner = render_template_string(
-         content,
-         error=error,
-         masterpieces_data=masterpieces_data,
-         general_mps=general_mps,
-         event_mps=event_mps,
-         current_mp=current_mp,
-         current_mp_top50=current_mp_top50,
-        current_gap=current_gap,
-         selected_mp=selected_mp,
-         selected_mp_top50=selected_mp_top50,
-         selected_gap=selected_gap,
-         planner_mp=planner_mp,
-         planner_mp_options=planner_mp_options,
-         planner_tokens=planner_tokens,
-         calc_resources=calc_resources,
-         calc_result=calc_result,
-         calc_state_json=calc_state_json,
-         tier_rows=tier_rows,
-         reward_tier_rows=reward_tier_rows,
-         leaderboard_reward_rows=leaderboard_reward_rows,
-         top_n=top_n,
-         TOP_N_OPTIONS=TOP_N_OPTIONS,
-         history_mp_options=history_mp_options,
-         highlight_query=highlight_query,
-     ),
+# Render inner content with context
+inner = render_template_string(
+    content,
+    error=error,
+    masterpieces_data=masterpieces_data,
+    general_mps=general_mps,
+    event_mps=event_mps,
+    current_mp=current_mp,
+    current_mp_top50=current_mp_top50,
+    current_gap=current_gap,
+    selected_mp=selected_mp,
+    selected_mp_top50=selected_mp_top50,
+    selected_gap=selected_gap,
+    planner_mp=planner_mp,
+    planner_mp_options=planner_mp_options,
+    planner_tokens=planner_tokens,
+    calc_resources=calc_resources,
+    calc_result=calc_result,
+    calc_state_json=calc_state_json,
+    tier_rows=tier_rows,
+    reward_tier_rows=reward_tier_rows,
+    leaderboard_reward_rows=leaderboard_reward_rows,
+    top_n=top_n,
+    TOP_N_OPTIONS=TOP_N_OPTIONS,
+    history_mp_options=history_mp_options,
+    highlight_query=highlight_query,
+)
 
-
-    # Wrap in base template
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=inner,
-        active_page="masterpieces",
-        has_uid=has_uid_flag(),
-    )
-    return html
+# Wrap in base template
+html = render_template_string(
+    BASE_TEMPLATE,
+    content=inner,
+    active_page="masterpieces",
+    has_uid=has_uid_flag(),
+)
+return html
 
 
 
@@ -4462,6 +4456,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
