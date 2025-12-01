@@ -2447,6 +2447,7 @@ def masterpieces_view():
             {% endif %}
           </div>
         </div>
+"""
 
 <script>
   (function() {
@@ -3667,6 +3668,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
