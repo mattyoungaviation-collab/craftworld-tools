@@ -1881,6 +1881,10 @@ def masterpieces_view():
 
     general_mps = sorted(general_mps, key=_mp_id)
     event_mps = sorted(event_mps, key=_mp_id)
+    # Identify the "active" general and event masterpieces (highest ID)
+    current_general_mp: Optional[Dict[str, Any]] = general_mps[-1] if general_mps else None
+    current_event_mp: Optional[Dict[str, Any]] = event_mps[-1] if event_mps else None
+
 
     # Build a lookup by ID and compute the highest MP ID we know about.
     mp_by_id: Dict[int, Dict[str, Any]] = {}
@@ -1919,6 +1923,112 @@ def masterpieces_view():
             mp_by_id[mid] = dict(meta)
         if mid > max_mp_id:
             max_mp_id = mid
+
+        def _build_reward_snapshot_for_mp(
+        mp: Optional[Dict[str, Any]],
+        rows: List[Dict[str, Any]],
+        highlight_query: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Build a 'your current reward' snapshot for a given masterpiece:
+          - Uses leaderboard rows + highlight_query to find your position & points
+          - Determines your completion tier (MP_TIER_THRESHOLDS)
+          - Looks up the leaderboard reward bracket you fall into
+        Returns a dict or None if we can't find you.
+        """
+        highlight_query = (highlight_query or "").strip()
+        if not (mp and rows and highlight_query):
+            return None
+
+        gap = compute_leaderboard_gap_for_highlight(rows, highlight_query)
+        if not gap or not gap.get("position"):
+            return None
+
+        # Your current MP points and rank on this MP
+        try:
+            points = float(gap.get("points") or 0.0)
+        except Exception:
+            points = 0.0
+        try:
+            pos = int(gap.get("position") or 0)
+        except Exception:
+            pos = 0
+
+        # Determine tier from MP_TIER_THRESHOLDS
+        tier_idx = 0
+        tier_required = None
+        for i, thr in enumerate(MP_TIER_THRESHOLDS, start=1):
+            if points >= thr:
+                tier_idx = i
+                tier_required = thr
+            else:
+                break
+
+        # Pull leaderboardRewards for this MP (may require a detail fetch)
+        lb_text = None
+        try:
+            mid_str = str(mp.get("id") or "")
+            detailed = fetch_masterpiece_details(mid_str)
+            raw_lb_rewards = (
+                detailed.get("leaderboardRewards")
+                or detailed.get("leaderboardRewardStages")
+                or []
+            )
+
+            if isinstance(raw_lb_rewards, dict):
+                lb_iter = list(raw_lb_rewards.values())
+            elif isinstance(raw_lb_rewards, list):
+                lb_iter = raw_lb_rewards
+            else:
+                lb_iter = []
+
+            for blk in lb_iter:
+                if not isinstance(blk, dict):
+                    continue
+                from_rank = blk.get("from") or blk.get("fromRank")
+                to_rank = blk.get("to") or blk.get("toRank") or from_rank
+                if not from_rank:
+                    continue
+                try:
+                    fr = int(from_rank)
+                    tr = int(to_rank or fr)
+                except Exception:
+                    continue
+                if fr <= pos <= tr:
+                    rewards_list = blk.get("rewards") or blk.get("items") or []
+                    parts: list[str] = []
+                    if isinstance(rewards_list, list):
+                        for rw in rewards_list:
+                            if not isinstance(rw, dict):
+                                continue
+                            amount = rw.get("amount") or rw.get("quantity")
+                            token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                            rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+
+                            bits: list[str] = []
+                            if amount not in (None, "", 0):
+                                bits.append(str(amount))
+                            if token:
+                                bits.append(str(token))
+                            elif rtype:
+                                bits.append(str(rtype))
+                            label = " ".join(bits).strip()
+                            if label:
+                                parts.append(label)
+                    lb_text = ", ".join(parts) if parts else "See in-game rewards"
+                    break
+        except Exception:
+            lb_text = None
+
+        return {
+            "mp": mp,
+            "position": pos,
+            "points": points,
+            "tier": tier_idx,
+            "tier_required": tier_required,
+            "leaderboard_rewards": lb_text,
+        }
+
 
 
 
@@ -1976,6 +2086,37 @@ def masterpieces_view():
             current_mp_top50 = []
     else:
         current_mp_top50 = []
+
+    # ---------- Personal reward snapshots for active general & event MPs ----------
+    general_snapshot: Optional[Dict[str, Any]] = None
+    event_snapshot: Optional[Dict[str, Any]] = None
+
+    # Use the same highlight_query the user entered at the top of the page.
+    if highlight_query:
+        # Active general MP snapshot
+        if current_general_mp:
+            try:
+                gen_rows = list((current_general_mp.get("leaderboard") or [])[:top_n])
+            except Exception:
+                gen_rows = []
+            general_snapshot = _build_reward_snapshot_for_mp(
+                current_general_mp,
+                gen_rows,
+                highlight_query,
+            )
+
+        # Active event MP snapshot
+        if current_event_mp:
+            try:
+                event_rows = list((current_event_mp.get("leaderboard") or [])[:top_n])
+            except Exception:
+                event_rows = []
+            event_snapshot = _build_reward_snapshot_for_mp(
+                current_event_mp,
+                event_rows,
+                highlight_query,
+            )
+
 
     # Gap info for highlighted player on the current leaderboard
     current_gap: Optional[Dict[str, Any]] = compute_leaderboard_gap_for_highlight(
@@ -2698,6 +2839,76 @@ def masterpieces_view():
         </div>
       {% endif %}
 
+        {% if highlight_query and (general_snapshot or event_snapshot) %}
+        <div class="section" style="margin-top:10px;">
+          <h2 style="margin-top:0;">🎁 Your current MP rewards (if it ended now)</h2>
+          <p class="subtle">
+            Based on your <strong>current leaderboard position</strong> for the active General &amp; Event Masterpieces.
+          </p>
+
+          <div class="mp-summary-grid">
+            {% if general_snapshot %}
+              <div class="mp-summary-tile">
+                <div class="mp-summary-title">Active General Masterpiece</div>
+                <div class="mp-summary-main">
+                  MP {{ general_snapshot.mp.id }} —
+                  {{ general_snapshot.mp.name or general_snapshot.mp.addressableLabel or general_snapshot.mp.type }}
+                </div>
+                <div class="mp-summary-sub">
+                  Rank <strong>#{{ general_snapshot.position }}</strong> ·
+                  {{ "{:,.0f}".format(general_snapshot.points or 0) }} points<br>
+                  {% if general_snapshot.tier %}
+                    Completion tier: <strong>Tier {{ general_snapshot.tier }}</strong>
+                    {% if general_snapshot.tier_required %}
+                      (requires ≥ {{ "{:,.0f}".format(general_snapshot.tier_required or 0) }} pts)
+                    {% endif %}
+                    <br>
+                  {% else %}
+                    Completion tier: <strong>Below Tier 1</strong><br>
+                  {% endif %}
+
+                  {% if general_snapshot.leaderboard_rewards %}
+                    Leaderboard rewards: {{ general_snapshot.leaderboard_rewards }}
+                  {% else %}
+                    Leaderboard rewards: <span class="subtle">See in-game details</span>
+                  {% endif %}
+                </div>
+              </div>
+            {% endif %}
+
+            {% if event_snapshot %}
+              <div class="mp-summary-tile">
+                <div class="mp-summary-title">Active Event Masterpiece</div>
+                <div class="mp-summary-main">
+                  MP {{ event_snapshot.mp.id }} —
+                  {{ event_snapshot.mp.name or event_snapshot.mp.addressableLabel or event_snapshot.mp.type }}
+                </div>
+                <div class="mp-summary-sub">
+                  Rank <strong>#{{ event_snapshot.position }}</strong> ·
+                  {{ "{:,.0f}".format(event_snapshot.points or 0) }} points<br>
+                  {% if event_snapshot.tier %}
+                    Completion tier: <strong>Tier {{ event_snapshot.tier }}</strong>
+                    {% if event_snapshot.tier_required %}
+                      (requires ≥ {{ "{:,.0f}".format(event_snapshot.tier_required or 0) }} pts)
+                    {% endif %}
+                    <br>
+                  {% else %}
+                    Completion tier: <strong>Below Tier 1</strong><br>
+                  {% endif %}
+
+                  {% if event_snapshot.leaderboard_rewards %}
+                    Leaderboard rewards: {{ event_snapshot.leaderboard_rewards }}
+                  {% else %}
+                    Leaderboard rewards: <span class="subtle">See in-game details</span>
+                  {% endif %}
+                </div>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+
       <div class="mp-subnav">
         <button type="button" class="mp-tab active" data-mp-tab="planner">
           <span class="icon">🧮</span> Donation Planner
@@ -3291,6 +3502,9 @@ def masterpieces_view():
         masterpieces_data=masterpieces_data,
         general_mps=general_mps,
         event_mps=event_mps,
+        general_snapshot=general_snapshot,
+        event_snapshot=event_snapshot,
+
 
         # current MP leaderboard
         current_mp=current_mp,
@@ -4472,6 +4686,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
