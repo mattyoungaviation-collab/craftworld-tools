@@ -1751,6 +1751,29 @@ def masterpieces_view():
     general_mps = sorted(general_mps, key=_mp_id)
     event_mps = sorted(event_mps, key=_mp_id)
 
+    # ----- How many leaderboard entries to show? (Top 10 / 25 / 50 / 100) -----
+    TOP_N_OPTIONS = [10, 25, 50, 100]
+    DEFAULT_TOP_N = 50
+
+    # Try to read from query (GET/POST), then fall back to session
+    top_n = session.get("mp_top_n", DEFAULT_TOP_N)
+    top_n_str = (request.args.get("top_n") or request.form.get("top_n") or "").strip()
+
+    if top_n_str:
+        try:
+            val = int(top_n_str)
+            if val in TOP_N_OPTIONS:
+                top_n = val
+        except ValueError:
+            pass
+
+    if top_n not in TOP_N_OPTIONS:
+        top_n = DEFAULT_TOP_N
+
+    # Persist per logged-in browser session
+    session["mp_top_n"] = top_n
+
+
     # Pick the "current" masterpiece: latest general if available, otherwise latest event
     mp_id_for_calc: Optional[str] = None
     current_mp: Optional[Dict[str, Any]] = None
@@ -1765,11 +1788,12 @@ def masterpieces_view():
         mp_id_for_calc = str(current_mp.get("id") or "")
         lb = current_mp.get("leaderboard") or []
         try:
-            current_mp_top50 = list(lb[:50])
+            current_mp_top50 = list(lb[:top_n])
         except Exception:
             current_mp_top50 = []
     else:
         current_mp_top50 = []
+
 
     # ----- Masterpiece selector for "History & Events" leaderboard browser -----
 
@@ -1791,7 +1815,13 @@ def masterpieces_view():
         for mp in mp_selector_options:
             if str(mp.get("id")) == str(selected_mp_id):
                 selected_mp = mp
+                lb = mp.get("leaderboard") or []
+                try:
+                    selected_mp_top50 = list(lb[:top_n])
+                except Exception:
+                    selected_mp_top50 = []
                 break
+
 
     if selected_mp:
         try:
@@ -2325,8 +2355,25 @@ def masterpieces_view():
           <div class="section" style="margin-top:4px;">
             <h2>History &amp; event browser</h2>
             <p class="subtle">
-              Inspect the top <strong>50</strong> positions for any general or event masterpiece.
-            </p>
+  Inspect the top <strong>{{ top_n }}</strong> positions for any general or event masterpiece.
+</p>
+
+<form method="get" class="mp-selector-form" style="margin-bottom:12px;">
+  <label for="mp_view_id">Choose a masterpiece</label>
+  <select id="mp_view_id" name="mp_view_id">
+    <!-- existing optgroup / options here -->
+  </select>
+
+  <label for="history_top_n" style="margin-left:8px;">Show:</label>
+  <select id="history_top_n" name="top_n">
+    {% for n in top_n_options %}
+      <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
+    {% endfor %}
+  </select>
+
+  <input type="hidden" name="tab" value="history">
+  <button type="submit">View</button>
+</form>
 
             {% if general_mps or event_mps %}
               <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
@@ -2401,42 +2448,54 @@ def masterpieces_view():
       </div>
     </div>
 
-    <script>
-      (function() {
-        const tabs = document.querySelectorAll('.mp-tab');
-        const sections = document.querySelectorAll('.mp-section');
+<script>
+  (function() {
+    const tabs = document.querySelectorAll('.mp-tab');
+    const sections = document.querySelectorAll('.mp-section');
 
-        function activate(name) {
-          tabs.forEach(btn => {
-            const t = btn.getAttribute('data-mp-tab');
-            if (t === name) {
-              btn.classList.add('active');
-            } else {
-              btn.classList.remove('active');
-            }
-          });
-          sections.forEach(sec => {
-            const s = sec.getAttribute('data-mp-section');
-            if (s === name) {
-              sec.style.display = 'block';
-            } else {
-              sec.style.display = 'none';
-            }
-          });
+    function activate(name) {
+      tabs.forEach(btn => {
+        const t = btn.getAttribute('data-mp-tab');
+        btn.classList.toggle('active', t === name);
+      });
+      sections.forEach(sec => {
+        const s = sec.getAttribute('data-mp-section');
+        if (s === name) {
+          sec.style.display = 'block';
+        } else {
+          sec.style.display = 'none';
         }
+      });
+    }
 
-        tabs.forEach(btn => {
-          btn.addEventListener('click', function() {
-            const t = this.getAttribute('data-mp-tab') || 'planner';
-            activate(t);
-          });
-        });
+    // Read "tab" from query string (so reloads keep the same sub-tab)
+    const params = new URLSearchParams(window.location.search);
+    let currentTab = params.get('tab') || 'planner';
+    activate(currentTab);
 
-        // Default landing tab
-        activate('planner');
-      })();
-    </script>
-    """
+    // When you click a tab, update URL (no reload) and state
+    tabs.forEach(btn => {
+      btn.addEventListener('click', function() {
+        const t = this.getAttribute('data-mp-tab') || 'planner';
+        currentTab = t;
+        activate(t);
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', t);
+        window.history.replaceState({}, '', url);
+      });
+    });
+
+    // Auto-refresh the page every 30s when on the "current" tab
+    const REFRESH_MS = 30000;
+    setInterval(() => {
+      if (currentTab !== 'current') return;
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', 'current');
+      window.location.href = url.toString();
+    }, REFRESH_MS);
+  })();
+</script>
+
 
     # Render inner content with context
     inner = render_template_string(
@@ -2456,6 +2515,9 @@ def masterpieces_view():
         selected_mp=selected_mp,
         selected_mp_top50=selected_mp_top50,
         selected_mp_id=selected_mp_id,
+        top_n=top_n,
+        top_n_options=TOP_N_OPTIONS,
+
     )
 
     # Wrap in base template
@@ -3618,6 +3680,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
