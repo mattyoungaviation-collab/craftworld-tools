@@ -248,7 +248,8 @@ MP_TIER_THRESHOLDS = [
 ]
 def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[str, float]]:
     """
-    Pre-compute masterpiece points and XP per 1 unit for each symbol in `symbols`.
+    Pre-compute masterpiece points, XP, and battery (required power) per 1 unit
+    for each symbol in `symbols`.
 
     This is a thin wrapper around predict_reward(...) that calls it once per
     unique token with amount = 1.0.
@@ -257,26 +258,31 @@ def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[st
       {
         "points": { "SEAWATER": 4_200_000.0, ... },
         "xp":     { "SEAWATER":   350_000.0, ... },
+        "power":  { "SEAWATER":       1_200.0, ... },
       }
     """
     unique_syms = sorted({(s or "").upper() for s in symbols if s})
     points: Dict[str, float] = {}
     xp: Dict[str, float] = {}
+    power: Dict[str, float] = {}
 
     if not mp_id or not unique_syms:
-        return {"points": points, "xp": xp}
+        return {"points": points, "xp": xp, "power": power}
 
     for sym in unique_syms:
         try:
             pr = predict_reward(mp_id, [{"symbol": sym, "amount": 1.0}]) or {}
             points[sym] = float(pr.get("masterpiecePoints") or 0.0)
             xp[sym] = float(pr.get("experiencePoints") or 0.0)
+            power[sym] = float(pr.get("requiredPower") or 0.0)
         except Exception:
-            # If anything fails, just treat this token as 0 points / 0 XP per unit
+            # If anything fails, just treat this token as 0 points / 0 XP / 0 power per unit
             points[sym] = 0.0
             xp[sym] = 0.0
+            power[sym] = 0.0
 
-    return {"points": points, "xp": xp}
+    return {"points": points, "xp": xp, "power": power}
+
 
 
 
@@ -2029,6 +2035,44 @@ def masterpieces_view():
             cache_masterpiece_metadata(planner_mp)
         except Exception:
             pass
+    # Figure out which resources are valid for the selected planner masterpiece.
+    # Default: show all factory tokens; if we can, narrow to only tokens this MP accepts.
+    planner_tokens: List[str] = list(ALL_FACTORY_TOKENS)
+
+    mp_id_for_resources: Optional[str] = None
+    if planner_mp:
+        try:
+            mp_id_for_resources = str(planner_mp.get("id") or "") or None
+        except Exception:
+            mp_id_for_resources = None
+    if not mp_id_for_resources and planner_mp_id:
+        mp_id_for_resources = str(planner_mp_id)
+
+    if mp_id_for_resources:
+        try:
+            mp_detail_for_planner = fetch_masterpiece_details(mp_id_for_resources)
+            resources = mp_detail_for_planner.get("resources") or []
+            symbols: List[str] = []
+            for r in resources:
+                sym = (r.get("symbol") or "").upper()
+                if sym and sym in ALL_FACTORY_TOKENS:
+                    symbols.append(sym)
+
+            if symbols:
+                # Sort using your standard factory display order when possible.
+                def _sort_key(sym: str) -> int:
+                    try:
+                        return FACTORY_DISPLAY_INDEX.get(sym, 9999)
+                    except Exception:
+                        return ALL_FACTORY_TOKENS.index(sym) if sym in ALL_FACTORY_TOKENS else 9999
+
+                planner_tokens = sorted({s for s in symbols}, key=_sort_key)
+        except Exception:
+            # If anything fails, just fall back to the full token list.
+            planner_tokens = list(ALL_FACTORY_TOKENS)
+    else:
+        planner_tokens = list(ALL_FACTORY_TOKENS)
+
 
 
 
@@ -2158,14 +2202,16 @@ def masterpieces_view():
                 price = prices.get(row["token"], 0.0) or 0.0
                 total_cost += float(row["amount"]) * float(price)
 
-            # 2) Total points + XP via predict_reward
+            # 2) Total points + XP + battery (requiredPower) via predict_reward
             total_points = 0.0
             total_xp = 0.0
+            total_power = 0.0
             per_unit_points: Dict[str, float] = {}
             per_unit_xp: Dict[str, float] = {}
+            per_unit_power: Dict[str, float] = {}
 
             if mp_id_for_calc:
-                # First: total points / XP for the whole bundle
+                # First: total points / XP / power for the whole bundle
                 try:
                     contrib = [
                         {"symbol": r["token"], "amount": float(r["amount"])}
@@ -2174,9 +2220,11 @@ def masterpieces_view():
                     reward = predict_reward(mp_id_for_calc, contrib) or {}
                     total_points = float(reward.get("masterpiecePoints") or 0)
                     total_xp = float(reward.get("experiencePoints") or 0)
+                    total_power = float(reward.get("requiredPower") or 0)
                 except Exception:
                     total_points = 0.0
                     total_xp = 0.0
+                    total_power = 0.0
 
                 # Then: per-unit cache so each row can show its own contribution
                 try:
@@ -2186,11 +2234,13 @@ def masterpieces_view():
                     )
                     per_unit_points = per_unit.get("points", {}) or {}
                     per_unit_xp = per_unit.get("xp", {}) or {}
+                    per_unit_power = per_unit.get("power", {}) or {}
                 except Exception:
                     per_unit_points = {}
                     per_unit_xp = {}
+                    per_unit_power = {}
 
-            # Per-row points / XP (safe even if we have no per-unit data)
+            # Per-row points / XP / battery (safe even if we have no per-unit data)
             for row in calc_resources:
                 tok = (row.get("token") or "").upper()
                 try:
@@ -2200,11 +2250,15 @@ def masterpieces_view():
 
                 p_unit = per_unit_points.get(tok, 0.0)
                 x_unit = per_unit_xp.get(tok, 0.0)
+                pw_unit = per_unit_power.get(tok, 0.0)
                 row_points = p_unit * amt
                 row_xp = x_unit * amt
+                row_power = pw_unit * amt
 
                 row["points_str"] = f"{row_points:,.0f}" if row_points else "—"
                 row["xp_str"] = f"{row_xp:,.0f}" if row_xp else "—"
+                row["battery_str"] = f"{row_power:,.0f}" if row_power else "—"
+
 
             # 3) Map to tiers
             tier = 0
@@ -2231,6 +2285,8 @@ def masterpieces_view():
                 "total_points_str": f"{total_points:,.0f}",
                 "total_xp": total_xp,
                 "total_xp_str": f"{total_xp:,.0f}",
+                "total_power": total_power,
+                "total_power_str": f"{total_power:,.0f}",
                 "total_cost": total_cost,
                 "total_cost_str": f"{total_cost:,.2f}",
                 "tier": tier,
@@ -2579,13 +2635,14 @@ def masterpieces_view():
 
                 <div class="two-col" style="gap:10px;">
                   <div>
-                    <label for="calc_token">Resource</label>
-                    <select id="calc_token" name="calc_token">
-                      <option value="">-- Choose resource --</option>
-                      {% for tok in ALL_FACTORY_TOKENS %}
-                        <option value="{{ tok }}">{{ tok }}</option>
-                      {% endfor %}
-                    </select>
+                <label for="calc_token">Resource</label>
+                <select id="calc_token" name="calc_token">
+                  <option value="">-- Choose resource --</option>
+                  {% for tok in planner_tokens %}
+                    <option value="{{ tok }}">{{ tok }}</option>
+                  {% endfor %}
+                </select>
+
                   </div>
                   <div>
                     <label for="calc_amount">Quantity</label>
@@ -2607,15 +2664,19 @@ def masterpieces_view():
                         <th style="text-align:right;">Quantity</th>
                         <th style="text-align:right;">Points</th>
                         <th style="text-align:right;">XP</th>
+                        <th style="text-align:right;">Battery</th>
+
                       </tr>
-                      {% for row in calc_resources %}
-                        <tr>
-                          <td>{{ row.token }}</td>
-                          <td style="text-align:right;">{{ row.amount }}</td>
-                          <td style="text-align:right;">{{ row.points_str or "—" }}</td>
-                          <td style="text-align:right;">{{ row.xp_str or "—" }}</td>
-                        </tr>
-                      {% endfor %}
+                    {% for row in calc_resources %}
+                      <tr>
+                        <td>{{ row.token }}</td>
+                        <td style="text-align:right;">{{ row.amount }}</td>
+                        <td style="text-align:right;">{{ row.points_str or "—" }}</td>
+                        <td style="text-align:right;">{{ row.xp_str or "—" }}</td>
+                        <td style="text-align:right;">{{ row.battery_str or "—" }}</td>
+                      </tr>
+                    {% endfor %}
+
                     </table>
                   </div>
                 {% else %}
@@ -2634,11 +2695,11 @@ def masterpieces_view():
                       <div class="mp-stat-value">{{ calc_result.total_xp_str }}</div>
                     </div>
                     <div>
-                      <div class="mp-stat-label">Total cost</div>
-                      <div class="mp-stat-value">COIN {{ calc_result.total_cost_str }}</div>
-                    </div>
-                    <div>
-                      <div class="mp-stat-label">Tier reached</div>
+                        <div class="mp-stat-label">Total battery</div>
+                        <div class="mp-stat-value">{{ calc_result.total_power_str }}</div>
+                     </div>
+                     <div>
+                        <div class="mp-stat-label">Tier reached</div>
                       <div class="mp-stat-value">
                         {% if calc_result.tier > 0 %}
                           Tier {{ calc_result.tier }}
@@ -3021,9 +3082,10 @@ def masterpieces_view():
         event_mps=event_mps,
         history_mp_options=history_mp_options,
         tier_rows=tier_rows,
+        tier_rows=tier_rows,
         ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
+        planner_tokens=planner_tokens,
         calc_resources=calc_resources,
-        calc_result=calc_result,
         calc_state_json=calc_state_json,
         planner_mp_options=planner_mp_options,
         planner_mp=planner_mp,
@@ -4188,6 +4250,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
