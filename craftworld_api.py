@@ -188,6 +188,53 @@ def fetch_craftworld(uid: str) -> Dict[str, Any]:
     data = call_graphql(query, {"uid": uid})
     return data["fetchCraftWorld"]
 
+def fetch_masterpieces() -> list[dict]:
+    """
+    Fetch a lightweight list of all masterpieces.
+
+    Used by the /masterpieces view to:
+    - separate general vs event masterpieces
+    - know requiredPoints / collectedPoints
+    - know addressableLabel, type, eventId, etc.
+    """
+    query = """
+    query Masterpieces {
+      masterpieces {
+        id
+        name
+        type
+        eventId
+        collectedPoints
+        requiredPoints
+        addressableLabel
+        startedAt
+      }
+    }
+    """
+
+    result = call_graphql(query)
+    data = result.get("data") or {}
+    masterpieces = data.get("masterpieces") or []
+
+    all_masterpieces: list[dict] = []
+
+    for mp in masterpieces:
+        all_masterpieces.append(
+            {
+                "id": mp.get("id"),
+                "name": mp.get("name"),
+                "type": mp.get("type"),
+                "eventId": mp.get("eventId"),
+                "collectedPoints": mp.get("collectedPoints"),
+                "requiredPoints": mp.get("requiredPoints"),
+                "addressableLabel": mp.get("addressableLabel"),
+                "startedAt": mp.get("startedAt"),
+            }
+        )
+
+    return all_masterpieces
+
+
 
 
 def fetch_masterpiece_details(masterpiece_id: int) -> Dict[str, Any]:
@@ -390,6 +437,7 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
 
