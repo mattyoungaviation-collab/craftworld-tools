@@ -1717,12 +1717,14 @@ def masterpieces_view():
     """
     Show current masterpieces AND a Masterpiece Level Calculator.
 
-    - The calculator uses your selected resources to:
-        * call predict_reward(...) once to get total points + XP
-        * use live prices to estimate total COIN cost
-        * map total points to tier + progress
-    - The "spying" UID does NOT matter for the calculator; it uses the
-      first active masterpiece just to satisfy the Craft World API.
+    - Calculator:
+        * Uses the latest general (non-event) masterpiece as the base MP
+        * predict_reward(...) for total points + XP
+        * Live prices for COIN cost
+        * Maps points → tier + progress
+    - Leaderboards:
+        * Always shows top 50 for the *current* masterpiece
+        * Has a browser dropdown to view any MP (general or event) by name
     """
     error: Optional[str] = None
     masterpieces_data: List[Dict[str, Any]] = []
@@ -1734,27 +1736,35 @@ def masterpieces_view():
         error = f"Error fetching masterpieces: {e}"
         masterpieces_data = []
 
-    # Split masterpieces into general vs event, and pick the current one
+    # Split masterpieces into general vs event
     general_mps: List[Dict[str, Any]] = []
     event_mps: List[Dict[str, Any]] = []
 
     for mp in masterpieces_data:
-        # mp should be a dict from fetch_masterpieces()
         event_id = mp.get("eventId")
         if event_id:
             event_mps.append(mp)
         else:
             general_mps.append(mp)
 
+    # Sort by ID so "latest" really is highest ID
+    def _mp_id(m: Dict[str, Any]) -> int:
+        try:
+            return int(m.get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    general_mps = sorted(general_mps, key=_mp_id)
+    event_mps = sorted(event_mps, key=_mp_id)
+
+    # Pick current masterpiece: latest general MP if available, otherwise latest event MP
     mp_id_for_calc: Optional[str] = None
     current_mp: Optional[Dict[str, Any]] = None
     current_mp_top50: List[Dict[str, Any]] = []
 
     if general_mps:
-        # Current = latest general masterpiece (non-event)
         current_mp = general_mps[-1]
     elif event_mps:
-        # Fallback: if there are only event MPs, use the newest event one
         current_mp = event_mps[-1]
 
     if current_mp:
@@ -1766,22 +1776,15 @@ def masterpieces_view():
             current_mp_top50 = []
     else:
         current_mp_top50 = []
+
     # ---- Masterpiece selector for leaderboard browsing ----
 
-    # Build selector options from *all* masterpieces we have from Craft World
+    # Selector options: all general first, then all event MPs, sorted by ID
     mp_selector_options: List[Dict[str, Any]] = []
-    if masterpieces_data:
-        try:
-            mp_selector_options = sorted(
-                masterpieces_data,
-                key=lambda m: int(m.get("id") or 0),
-            )
-        except Exception:
-            mp_selector_options = masterpieces_data
+    mp_selector_options.extend(general_mps)
+    mp_selector_options.extend(event_mps)
 
-    # Which masterpiece should the leaderboard show?
-    #  - If a ?mp_view_id=... is in the URL, use that
-    #  - Otherwise default to the current masterpiece, if any
+    # Which masterpiece should the browser leaderboard show?
     selected_mp_id = request.args.get("mp_view_id")
     if not selected_mp_id and current_mp:
         selected_mp_id = str(current_mp.get("id") or "")
@@ -1801,11 +1804,9 @@ def masterpieces_view():
         except Exception:
             selected_mp_top50 = []
     elif current_mp:
-        # Fallback: if something went weird, fall back to current_mp's top 50
+        # Fallback: if something went weird, show current_mp leaderboard
         selected_mp = current_mp
         selected_mp_top50 = current_mp_top50
-
-
 
     # ---------- Calculator state (list of {token, amount}) ----------
     calc_resources: List[Dict[str, Any]] = []
@@ -1830,7 +1831,6 @@ def masterpieces_view():
                     if tok and amt > 0:
                         calc_resources.append({"token": tok, "amount": amt})
         except Exception:
-            # bad JSON, just ignore / reset
             calc_resources = []
 
         # Apply current action
@@ -1877,7 +1877,6 @@ def masterpieces_view():
                     total_points = float(reward.get("masterpiecePoints") or 0)
                     total_xp = float(reward.get("experiencePoints") or 0)
                 except Exception:
-                    # If predict_reward fails, we just leave totals at 0
                     total_points = 0.0
                     total_xp = 0.0
 
@@ -1925,12 +1924,10 @@ def masterpieces_view():
                     break
 
             if tier == len(MP_TIER_THRESHOLDS):
-                # Already max tier
                 next_tier_index = None
                 points_to_next = None
                 progress_to_next = 1.0
 
-            # Pre-format strings so Jinja only prints them, no .format in template
             calc_result = {
                 "total_points": total_points,
                 "total_points_str": f"{total_points:,.0f}",
@@ -1964,17 +1961,17 @@ def masterpieces_view():
             "delta": req - prev_req,
         })
 
-    # Render content for this tab
+    # ---------- Render content for this tab ----------
     content = """
     <div class="card">
       <h1>🏆 Masterpiece Level Calculator</h1>
       <p>
         Plan your donations across resources and see your total points, XP, COIN cost
-        and which tier you'll land in.
+        and which tier you'll land in. Uses the latest general masterpiece for scoring.
       </p>
 
       <div class="two-col">
-        <!-- Left: static tier table + explanations -->
+        <!-- Left: static tier table -->
         <div class="section">
           <h2 style="margin-top:0;">Masterpiece Tier Requirements</h2>
           <table>
@@ -2061,7 +2058,7 @@ def masterpieces_view():
               <p class="hint">Add some resources and hit "Add" to see results.</p>
             {% endif %}
           </form>
-        </div>   
+        </div>
       </div>
     </div>
 
@@ -2071,8 +2068,46 @@ def masterpieces_view():
         <div class="error">{{ error }}</div>
       {% endif %}
 
+      {% if current_mp %}
+        <div class="section" style="margin-top:8px;">
+          <h2>Live Leaderboard – Current Masterpiece</h2>
+          <p class="subtle">
+            MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}<br>
+            Showing top {{ current_mp_top50|length }} players.
+          </p>
+          {% if current_mp_top50 %}
+            <div class="mp-table-wrap">
+              <table>
+                <tr>
+                  <th>Pos</th>
+                  <th>Player</th>
+                  <th>Points</th>
+                </tr>
+                {% for row in current_mp_top50 %}
+                  <tr>
+                    <td>{{ row.position }}</td>
+                    <td>
+                      {% if row.profile and row.profile.displayName %}
+                        {{ row.profile.displayName }}
+                      {% elif row.profile and row.profile.uid %}
+                        {{ row.profile.uid }}
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                    <td>{{ row.masterpiecePoints | int }}</td>
+                  </tr>
+                {% endfor %}
+              </table>
+            </div>
+          {% else %}
+            <p class="hint">No leaderboard data yet for the current masterpiece.</p>
+          {% endif %}
+        </div>
+      {% endif %}
+
       <div class="section" style="margin-top:16px;">
-        <h2>Leaderboard – Masterpiece Browser</h2>
+        <h2>Leaderboard – Masterpiece Browser (All MPs)</h2>
 
         {% if mp_selector_options %}
           <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
@@ -2125,32 +2160,8 @@ def masterpieces_view():
           <p class="hint">No leaderboard data available for the selected masterpiece.</p>
         {% endif %}
       </div>
-
-      <script>
-        (function () {
-          const tabsRoot = document.getElementById("mp-tabs");
-          if (!tabsRoot) return;
-          const buttons = tabsRoot.querySelectorAll(".mp-tab-btn");
-          const panels = tabsRoot.querySelectorAll(".mp-tab-panel");
-
-          buttons.forEach(btn => {
-            btn.addEventListener("click", () => {
-              const tab = btn.getAttribute("data-tab");
-
-              buttons.forEach(b => b.classList.remove("active"));
-              panels.forEach(p => p.classList.remove("active"));
-
-              const panel = tabsRoot.querySelector(
-                '.mp-tab-panel[data-tab-panel="' + tab + '"]'
-              );
-              if (panel) panel.classList.add("active");
-            });
-          });
-        })();
-      </script>
     </div>
     """
-
 
     # Render inner content with context
     inner = render_template_string(
@@ -2172,7 +2183,6 @@ def masterpieces_view():
         selected_mp_id=selected_mp_id,
     )
 
-
     # Wrap in base template
     html = render_template_string(
         BASE_TEMPLATE,
@@ -2181,6 +2191,7 @@ def masterpieces_view():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -3331,6 +3342,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
