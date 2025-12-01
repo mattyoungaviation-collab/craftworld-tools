@@ -2203,20 +2203,30 @@ def masterpieces_view():
     """
 
     # Render inner content with context
-inner = render_template_string(
-    content,
-    error=error,
-    masterpieces=masterpieces_data,
-    general_mps=general_mps,
-    event_mps=event_mps,
-    tier_rows=tier_rows,
-    ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
-    calc_resources=calc_resources,
-    calc_result=calc_result,
-    calc_state_json=calc_state_json,
-    current_mp=current_mp,
-    current_mp_top50=current_mp_top50,
-)
+    inner = render_template_string(
+        content,
+        error=error,
+        masterpieces=masterpieces_data,
+        general_mps=general_mps,
+        event_mps=event_mps,
+        tier_rows=tier_rows,
+        ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
+        calc_resources=calc_resources,
+        calc_result=calc_result,
+        calc_state_json=calc_state_json,
+        current_mp=current_mp,
+        current_mp_top50=current_mp_top50,
+    )
+
+    # Wrap in base template
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=inner,
+        active_page="masterpieces",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
 
 
     # Wrap in base template
@@ -3366,6 +3376,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
