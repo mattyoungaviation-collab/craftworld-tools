@@ -163,6 +163,38 @@ MP_TIER_THRESHOLDS = [
     100_000_000,   # Tier 9
     200_000_000,   # Tier 10
 ]
+def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[str, float]]:
+    """
+    Pre-compute masterpiece points and XP per 1 unit for each symbol in `symbols`.
+
+    This is a thin wrapper around predict_reward(...) that calls it once per
+    unique token with amount = 1.0.
+
+    Returns a dict:
+      {
+        "points": { "SEAWATER": 4_200_000.0, ... },
+        "xp":     { "SEAWATER":   350_000.0, ... },
+      }
+    """
+    unique_syms = sorted({(s or "").upper() for s in symbols if s})
+    points: Dict[str, float] = {}
+    xp: Dict[str, float] = {}
+
+    if not mp_id or not unique_syms:
+        return {"points": points, "xp": xp}
+
+    for sym in unique_syms:
+        try:
+            pr = predict_reward(mp_id, [{"symbol": sym, "amount": 1.0}]) or {}
+            points[sym] = float(pr.get("masterpiecePoints") or 0.0)
+            xp[sym] = float(pr.get("experiencePoints") or 0.0)
+        except Exception:
+            # If anything fails, just treat this token as 0 points / 0 XP per unit
+            points[sym] = 0.0
+            xp[sym] = 0.0
+
+    return {"points": points, "xp": xp}
+
 
 
 def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[str, float]]:
@@ -1742,9 +1774,6 @@ def masterpieces_view():
         current_mp = None
         current_mp_top50 = []
 
-
-
-
     # ---------- Calculator state (list of {token, amount}) ----------
     calc_resources: List[Dict[str, Any]] = []
     calc_result: Optional[Dict[str, Any]] = None
@@ -1847,7 +1876,6 @@ def masterpieces_view():
                 row["points_str"] = f"{row_points:,.0f}" if row_points else "—"
                 row["xp_str"] = f"{row_xp:,.0f}" if row_xp else "—"
 
-
             # 3) Map to tiers
             tier = 0
             next_tier_index: Optional[int] = None
@@ -1890,29 +1918,32 @@ def masterpieces_view():
                 ),
             }
 
-    # Hidden JSON state for the form
+    # Serialize calculator state back into hidden JSON field
     calc_state_json = json.dumps(calc_resources)
 
-    # Pre-format tier rows so template doesn’t use "{:,.0f}".format(...)
-    tier_rows = [
-        {"tier": i + 1, "req_str": f"{req:,.0f}"}
-        for i, req in enumerate(MP_TIER_THRESHOLDS)
-    ]
+    # Build static tier rows for display
+    tier_rows = []
+    for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
+        prev_req = MP_TIER_THRESHOLDS[i - 2] if i > 1 else 0
+        tier_rows.append({
+            "tier": i,
+            "required": req,
+            "delta": req - prev_req,
+        })
 
-    # ---------- Template for MP list + calculator ----------
+    # Render content for this tab
     content = """
     <div class="card">
       <h1>🏆 Masterpiece Level Calculator</h1>
-      <p class="subtle">
-        Plan your donations across resources and see your
-        <strong>total points, XP, COIN cost</strong> and which
-        <strong>tier</strong> you'll land in.
+      <p>
+        Plan your donations across resources and see your total points, XP, COIN cost
+        and which tier you'll land in.
       </p>
 
       <div class="two-col">
-        <!-- Left: Tier table -->
+        <!-- Left: static tier table + explanations -->
         <div class="section">
-          <h2>Masterpiece Tier Requirements</h2>
+          <h2 style="margin-top:0;">Masterpiece Tier Requirements</h2>
           <table>
             <tr>
               <th>Tier</th>
@@ -1921,7 +1952,7 @@ def masterpieces_view():
             {% for row in tier_rows %}
               <tr>
                 <td>Tier {{ row.tier }}</td>
-                <td>{{ row.req_str }}</td>
+                <td>{{ "{:,}".format(row.required) }}</td>
               </tr>
             {% endfor %}
           </table>
@@ -1962,56 +1993,39 @@ def masterpieces_view():
                   <tr>
                     <td>{{ row.token }}</td>
                     <td style="text-align:right;">{{ row.amount }}</td>
-                    <td style="text-align:right;">{{ row.points_str }}</td>
-                    <td style="text-align:right;">{{ row.xp_str }}</td>
+                    <td style="text-align:right;">{{ row.points_str or "—" }}</td>
+                    <td style="text-align:right;">{{ row.xp_str or "—" }}</td>
                   </tr>
                 {% endfor %}
               </table>
             {% else %}
-              <p class="hint">No resources added yet. Add some above to see the results.</p>
+              <p class="hint">No resources added yet.</p>
             {% endif %}
-
 
             <h3 style="margin-top:16px;">📊 Calculation Results</h3>
             {% if calc_result %}
-              <div class="two-col">
-                <div>
-                  <div class="stat-label">TOTAL POINTS</div>
-                  <div class="stat-value">{{ calc_result.total_points_str }}</div>
-                </div>
-                <div>
-                  <div class="stat-label">TOTAL XP</div>
-                  <div class="stat-value">{{ calc_result.total_xp_str }}</div>
-                </div>
-                <div>
-                  <div class="stat-label">MASTERPIECE TIER</div>
-                  <div class="stat-value">
-                    {% if calc_result.tier > 0 %}
-                      Tier {{ calc_result.tier }}
-                    {% else %}
-                      Below Tier 1
-                    {% endif %}
-                  </div>
-                </div>
-                <div>
-                  <div class="stat-label">TOTAL COST</div>
-                  <div class="stat-value">COIN {{ calc_result.total_cost_str }}</div>
-                </div>
-              </div>
+              <p><strong>TOTAL POINTS</strong><br>{{ calc_result.total_points_str }}</p>
+              <p><strong>TOTAL XP</strong><br>{{ calc_result.total_xp_str }}</p>
+              <p><strong>MASTERPIECE TIER</strong><br>
+                {% if calc_result.tier > 0 %}
+                  Tier {{ calc_result.tier }}
+                {% else %}
+                  Below Tier 1
+                {% endif %}
+              </p>
+              <p><strong>TOTAL COST</strong><br>COIN {{ calc_result.total_cost_str }}</p>
 
               {% if calc_result.next_tier_index %}
-                <p style="margin-top:8px;">
+                <p>
                   <strong>Progress to Tier {{ calc_result.next_tier_index }}:</strong><br>
                   {{ calc_result.progress_to_next_pct }}% —
                   {{ calc_result.points_to_next_str }} more points needed.
                 </p>
               {% else %}
-                <p style="margin-top:8px;">
-                  <strong>You are at the maximum tier based on these donations.</strong>
-                </p>
+                <p><strong>You are at max tier.</strong></p>
               {% endif %}
             {% else %}
-              <p class="hint">Add at least one resource and submit to see tier and cost.</p>
+              <p class="hint">Add some resources and hit "Add" to see results.</p>
             {% endif %}
           </form>
         </div>
@@ -2097,14 +2111,13 @@ def masterpieces_view():
         error=error,
         masterpieces=masterpieces_data,
         tier_rows=tier_rows,
-        ALL_FACTORY_TOKENS=ALL_FACTORY_TOKENS,
+        ALL_FACTORY_TOKENS=FACTORY_DISPLAY_ORDER,
         calc_resources=calc_resources,
         calc_result=calc_result,
         calc_state_json=calc_state_json,
         current_mp=current_mp,
         current_mp_top50=current_mp_top50,
     )
-
 
     # Wrap in base template
     html = render_template_string(
@@ -3253,6 +3266,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
