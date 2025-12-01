@@ -1823,15 +1823,11 @@ def masterpieces_view():
                 break
 
 
-    if selected_mp:
-        try:
-            selected_mp_top50 = list(selected_mp.get("leaderboard") or [])[:50]
-        except Exception:
-            selected_mp_top50 = []
-    elif current_mp:
+    if not selected_mp and current_mp:
         # Fallback: show current_mp leaderboard if selector fails
         selected_mp = current_mp
         selected_mp_top50 = current_mp_top50
+
 
     # ---------- Donation Planner state (list of {token, amount}) ----------
     calc_resources: List[Dict[str, Any]] = []
@@ -2314,8 +2310,21 @@ def masterpieces_view():
             {% if current_mp %}
               <p class="subtle">
                 MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}<br>
-                Showing top {{ current_mp_top50|length }} players.
+                Showing top {{ current_mp_top50|length }} players (Top {{ top_n }}).
               </p>
+
+              <form method="get" class="section" style="margin-bottom:8px; display:flex; align-items:center; gap:8px;">
+                <input type="hidden" name="tab" value="current">
+                <label for="top_n" class="subtle">Show:</label>
+                <select id="top_n" name="top_n">
+                  {% for n in top_n_options %}
+                    <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
+                  {% endfor %}
+                </select>
+                <button type="submit">Apply</button>
+                <span class="hint">Only the top 100 are supported.</span>
+              </form>
+
               {% if current_mp_top50 %}
                 <div class="mp-table-wrap">
                   <table>
@@ -2350,30 +2359,14 @@ def masterpieces_view():
           </div>
         </div>
 
+
         <!-- 📜 History & events browser -->
         <div class="mp-section" data-mp-section="history" style="display:none;">
           <div class="section" style="margin-top:4px;">
             <h2>History &amp; event browser</h2>
             <p class="subtle">
-  Inspect the top <strong>{{ top_n }}</strong> positions for any general or event masterpiece.
-</p>
-
-<form method="get" class="mp-selector-form" style="margin-bottom:12px;">
-  <label for="mp_view_id">Choose a masterpiece</label>
-  <select id="mp_view_id" name="mp_view_id">
-    <!-- existing optgroup / options here -->
-  </select>
-
-  <label for="history_top_n" style="margin-left:8px;">Show:</label>
-  <select id="history_top_n" name="top_n">
-    {% for n in top_n_options %}
-      <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
-    {% endfor %}
-  </select>
-
-  <input type="hidden" name="tab" value="history">
-  <button type="submit">View</button>
-</form>
+              Inspect the top <strong>{{ top_n }}</strong> positions for any general or event masterpiece.
+            </p>
 
             {% if general_mps or event_mps %}
               <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
@@ -2401,6 +2394,15 @@ def masterpieces_view():
                     </optgroup>
                   {% endif %}
                 </select>
+
+                <label for="history_top_n" style="margin-left:8px;">Show:</label>
+                <select id="history_top_n" name="top_n">
+                  {% for n in top_n_options %}
+                    <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
+                  {% endfor %}
+                </select>
+
+                <input type="hidden" name="tab" value="history">
                 <button type="submit" style="margin-left:6px;">View leaderboard</button>
               </form>
             {% else %}
@@ -2445,8 +2447,6 @@ def masterpieces_view():
             {% endif %}
           </div>
         </div>
-      </div>
-    </div>
 
 <script>
   (function() {
@@ -2519,19 +2519,6 @@ def masterpieces_view():
         top_n_options=TOP_N_OPTIONS,
 
     )
-
-    # Wrap in base template
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=inner,
-        active_page="masterpieces",
-        has_uid=has_uid_flag(),
-    )
-    return html
-
-
-
-
 
     # Wrap in base template
     html = render_template_string(
@@ -3680,6 +3667,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
