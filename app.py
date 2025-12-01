@@ -2380,31 +2380,32 @@ def masterpieces_view():
                       <th>Player</th>
                       <th>Points</th>
                     </tr>
-                  {% for row in selected_mp_top50 %}
-                    {% set prof = row.profile or {} %}
-                    {% set name = prof.displayName or "" %}
-                    {% set uid = prof.uid or "" %}
-                    {% set is_me = highlight_query and (
-                      highlight_query|lower in name|lower
-                      or highlight_query|lower in uid|lower
-                    ) %}
-                    <tr class="{% if is_me %}mp-row-me{% endif %}">
-                      <td>{{ row.position }}</td>
-                      <td class="subtle">
-                        {% if name %}
-                          {{ name }}
-                        {% elif uid %}
-                          {{ uid }}
-                        {% else %}
-                          —
-                        {% endif %}
-                        {% if is_me %}
-                          <span class="me-pill">← you</span>
-                        {% endif %}
-                      </td>
-                      <td>{{ row.masterpiecePoints | int }}</td>
-                    </tr>
-                  {% endfor %}
+                    {% for row in current_mp_top50 %}
+                      {% set prof = row.profile or {} %}
+                      {% set name = prof.displayName or "" %}
+                      {% set uid = prof.uid or "" %}
+                      {% set is_me = highlight_query and (
+                        highlight_query|lower in name|lower
+                        or highlight_query|lower in uid|lower
+                      ) %}
+                      <tr class="{% if is_me %}mp-row-me{% endif %}">
+                        <td>{{ row.position }}</td>
+                        <td class="subtle">
+                          {% if name %}
+                            {{ name }}
+                          {% elif uid %}
+                            {{ uid }}
+                          {% else %}
+                            —
+                          {% endif %}
+                          {% if is_me %}
+                            <span class="me-pill">← you</span>
+                          {% endif %}
+                        </td>
+                        <td>{{ row.masterpiecePoints | int }}</td>
+                      </tr>
+                    {% endfor %}
+
 
 
                   </table>
@@ -2483,20 +2484,31 @@ def masterpieces_view():
                     <th>Points</th>
                   </tr>
                   {% for row in selected_mp_top50 %}
-                    <tr>
+                    {% set prof = row.profile or {} %}
+                    {% set name = prof.displayName or "" %}
+                    {% set uid = prof.uid or "" %}
+                    {% set is_me = highlight_query and (
+                      highlight_query|lower in name|lower
+                      or highlight_query|lower in uid|lower
+                    ) %}
+                    <tr class="{% if is_me %}mp-row-me{% endif %}">
                       <td>{{ row.position }}</td>
                       <td class="subtle">
-                        {% if row.profile and row.profile.displayName %}
-                          {{ row.profile.displayName }}
-                        {% elif row.profile and row.profile.uid %}
-                          {{ row.profile.uid }}
+                        {% if name %}
+                          {{ name }}
+                        {% elif uid %}
+                          {{ uid }}
                         {% else %}
                           —
+                        {% endif %}
+                        {% if is_me %}
+                          <span class="me-pill">← you</span>
                         {% endif %}
                       </td>
                       <td>{{ row.masterpiecePoints | int }}</td>
                     </tr>
                   {% endfor %}
+
                 </table>
               </div>
             {% elif general_mps or event_mps %}
@@ -3729,6 +3741,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
