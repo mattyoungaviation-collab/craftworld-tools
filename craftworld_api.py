@@ -220,10 +220,32 @@ def fetch_masterpieces() -> List[Dict[str, Any]]:
     return data.get("masterpieces") or []
 
 
-def fetch_masterpiece_details(masterpiece_id: int | str) -> Dict[str, Any]:
+def fetch_masterpiece_details(
+    masterpiece_id: int | str,
+    jwt: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Fetch a single masterpiece with resources + leaderboard.
+    Fetch a single masterpiece including resources, leaderboard,
+    reward stages, and leaderboard rewards.
     """
+    # Use the big GraphQL query you already defined above:
+    query = MASTERPIECE_DETAILS_QUERY
+
+    # Fall back to the default JWT if none explicitly provided
+    jwt = jwt or CRAFTWORLD_JWT
+
+    # Variables expected by the query
+    variables: Dict[str, Any] = {"id": str(masterpiece_id)}
+
+    # Call Craft World GraphQL
+    data = call_graphql(query, variables=variables, jwt=jwt)
+
+    masterpiece = data.get("masterpiece")
+    if masterpiece is None:
+        raise CraftWorldAPIError(f"No masterpiece found for id={masterpiece_id}")
+
+    return masterpiece
+
 MASTERPIECE_DETAILS_QUERY = """
 query Masterpiece($id: ID) {
     masterpiece(id: $id) {
@@ -412,5 +434,6 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
