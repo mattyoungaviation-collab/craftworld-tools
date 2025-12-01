@@ -2702,9 +2702,10 @@ def masterpieces_view():
                   <div class="mp-gap-grid">
                     <div class="mp-gap-block">
                       <div class="mp-gap-label">Your rank &amp; points</div>
-                      <div class="mp-gap-number">
-                        #{{ current_gap.position }} · {{ current_gap.points | int }}
-                      </div>
+                    <div class="mp-gap-number">
+                      #{{ current_gap.position }} · {{ "{:,.0f}".format(current_gap.points or 0) }}
+                    </div>
+
                       <div class="mp-gap-sub">
                         Highlight: <code>{{ highlight_query }}</code>
                       </div>
@@ -2713,9 +2714,10 @@ def masterpieces_view():
                     {% if current_gap.gap_up is not none %}
                       <div class="mp-gap-block">
                         <div class="mp-gap-label">Points to pass above</div>
-                        <div class="mp-gap-number">
-                          {{ current_gap.gap_up | int }}
-                        </div>
+                    <div class="mp-gap-number">
+                      {{ "{:,.0f}".format(current_gap.gap_up or 0) }}
+                    </div>
+
                         <div class="mp-gap-sub">
                           To pass <strong>{{ current_gap.above_name }}</strong>
                           (#{{ current_gap.above_pos }})
@@ -2736,9 +2738,10 @@ def masterpieces_view():
                     {% if current_gap.gap_down is not none %}
                       <div class="mp-gap-block">
                         <div class="mp-gap-label">Lead over player behind</div>
-                        <div class="mp-gap-number">
-                          {{ current_gap.gap_down | int }}
-                        </div>
+                    <div class="mp-gap-number">
+                      {{ "{:,.0f}".format(current_gap.gap_down or 0) }}
+                    </div>
+
                         <div class="mp-gap-sub">
                           Ahead of <strong>{{ current_gap.below_name }}</strong>
                           (#{{ current_gap.below_pos }})
@@ -2790,7 +2793,7 @@ def masterpieces_view():
         <span class="me-pill">← you</span>
       {% endif %}
     </td>
-    <td>{{ row.masterpiecePoints | int }}</td>
+    <td>{{ "{:,.0f}".format(row.masterpiecePoints or 0) }}</td>
   </tr>
 {% endfor %}
     </table>
@@ -2852,8 +2855,9 @@ def masterpieces_view():
                         <div class="mp-gap-block">
                           <div class="mp-gap-label">Your rank &amp; points</div>
                           <div class="mp-gap-number">
-                            #{{ selected_gap.position }} · {{ selected_gap.points | int }}
+                              #{{ selected_gap.position }} · {{ "{:,.0f}".format(selected_gap.points or 0) }}
                           </div>
+
                           <div class="mp-gap-sub">
                             Highlight: <code>{{ highlight_query }}</code>
                           </div>
@@ -2863,8 +2867,9 @@ def masterpieces_view():
                           <div class="mp-gap-block">
                             <div class="mp-gap-label">Points to pass above</div>
                             <div class="mp-gap-number">
-                              {{ selected_gap.gap_up | int }}
+                              {{ "{:,.0f}".format(selected_gap.gap_up or 0) }}
                             </div>
+
                             <div class="mp-gap-sub">
                               To pass <strong>{{ selected_gap.above_name }}</strong>
                               (#{{ selected_gap.above_pos }})
@@ -2886,8 +2891,9 @@ def masterpieces_view():
                           <div class="mp-gap-block">
                             <div class="mp-gap-label">Lead over player behind</div>
                             <div class="mp-gap-number">
-                              {{ selected_gap.gap_down | int }}
+                              {{ "{:,.0f}".format(selected_gap.gap_down or 0) }}
                             </div>
+
                             <div class="mp-gap-sub">
                               Ahead of <strong>{{ selected_gap.below_name }}</strong>
                               (#{{ selected_gap.below_pos }})
@@ -2940,7 +2946,7 @@ def masterpieces_view():
                               <span class="me-pill">← you</span>
                             {% endif %}
                           </td>
-                          <td>{{ row.masterpiecePoints | int }}</td>
+                          <td>{{ "{:,.0f}".format(row.masterpiecePoints or 0) }}</td>
                         </tr>
                       {% endfor %}
                     </table>
@@ -4182,6 +4188,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
