@@ -1772,6 +1772,15 @@ def masterpieces_view():
 
     # Persist per logged-in browser session
     session["mp_top_n"] = top_n
+    
+    # Highlight name / UID across leaderboards
+    highlight_query = (request.args.get("highlight") or request.form.get("highlight") or "").strip()
+    if highlight_query:
+        # Save to session so it sticks when you switch tabs / refresh
+        session["mp_highlight"] = highlight_query
+    else:
+        highlight_query = session.get("mp_highlight", "") or ""
+    
 
 
     # Pick the "current" masterpiece: latest general if available, otherwise latest event
@@ -2094,8 +2103,27 @@ def masterpieces_view():
           font-weight:600;
         }
 
+        .mp-row-me {
+          background: linear-gradient(90deg, rgba(250,204,21,0.14), transparent);
+        }
+        .mp-row-me td {
+          border-top: 1px solid rgba(250,204,21,0.35);
+          border-bottom: 1px solid rgba(250,204,21,0.18);
+        }
+        .me-pill {
+          display:inline-block;
+          margin-left:6px;
+          padding:1px 6px;
+          border-radius:999px;
+          font-size:11px;
+          border:1px solid rgba(250,204,21,0.7);
+          color:#facc15;
+          background:rgba(30,64,175,0.65);
+        }
+
         @media (max-width: 768px) {
           .mp-planner-grid {
+
             grid-template-columns: 1fr;
           }
         }
@@ -2106,6 +2134,31 @@ def masterpieces_view():
         Plan donations, watch the live race, and browse past &amp; event Masterpieces —
         all wired directly to <code>predictReward</code> and live COIN prices.
       </p>
+      <h1>🏛 Masterpiece Hub</h1>
+      <p class="subtle">
+        Plan donations, watch the live race, and browse past &amp; event Masterpieces —
+        all wired directly to <code>predictReward</code> and live COIN prices.
+      </p>
+
+      <form method="get" class="section" style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+        <input type="hidden" name="tab" value="{{ request.args.get('tab') or 'planner' }}">
+        <label for="mp_highlight" class="subtle">Highlight my name / Voya ID (top 100 only):</label>
+        <input id="mp_highlight"
+               name="highlight"
+               type="text"
+               value="{{ highlight_query }}"
+               placeholder="Your display name or Voya ID"
+               style="min-width:220px;">
+        <button type="submit">Apply</button>
+        {% if highlight_query %}
+          <span class="hint">Highlighting rows matching: <strong>{{ highlight_query }}</strong></span>
+        {% else %}
+          <span class="hint">Works if you&apos;re in the visible top {{ top_n }}.</span>
+        {% endif %}
+      </form>
+
+      {% if current_mp %}
+        <div class="mp-top-summary">
 
       {% if current_mp %}
         <div class="mp-top-summary">
@@ -2334,21 +2387,31 @@ def masterpieces_view():
                       <th>Points</th>
                     </tr>
                     {% for row in current_mp_top50 %}
-                      <tr>
+                      {% set prof = row.profile or {} %}
+                      {% set name = prof.displayName or "" %}
+                      {% set uid = prof.uid or "" %}
+                      {% set is_me = highlight_query and (
+                        highlight_query|lower in name|lower
+                        or highlight_query|lower in uid|lower
+                      ) %}
+                      <tr class="{% if is_me %}mp-row-me{% endif %}">
                         <td>{{ row.position }}</td>
                         <td class="subtle">
-                          {% if row.profile and row.profile.displayName %}
-                            {{ row.profile.displayName }}
-                          {% elif row.profile and row.profile.uid %}
-                            {{ row.profile.uid }}
+                          {% if name %}
+                            {{ name }}
+                          {% elif uid %}
+                            {{ uid }}
                           {% else %}
                             —
+                          {% endif %}
+                          {% if is_me %}
+                            <span class="me-pill">← you</span>
                           {% endif %}
                         </td>
                         <td>{{ row.masterpiecePoints | int }}</td>
                       </tr>
                     {% endfor %}
-                  </table>
+
                 </div>
               {% else %}
                 <p class="hint">No leaderboard data yet for the current masterpiece.</p>
@@ -2409,36 +2472,32 @@ def masterpieces_view():
               <p class="hint">No masterpieces available to browse.</p>
             {% endif %}
 
-            {% if selected_mp_top50 and selected_mp %}
-              <div class="hint" style="margin-bottom:6px;">
-                Showing top {{ selected_mp_top50|length }} positions for
-                <strong>
-                  MP {{ selected_mp.id }} — {{ selected_mp.name or selected_mp.addressableLabel or selected_mp.type }}
-                </strong>.
-              </div>
-              <div class="mp-table-wrap">
-                <table>
-                  <tr>
-                    <th>Pos</th>
-                    <th>Player</th>
-                    <th>Points</th>
-                  </tr>
                   {% for row in selected_mp_top50 %}
-                    <tr>
+                    {% set prof = row.profile or {} %}
+                    {% set name = prof.displayName or "" %}
+                    {% set uid = prof.uid or "" %}
+                    {% set is_me = highlight_query and (
+                      highlight_query|lower in name|lower
+                      or highlight_query|lower in uid|lower
+                    ) %}
+                    <tr class="{% if is_me %}mp-row-me{% endif %}">
                       <td>{{ row.position }}</td>
                       <td class="subtle">
-                        {% if row.profile and row.profile.displayName %}
-                          {{ row.profile.displayName }}
-                        {% elif row.profile and row.profile.uid %}
-                          {{ row.profile.uid }}
+                        {% if name %}
+                          {{ name }}
+                        {% elif uid %}
+                          {{ uid }}
                         {% else %}
                           —
+                        {% endif %}
+                        {% if is_me %}
+                          <span class="me-pill">← you</span>
                         {% endif %}
                       </td>
                       <td>{{ row.masterpiecePoints | int }}</td>
                     </tr>
                   {% endfor %}
-                </table>
+
               </div>
             {% elif general_mps or event_mps %}
               <p class="hint">Select a masterpiece above to view its leaderboard.</p>
@@ -2515,6 +2574,7 @@ def masterpieces_view():
         selected_mp=selected_mp,
         selected_mp_top50=selected_mp_top50,
         selected_mp_id=selected_mp_id,
+        highlight_query=highlight_query,
         top_n=top_n,
         top_n_options=TOP_N_OPTIONS,
 
@@ -3667,6 +3727,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
