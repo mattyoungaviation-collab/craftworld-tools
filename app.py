@@ -1766,6 +1766,45 @@ def masterpieces_view():
             current_mp_top50 = []
     else:
         current_mp_top50 = []
+    # ---- Masterpiece selector for leaderboard browsing ----
+
+    # Build selector options from *all* masterpieces we have from Craft World
+    mp_selector_options: List[Dict[str, Any]] = []
+    if masterpieces_data:
+        try:
+            mp_selector_options = sorted(
+                masterpieces_data,
+                key=lambda m: int(m.get("id") or 0),
+            )
+        except Exception:
+            mp_selector_options = masterpieces_data
+
+    # Which masterpiece should the leaderboard show?
+    #  - If a ?mp_view_id=... is in the URL, use that
+    #  - Otherwise default to the current masterpiece, if any
+    selected_mp_id = request.args.get("mp_view_id")
+    if not selected_mp_id and current_mp:
+        selected_mp_id = str(current_mp.get("id") or "")
+
+    selected_mp: Optional[Dict[str, Any]] = None
+    selected_mp_top50: List[Dict[str, Any]] = []
+
+    if selected_mp_id:
+        for mp in mp_selector_options:
+            if str(mp.get("id")) == str(selected_mp_id):
+                selected_mp = mp
+                break
+
+    if selected_mp:
+        try:
+            selected_mp_top50 = list(selected_mp.get("leaderboard") or [])[:50]
+        except Exception:
+            selected_mp_top50 = []
+    elif current_mp:
+        # Fallback: if something went weird, fall back to current_mp's top 50
+        selected_mp = current_mp
+        selected_mp_top50 = current_mp_top50
+
 
 
     # ---------- Calculator state (list of {token, amount}) ----------
@@ -2022,125 +2061,35 @@ def masterpieces_view():
               <p class="hint">Add some resources and hit "Add" to see results.</p>
             {% endif %}
           </form>
-        </div>
+        </div>   
       </div>
     </div>
 
-    <div class="card">
-      <h1>Current Masterpieces</h1>
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
-
-      {% if masterpieces %}
-        <style>
-          .mp-tabs {
-            margin-top: 8px;
-          }
-          .mp-tabs-nav {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 8px;
-          }
-          .mp-tab-btn {
-            padding: 4px 10px;
-            border-radius: 999px;
-            border: 1px solid #ccc;
-            font-size: 0.85rem;
-            cursor: pointer;
-          }
-          .mp-tab-btn.active {
-            background: #007bff;
-            color: white;
-            border-color: #007bff;
-          }
-          .mp-tab-panel {
-            display: none;
-          }
-          .mp-tab-panel.active {
-            display: block;
-          }
-        </style>
-
-        <div class="section">
-          <div class="hint">Data pulled directly from Craft World (via GraphQL).</div>
-
-          <div class="mp-tabs" id="mp-tabs">
-            <div class="mp-tabs-nav">
-              <button type="button" class="mp-tab-btn active" data-tab="general">
-                General Masterpieces
-              </button>
-              <button type="button" class="mp-tab-btn" data-tab="events">
-                Event Masterpieces
-              </button>
-            </div>
-
-            <!-- General MPs (includes the current one) -->
-            <div class="mp-tab-panel active" data-tab-panel="general">
-              <div class="hint">
-                Showing all non-event masterpieces.
-                {% if current_mp %}
-                  Current MP: <strong>{{ current_mp.name or current_mp.id }}</strong>
-                  (ID {{ current_mp.id }})
-                {% endif %}
-              </div>
-              <div class="mp-table-wrap">
-                <table>
-                  <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>Status</th>
-                    <th>Ends</th>
-                    <th>Reward</th>
-                  </tr>
-                  {% for mp in general_mps %}
-                    <tr{% if current_mp and mp.id == current_mp.id %} style="font-weight:bold;"{% endif %}>
-                      <td>{{ mp.id }}</td>
-                      <td>{{ mp.name or mp.id }}</td>
-                      <td>{{ mp.status }}</td>
-                      <td>{{ mp.endsAt or '—' }}</td>
-                      <td>{{ mp.rewardSummary or '—' }}</td>
-                    </tr>
-                  {% endfor %}
-                </table>
-              </div>
-            </div>
-
-            <!-- Event MPs -->
-            <div class="mp-tab-panel" data-tab-panel="events">
-              <div class="hint">Completed / event masterpieces.</div>
-              <div class="mp-table-wrap">
-                <table>
-                  <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Status</th>
-                    <th>Ends</th>
-                    <th>Reward</th>
-                  </tr>
-                  {% for mp in event_mps %}
-                    <tr>
-                      <td>{{ mp.id }}</td>
-                      <td>{{ mp.name or mp.id }}</td>
-                      <td>{{ mp.type }}</td>
-                      <td>{{ mp.status }}</td>
-                      <td>{{ mp.endsAt or '—' }}</td>
-                      <td>{{ mp.rewardSummary or '—' }}</td>
-                    </tr>
-                  {% endfor %}
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div class="section" style="margin-top:16px;">
-          <h2>Leaderboard – Current Masterpiece</h2>
-          {% if current_mp_top50 and current_mp %}
+          <h2>Leaderboard – Masterpiece Browser</h2>
+
+          {% if mp_selector_options %}
+            <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
+              <label for="mp_view_id">Select Masterpiece:</label>
+              <select id="mp_view_id" name="mp_view_id">
+                {% for mp in mp_selector_options %}
+                  <option value="{{ mp.id }}"
+                    {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
+                    MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
+                    {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+              <button type="submit">View</button>
+            </form>
+          {% else %}
+            <p class="hint">No masterpieces available to browse.</p>
+          {% endif %}
+
+          {% if selected_mp_top50 and selected_mp %}
             <div class="hint">
-              Showing top {{ current_mp_top50|length }} positions for
-              <strong>{{ current_mp.name or current_mp.id }}</strong>.
+              Showing top {{ selected_mp_top50|length }} positions for
+              <strong>{{ selected_mp.name or selected_mp.id }}</strong>.
             </div>
             <div class="mp-table-wrap">
               <table>
@@ -2149,7 +2098,7 @@ def masterpieces_view():
                   <th>Player</th>
                   <th>Points</th>
                 </tr>
-                {% for row in current_mp_top50 %}
+                {% for row in selected_mp_top50 %}
                   <tr>
                     <td>{{ row.position }}</td>
                     <td>
@@ -2167,7 +2116,7 @@ def masterpieces_view():
               </table>
             </div>
           {% else %}
-            <p class="hint">No leaderboard data available for the current masterpiece.</p>
+            <p class="hint">No leaderboard data available for the selected masterpiece.</p>
           {% endif %}
         </div>
 
@@ -2216,7 +2165,12 @@ def masterpieces_view():
         calc_state_json=calc_state_json,
         current_mp=current_mp,
         current_mp_top50=current_mp_top50,
+        mp_selector_options=mp_selector_options,
+        selected_mp=selected_mp,
+        selected_mp_top50=selected_mp_top50,
+        selected_mp_id=selected_mp_id,
     )
+
 
     # Wrap in base template
     html = render_template_string(
@@ -3376,6 +3330,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
