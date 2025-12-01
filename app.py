@@ -2156,24 +2156,38 @@ def masterpieces_view():
 
     if request.method == "POST":
         action = (request.form.get("calc_action") or "").strip().lower()
+
+        # Detect if the planner Masterpiece changed; if so, wipe the previous bundle.
+        last_planner_mp = session.get("planner_mp_id_for_planner") or ""
+        current_planner_mp = (request.form.get("planner_mp_id") or "").strip()
+        changed_mp = bool(current_planner_mp and current_planner_mp != last_planner_mp)
+
+        # Persist the latest planner MP selection so we can compare on the next POST.
+        if current_planner_mp:
+            session["planner_mp_id_for_planner"] = current_planner_mp
+        elif planner_mp_id:
+            session["planner_mp_id_for_planner"] = planner_mp_id
+
         state_raw = request.form.get("calc_state") or "[]"
 
-        # Load previous state from hidden JSON field
-        try:
-            loaded = json.loads(state_raw)
-            if isinstance(loaded, list):
-                for row in loaded:
-                    if not isinstance(row, dict):
-                        continue
-                    tok = str(row.get("token", "")).upper().strip()
-                    try:
-                        amt = float(row.get("amount", 0) or 0)
-                    except (TypeError, ValueError):
-                        amt = 0.0
-                    if tok and amt > 0:
-                        calc_resources.append({"token": tok, "amount": amt})
-        except Exception:
-            calc_resources = []
+        # Load previous state from hidden JSON field, unless the MP changed
+        if not changed_mp:
+            try:
+                loaded = json.loads(state_raw)
+                if isinstance(loaded, list):
+                    for row in loaded:
+                        if not isinstance(row, dict):
+                            continue
+                        tok = str(row.get("token", "")).upper().strip()
+                        try:
+                            amt = float(row.get("amount", 0) or 0)
+                        except (TypeError, ValueError):
+                            amt = 0.0
+                        if tok and amt > 0:
+                            calc_resources.append({"token": tok, "amount": amt})
+            except Exception:
+                calc_resources = []
+
 
         # Apply the current action
         if action == "add":
@@ -4251,6 +4265,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
