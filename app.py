@@ -71,12 +71,95 @@ def init_db() -> None:
         )
         '''
     )
+
+    # Cache for masterpiece metadata (id -> name / label / type)
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS mp_metadata (
+            id INTEGER PRIMARY KEY,
+            name TEXT,
+            addressable_label TEXT,
+            type TEXT,
+            is_event INTEGER DEFAULT 0
+        )
+        '''
+    )
+
     conn.commit()
+
     conn.close()
 
 
 
 init_db()
+def cache_masterpiece_metadata(mp: Dict[str, Any]) -> None:
+    """
+    Store basic metadata for a masterpiece so we can reuse its name/label later.
+    """
+    try:
+        mid = int(mp.get("id") or 0)
+    except (TypeError, ValueError):
+        return
+    if mid <= 0:
+        return
+
+    name = mp.get("name") or None
+    # Some responses use "addressableLabel", but we'll store as snake_case.
+    label = mp.get("addressableLabel") or mp.get("addressable_label") or None
+    mtype = mp.get("type") or None
+    is_event = 1 if mp.get("eventId") else 0
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            INSERT INTO mp_metadata (id, name, addressable_label, type, is_event)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = COALESCE(excluded.name, mp_metadata.name),
+                addressable_label = COALESCE(excluded.addressable_label, mp_metadata.addressable_label),
+                type = COALESCE(excluded.type, mp_metadata.type),
+                is_event = excluded.is_event
+            ''',
+            (mid, name, label, mtype, is_event),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_masterpiece_metadata_cache() -> Dict[int, Dict[str, Any]]:
+    """
+    Load all cached MP metadata from the DB as a dict keyed by integer ID.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, name, addressable_label, type, is_event FROM mp_metadata'
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    cache: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        mid = int(row["id"])
+        label = row["addressable_label"]
+        is_event = int(row["is_event"] or 0)
+        cache[mid] = {
+            "id": mid,
+            "name": row["name"],
+            # keep both snake_case and camelCase so templates work
+            "addressable_label": label,
+            "addressableLabel": label,
+            "type": row["type"],
+            "is_event": is_event,
+            "eventId": mid if is_event else None,
+        }
+    return cache
+
 
 
 from pricing import fetch_live_prices_in_coin
@@ -1763,6 +1846,32 @@ def masterpieces_view():
             mp_by_id[mid] = mp
             if mid > max_mp_id:
                 max_mp_id = mid
+    # Seed the metadata cache with the list we just fetched.
+    for mp in masterpieces_data:
+        try:
+            cache_masterpiece_metadata(mp)
+        except Exception:
+            pass
+
+    # Merge cached metadata back into mp_by_id and extend max_mp_id if needed.
+    try:
+        mp_cache = load_masterpiece_metadata_cache()
+    except Exception:
+        mp_cache = {}
+
+    for mid, meta in mp_cache.items():
+        if mid in mp_by_id:
+            base = dict(mp_by_id[mid])
+            # Overlay stored fields without blowing away other keys.
+            for key, val in meta.items():
+                if val not in (None, ""):
+                    base[key] = val
+            mp_by_id[mid] = base
+        else:
+            mp_by_id[mid] = dict(meta)
+        if mid > max_mp_id:
+            max_mp_id = mid
+
 
 
     # ----- How many leaderboard entries to show? (Top 10 / 25 / 50 / 100) -----
@@ -1840,13 +1949,34 @@ def masterpieces_view():
                 planner_mp = mp
                 break
 
+        # If we found it but it's missing a name/label, fetch details and update.
+        if planner_mp and not (
+            planner_mp.get("name")
+            or planner_mp.get("addressableLabel")
+            or planner_mp.get("addressable_label")
+            or planner_mp.get("type")
+        ):
+            try:
+                detailed = fetch_masterpiece_details(planner_mp_id)
+                # update in-place so the dropdown sees the name
+                planner_mp.clear()
+                planner_mp.update(detailed)
+                cache_masterpiece_metadata(detailed)
+            except Exception:
+                pass
+
     # Default to the latest general masterpiece if nothing selected or invalid.
     if not planner_mp and general_mps:
         planner_mp = general_mps[-1]
 
     if planner_mp:
         mp_id_for_calc = str(planner_mp.get("id") or "")
-        planner_mp_id = str(planner_mp.get("id") or "")
+        # Also store/refresh this one in the DB for future loads
+        try:
+            cache_masterpiece_metadata(planner_mp)
+        except Exception:
+            pass
+
 
 
     # ----- Masterpiece selector for "History & Events" leaderboard browser -----
@@ -1878,6 +2008,27 @@ def masterpieces_view():
             # Always fetch fresh details so it works even for MPs we don't have
             # in the initial `masterpieces` list.
             selected_mp = fetch_masterpiece_details(selected_mp_id)
+            # Cache its metadata for future loads
+            try:
+                cache_masterpiece_metadata(selected_mp)
+            except Exception:
+                pass
+
+            # Update history_mp_options entry so the dropdown label gets the name
+            try:
+                mid_int = int(selected_mp.get("id") or 0)
+            except (TypeError, ValueError):
+                mid_int = 0
+            if mid_int:
+                for mp in history_mp_options:
+                    try:
+                        if int(mp.get("id") or 0) == mid_int:
+                            mp.clear()
+                            mp.update(selected_mp)
+                            break
+                    except Exception:
+                        continue
+
             lb = selected_mp.get("leaderboard") or []
             try:
                 selected_mp_top50 = list(lb[:top_n])
@@ -1886,6 +2037,7 @@ def masterpieces_view():
         except Exception:
             selected_mp = None
             selected_mp_top50 = []
+
 
     if not selected_mp and current_mp:
         # Fallback: show current_mp leaderboard if selector fails
@@ -3797,6 +3949,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
