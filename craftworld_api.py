@@ -212,9 +212,9 @@ def fetch_masterpieces() -> list[dict]:
     }
     """
 
-    result = call_graphql(query)
-    data = result.get("data") or {}
+    data = call_graphql(query)
     masterpieces = data.get("masterpieces") or []
+
 
     all_masterpieces: list[dict] = []
 
@@ -437,6 +437,7 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
 
