@@ -2998,8 +2998,6 @@ def masterpieces_view():
                         <th>Points</th>
                       </tr>
                       {% for row in selected_mp_top50 %}
-                        ...
-
                         {% set prof = row.profile or {} %}
                         {% set name = prof.displayName or "" %}
                         {% set uid = prof.uid or "" %}
@@ -4265,6 +4263,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
