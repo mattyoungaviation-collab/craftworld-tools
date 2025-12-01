@@ -2065,91 +2065,92 @@ def masterpieces_view():
       </div>
     </div>
 
-        <div class="section" style="margin-top:16px;">
-          <h2>Leaderboard – Masterpiece Browser</h2>
-
-          {% if mp_selector_options %}
-            <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
-              <label for="mp_view_id">Select Masterpiece:</label>
-              <select id="mp_view_id" name="mp_view_id">
-                {% for mp in mp_selector_options %}
-                  <option value="{{ mp.id }}"
-                    {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
-                    MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
-                    {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
-                  </option>
-                {% endfor %}
-              </select>
-              <button type="submit">View</button>
-            </form>
-          {% else %}
-            <p class="hint">No masterpieces available to browse.</p>
-          {% endif %}
-
-          {% if selected_mp_top50 and selected_mp %}
-            <div class="hint">
-              Showing top {{ selected_mp_top50|length }} positions for
-              <strong>{{ selected_mp.name or selected_mp.id }}</strong>.
-            </div>
-            <div class="mp-table-wrap">
-              <table>
-                <tr>
-                  <th>Pos</th>
-                  <th>Player</th>
-                  <th>Points</th>
-                </tr>
-                {% for row in selected_mp_top50 %}
-                  <tr>
-                    <td>{{ row.position }}</td>
-                    <td>
-                      {% if row.profile and row.profile.displayName %}
-                        {{ row.profile.displayName }}
-                      {% elif row.profile and row.profile.uid %}
-                        {{ row.profile.uid }}
-                      {% else %}
-                        —
-                      {% endif %}
-                    </td>
-                    <td>{{ row.masterpiecePoints | int }}</td>
-                  </tr>
-                {% endfor %}
-              </table>
-            </div>
-          {% else %}
-            <p class="hint">No leaderboard data available for the selected masterpiece.</p>
-          {% endif %}
-        </div>
-
-        <script>
-          (function () {
-            const tabsRoot = document.getElementById("mp-tabs");
-            if (!tabsRoot) return;
-            const buttons = tabsRoot.querySelectorAll(".mp-tab-btn");
-            const panels = tabsRoot.querySelectorAll(".mp-tab-panel");
-
-            buttons.forEach(btn => {
-              btn.addEventListener("click", () => {
-                const tab = btn.getAttribute("data-tab");
-
-                buttons.forEach(b => b.classList.remove("active"));
-                panels.forEach(p => p.classList.remove("active"));
-
-                btn.classList.add("active");
-                const panel = tabsRoot.querySelector(
-                  '.mp-tab-panel[data-tab-panel="' + tab + '"]'
-                );
-                if (panel) panel.classList.add("active");
-              });
-            });
-          })();
-        </script>
-      {% else %}
-        <p>No masterpieces found.</p>
+    <div class="card">
+      <h1>Current Masterpieces</h1>
+      {% if error %}
+        <div class="error">{{ error }}</div>
       {% endif %}
+
+      <div class="section" style="margin-top:16px;">
+        <h2>Leaderboard – Masterpiece Browser</h2>
+
+        {% if mp_selector_options %}
+          <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
+            <label for="mp_view_id">Select Masterpiece:</label>
+            <select id="mp_view_id" name="mp_view_id">
+              {% for mp in mp_selector_options %}
+                <option value="{{ mp.id }}"
+                  {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
+                  MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
+                  {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
+                </option>
+              {% endfor %}
+            </select>
+            <button type="submit">View</button>
+          </form>
+        {% else %}
+          <p class="hint">No masterpieces available to browse.</p>
+        {% endif %}
+
+        {% if selected_mp_top50 and selected_mp %}
+          <div class="hint">
+            Showing top {{ selected_mp_top50|length }} positions for
+            <strong>{{ selected_mp.name or selected_mp.id }}</strong>.
+          </div>
+          <div class="mp-table-wrap">
+            <table>
+              <tr>
+                <th>Pos</th>
+                <th>Player</th>
+                <th>Points</th>
+              </tr>
+              {% for row in selected_mp_top50 %}
+                <tr>
+                  <td>{{ row.position }}</td>
+                  <td>
+                    {% if row.profile and row.profile.displayName %}
+                      {{ row.profile.displayName }}
+                    {% elif row.profile and row.profile.uid %}
+                      {{ row.profile.uid }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>{{ row.masterpiecePoints | int }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          </div>
+        {% else %}
+          <p class="hint">No leaderboard data available for the selected masterpiece.</p>
+        {% endif %}
+      </div>
+
+      <script>
+        (function () {
+          const tabsRoot = document.getElementById("mp-tabs");
+          if (!tabsRoot) return;
+          const buttons = tabsRoot.querySelectorAll(".mp-tab-btn");
+          const panels = tabsRoot.querySelectorAll(".mp-tab-panel");
+
+          buttons.forEach(btn => {
+            btn.addEventListener("click", () => {
+              const tab = btn.getAttribute("data-tab");
+
+              buttons.forEach(b => b.classList.remove("active"));
+              panels.forEach(p => p.classList.remove("active"));
+
+              const panel = tabsRoot.querySelector(
+                '.mp-tab-panel[data-tab-panel="' + tab + '"]'
+              );
+              if (panel) panel.classList.add("active");
+            });
+          });
+        })();
+      </script>
     </div>
-
-
     """
+
 
     # Render inner content with context
     inner = render_template_string(
@@ -3330,6 +3331,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
