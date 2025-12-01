@@ -378,20 +378,6 @@ query Masterpiece($id: ID) {
 }
 """
 
-def fetch_masterpiece_details(masterpiece_id: int | str) -> dict | None:
-    """
-    Fetch a single masterpiece (resources, leaderboard, rewardStages, leaderboardRewards, etc.).
-    """
-    data = call_graphql(
-        MASTERPIECE_DETAILS_QUERY,
-        {"id": str(masterpiece_id)},
-    )
-
-    if not isinstance(data, dict):
-        return None
-
-    return data.get("masterpiece")
-
 
 
 def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -434,6 +420,7 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
 
