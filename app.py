@@ -280,37 +280,84 @@ def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[st
 
 
 
-def get_mp_per_unit_rewards(mp_id: str, symbols: List[str]) -> Dict[str, Dict[str, float]]:
+def compute_leaderboard_gap_for_highlight(
+    rows: List[Dict[str, Any]],
+    highlight_query: str,
+) -> Optional[Dict[str, Any]]:
     """
-    Pre-compute masterpiece points and XP per 1 unit for each symbol in `symbols`.
+    Given a leaderboard (rows) and a highlight_query (name or UID),
+    find that row and compute:
+      - points needed to pass the player above
+      - points lead over the player below
 
-    This is a thin wrapper around predict_reward(...) that calls it once per
-    unique token with amount = 1.0.
-
-    Returns a dict:
-      {
-        "points": { "SEAWATER": 4_200_000.0, ... },
-        "xp":     { "SEAWATER":   350_000.0, ... },
-      }
+    Returns a dict or None if the highlighted player is not found.
     """
-    unique_syms = sorted({(s or "").upper() for s in symbols if s})
-    points: Dict[str, float] = {}
-    xp: Dict[str, float] = {}
+    highlight_query = (highlight_query or "").strip()
+    if not highlight_query or not rows:
+        return None
 
-    if not mp_id or not unique_syms:
-        return {"points": points, "xp": xp}
+    q = highlight_query.lower()
 
-    for sym in unique_syms:
+    def _get_points(r: Dict[str, Any]) -> float:
         try:
-            pr = predict_reward(mp_id, [{"symbol": sym, "amount": 1.0}]) or {}
-            points[sym] = float(pr.get("masterpiecePoints") or 0.0)
-            xp[sym] = float(pr.get("experiencePoints") or 0.0)
+            return float(r.get("masterpiecePoints") or 0)
         except Exception:
-            # If anything fails, just treat this token as 0 points / 0 XP per unit
-            points[sym] = 0.0
-            xp[sym] = 0.0
+            return 0.0
 
-    return {"points": points, "xp": xp}
+    def _get_name(r: Dict[str, Any]) -> str:
+        prof = r.get("profile") or {}
+        return prof.get("displayName") or prof.get("uid") or "?"
+
+    # Find the highlighted row
+    idx = None
+    for i, row in enumerate(rows):
+        prof = row.get("profile") or {}
+        name = (prof.get("displayName") or "").lower()
+        uid = (prof.get("uid") or "").lower()
+        if q in name or q in uid:
+            idx = i
+            break
+
+    if idx is None:
+        return None
+
+    cur_row = rows[idx]
+    cur_pts = _get_points(cur_row)
+    cur_pos = cur_row.get("position")
+
+    # Player above (better rank)
+    above = rows[idx - 1] if idx > 0 else None
+    gap_up = None
+    above_name = None
+    above_pos = None
+    if above is not None:
+        above_pts = _get_points(above)
+        gap_up = max(0.0, above_pts - cur_pts + 1.0)
+        above_name = _get_name(above)
+        above_pos = above.get("position")
+
+    # Player below (worse rank)
+    below = rows[idx + 1] if idx + 1 < len(rows) else None
+    gap_down = None
+    below_name = None
+    below_pos = None
+    if below is not None:
+        below_pts = _get_points(below)
+        gap_down = max(0.0, cur_pts - below_pts + 1.0)
+        below_name = _get_name(below)
+        below_pos = below.get("position")
+
+    return {
+        "position": cur_pos,
+        "points": cur_pts,
+        "gap_up": gap_up,
+        "gap_down": gap_down,
+        "above_name": above_name,
+        "above_pos": above_pos,
+        "below_name": below_name,
+        "below_pos": below_pos,
+    }
+
 
 
 def _default_boost_levels() -> dict[str, dict[str, int]]:
@@ -1925,6 +1972,12 @@ def masterpieces_view():
     else:
         current_mp_top50 = []
 
+    # Gap info for highlighted player on the current leaderboard
+    current_gap: Optional[Dict[str, Any]] = compute_leaderboard_gap_for_highlight(
+        current_mp_top50,
+        highlight_query,
+    )
+
     # This will be set after resolving the planner target masterpiece.
     mp_id_for_calc: Optional[str] = None
 
@@ -2043,6 +2096,13 @@ def masterpieces_view():
         # Fallback: show current_mp leaderboard if selector fails
         selected_mp = current_mp
         selected_mp_top50 = current_mp_top50
+
+    # Gap info for highlighted player on the selected/history leaderboard
+    selected_gap: Optional[Dict[str, Any]] = compute_leaderboard_gap_for_highlight(
+        selected_mp_top50,
+        highlight_query,
+    )
+
 
 
 
@@ -2595,6 +2655,29 @@ def masterpieces_view():
                 <button type="submit">Apply</button>
                 <span class="hint">Only the top 100 are supported.</span>
               </form>
+              
+              {% if highlight_query and current_gap %}
+                <p class="hint" style="margin-bottom:6px;">
+                  You are at position <strong>{{ current_gap.position }}</strong>
+                  with <strong>{{ current_gap.points | int }}</strong> points.
+                  {% if current_gap.gap_up is not none %}
+                    To pass
+                    <strong>{{ current_gap.above_name }}</strong>
+                    (#{{ current_gap.above_pos }}),
+                    you need
+                    <strong>{{ current_gap.gap_up | int }}</strong> more points.
+                  {% else %}
+                    You are currently at the top position.
+                  {% endif %}
+                  {% if current_gap.gap_down is not none %}
+                    The player behind you,
+                    <strong>{{ current_gap.below_name }}</strong>
+                    (#{{ current_gap.below_pos }}),
+                    is
+                    <strong>{{ current_gap.gap_down | int }}</strong> points behind.
+                  {% endif %}
+                </p>
+              {% endif %}
 
               {% if current_mp_top50 %}
                 <div class="mp-table-wrap">
@@ -2680,6 +2763,30 @@ def masterpieces_view():
 
               {% if selected_mp %}
                 {% if selected_mp_top50 %}
+
+                  {% if highlight_query and selected_gap %}
+                    <p class="hint" style="margin-bottom:6px;">
+                      You are at position <strong>{{ selected_gap.position }}</strong>
+                      with <strong>{{ selected_gap.points | int }}</strong> points.
+                      {% if selected_gap.gap_up is not none %}
+                        To pass
+                        <strong>{{ selected_gap.above_name }}</strong>
+                        (#{{ selected_gap.above_pos }}),
+                        you need
+                        <strong>{{ selected_gap.gap_up | int }}</strong> more points.
+                      {% else %}
+                        You are currently at the top position.
+                      {% endif %}
+                      {% if selected_gap.gap_down is not none %}
+                        The player behind you,
+                        <strong>{{ selected_gap.below_name }}</strong>
+                        (#{{ selected_gap.below_pos }}),
+                        is
+                        <strong>{{ selected_gap.gap_down | int }}</strong> points behind.
+                      {% endif %}
+                    </p>
+                  {% endif %}
+
                   <div class="mp-table-wrap">
                     <table>
                       <tr>
@@ -2688,6 +2795,8 @@ def masterpieces_view():
                         <th>Points</th>
                       </tr>
                       {% for row in selected_mp_top50 %}
+                        ...
+
                         {% set prof = row.profile or {} %}
                         {% set name = prof.displayName or "" %}
                         {% set uid = prof.uid or "" %}
@@ -2797,6 +2906,8 @@ def masterpieces_view():
         selected_mp_top50=selected_mp_top50,
         selected_mp_id=selected_mp_id,
         highlight_query=highlight_query,
+        current_gap=current_gap,
+        selected_gap=selected_gap,
         top_n=top_n,
         top_n_options=TOP_N_OPTIONS,
     )
@@ -3949,6 +4060,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
