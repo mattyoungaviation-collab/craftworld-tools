@@ -1715,21 +1715,15 @@ def boosts():
 @app.route("/masterpieces", methods=["GET", "POST"])
 def masterpieces_view():
     """
-    Show current masterpieces AND a Masterpiece Level Calculator.
-
-    - Calculator:
-        * Uses the latest general (non-event) masterpiece as the base MP
-        * predict_reward(...) for total points + XP
-        * Live prices for COIN cost
-        * Maps points → tier + progress
-    - Leaderboards:
-        * Always shows top 50 for the *current* masterpiece
-        * Has a browser dropdown to view any MP (general or event) by name
+    Masterpiece Hub:
+      - Donation Planner (per-unit MP points, live COIN cost, tier progress)
+      - Live leaderboard for the current masterpiece (top 50)
+      - History & Event browser (top 50 by MP, grouped general/event)
     """
     error: Optional[str] = None
     masterpieces_data: List[Dict[str, Any]] = []
 
-    # Load MP list
+    # Load MP list from Craft World
     try:
         masterpieces_data = fetch_masterpieces()
     except Exception as e:
@@ -1757,7 +1751,7 @@ def masterpieces_view():
     general_mps = sorted(general_mps, key=_mp_id)
     event_mps = sorted(event_mps, key=_mp_id)
 
-    # Pick current masterpiece: latest general MP if available, otherwise latest event MP
+    # Pick the "current" masterpiece: latest general if available, otherwise latest event
     mp_id_for_calc: Optional[str] = None
     current_mp: Optional[Dict[str, Any]] = None
     current_mp_top50: List[Dict[str, Any]] = []
@@ -1777,9 +1771,10 @@ def masterpieces_view():
     else:
         current_mp_top50 = []
 
-    # ---- Masterpiece selector for leaderboard browsing ----
+    # ----- Masterpiece selector for "History & Events" leaderboard browser -----
 
-    # Selector options: all general first, then all event MPs, sorted by ID
+    # We still build a combined list to drive the selected_mp resolution,
+    # but the UI dropdown will show separate optgroups for general vs event.
     mp_selector_options: List[Dict[str, Any]] = []
     mp_selector_options.extend(general_mps)
     mp_selector_options.extend(event_mps)
@@ -1804,11 +1799,11 @@ def masterpieces_view():
         except Exception:
             selected_mp_top50 = []
     elif current_mp:
-        # Fallback: if something went weird, show current_mp leaderboard
+        # Fallback: show current_mp leaderboard if selector fails
         selected_mp = current_mp
         selected_mp_top50 = current_mp_top50
 
-    # ---------- Calculator state (list of {token, amount}) ----------
+    # ---------- Donation Planner state (list of {token, amount}) ----------
     calc_resources: List[Dict[str, Any]] = []
     calc_result: Optional[Dict[str, Any]] = None
 
@@ -1833,7 +1828,7 @@ def masterpieces_view():
         except Exception:
             calc_resources = []
 
-        # Apply current action
+        # Apply the current action
         if action == "add":
             tok = (request.form.get("calc_token") or "").upper().strip()
             amt_raw = (request.form.get("calc_amount") or "").replace(",", "").strip()
@@ -1849,7 +1844,7 @@ def masterpieces_view():
 
         # ---------- Compute totals if we have resources ----------
         if calc_resources and not error:
-            # 1) Live prices → COIN cost
+            # 1) Live prices → total COIN cost
             try:
                 prices = fetch_live_prices_in_coin()
             except Exception:
@@ -1964,203 +1959,483 @@ def masterpieces_view():
     # ---------- Render content for this tab ----------
     content = """
     <div class="card">
-      <h1>🏆 Masterpiece Level Calculator</h1>
-      <p>
-        Plan your donations across resources and see your total points, XP, COIN cost
-        and which tier you'll land in. Uses the latest general masterpiece for scoring.
+      <style>
+        .mp-top-summary {
+          margin-top: 8px;
+          margin-bottom: 10px;
+        }
+        .mp-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 8px;
+        }
+        .mp-summary-tile {
+          border-radius: 12px;
+          padding: 8px 10px;
+          background: radial-gradient(circle at top, rgba(30,64,175,0.55), rgba(15,23,42,0.95));
+          border: 1px solid rgba(129,140,248,0.7);
+          font-size: 13px;
+        }
+        .mp-summary-title {
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #bfdbfe;
+          margin-bottom: 2px;
+        }
+        .mp-summary-main {
+          font-size: 14px;
+          font-weight: 600;
+          color: #f9fafb;
+        }
+        .mp-summary-sub {
+          font-size: 12px;
+          color: #9ca3af;
+        }
+
+        .mp-subnav {
+          margin-top: 14px;
+          margin-bottom: 6px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .mp-tab {
+          border-radius: 999px;
+          border: 1px solid rgba(148,163,184,0.7);
+          background: rgba(15,23,42,0.9);
+          padding: 5px 11px;
+          font-size: 13px;
+          color: #e5e7eb;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .mp-tab span.icon {
+          font-size: 14px;
+        }
+        .mp-tab.active {
+          border-color: transparent;
+          background: linear-gradient(135deg, #22c55e, #0ea5e9);
+          color: #020617;
+          box-shadow: 0 0 0 1px rgba(34,197,94,0.6), 0 8px 24px rgba(34,197,94,0.4);
+        }
+
+        .mp-section {
+          margin-top: 10px;
+        }
+
+        .mp-pill {
+          display:inline-block;
+          padding: 2px 8px;
+          border-radius:999px;
+          font-size:11px;
+          border:1px solid rgba(52,211,153,0.7);
+          color:#a7f3d0;
+          background:rgba(6,95,70,0.35);
+        }
+        .mp-pill-secondary {
+          border-color: rgba(129,140,248,0.9);
+          color:#c7d2fe;
+          background:rgba(30,64,175,0.45);
+        }
+
+        .mp-tier-table th,
+        .mp-tier-table td {
+          white-space: nowrap;
+        }
+
+        .mp-planner-grid {
+          display:grid;
+          grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+          gap: 10px;
+        }
+
+        .mp-stat-block {
+          display:flex;
+          flex-direction:row;
+          flex-wrap:wrap;
+          gap: 10px;
+          font-size:13px;
+        }
+        .mp-stat-label {
+          color:#9ca3af;
+          font-size:12px;
+        }
+        .mp-stat-value {
+          font-size:14px;
+          font-weight:600;
+        }
+
+        @media (max-width: 768px) {
+          .mp-planner-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+      </style>
+
+      <h1>🏛 Masterpiece Hub</h1>
+      <p class="subtle">
+        Plan donations, watch the live race, and browse past &amp; event Masterpieces —
+        all wired directly to <code>predictReward</code> and live COIN prices.
       </p>
 
-      <div class="two-col">
-        <!-- Left: static tier table -->
-        <div class="section">
-          <h2 style="margin-top:0;">Masterpiece Tier Requirements</h2>
-          <table>
-            <tr>
-              <th>Tier</th>
-              <th>Required Points</th>
-            </tr>
-            {% for row in tier_rows %}
-              <tr>
-                <td>Tier {{ row.tier }}</td>
-                <td>{{ "{:,}".format(row.required) }}</td>
-              </tr>
-            {% endfor %}
-          </table>
+      {% if current_mp %}
+        <div class="mp-top-summary">
+          <div class="mp-summary-grid">
+            <div class="mp-summary-tile">
+              <div class="mp-summary-title">Current masterpiece (used for planner)</div>
+              <div class="mp-summary-main">
+                MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}
+              </div>
+              <div class="mp-summary-sub">
+                {% if current_mp.eventId %}
+                  <span class="mp-pill">Event Masterpiece</span>
+                {% else %}
+                  <span class="mp-pill">General Masterpiece</span>
+                {% endif %}
+                <span style="margin-left:6px;" class="mp-pill mp-pill-secondary">
+                  Scoring source for 🧮 Planner
+                </span>
+              </div>
+            </div>
+            <div class="mp-summary-tile">
+              <div class="mp-summary-title">Masterpiece pool</div>
+              <div class="mp-summary-main">
+                {{ general_mps|length }} general · {{ event_mps|length }} event
+              </div>
+              <div class="mp-summary-sub">
+                History browser lets you inspect any MP&apos;s top 50 at any time.
+              </div>
+            </div>
+            <div class="mp-summary-tile">
+              <div class="mp-summary-title">Live leaderboard snapshot</div>
+              <div class="mp-summary-main">
+                Top {{ current_mp_top50|length }} tracked
+              </div>
+              <div class="mp-summary-sub">
+                Switch to the <strong>📈 Current MP</strong> tab to see positions &amp; point gaps.
+              </div>
+            </div>
+          </div>
         </div>
+      {% endif %}
 
-        <!-- Right: input form + results -->
-        <div class="section">
-          <form method="post">
-            <input type="hidden" name="calc_state" value='{{ calc_state_json }}'>
-            <h2 style="margin-top:0;">Build a Bundle</h2>
+      <div class="mp-subnav">
+        <button type="button" class="mp-tab active" data-mp-tab="planner">
+          <span class="icon">🧮</span> Donation Planner
+        </button>
+        <button type="button" class="mp-tab" data-mp-tab="current">
+          <span class="icon">📈</span> Current MP leaderboard
+        </button>
+        <button type="button" class="mp-tab" data-mp-tab="history">
+          <span class="icon">📜</span> History &amp; events
+        </button>
+      </div>
 
-            <label for="calc_token">Select Resource:</label>
-            <select id="calc_token" name="calc_token">
-              <option value="">-- Choose a Resource --</option>
-              {% for tok in ALL_FACTORY_TOKENS %}
-                <option value="{{ tok }}">{{ tok }}</option>
-              {% endfor %}
-            </select>
-
-            <label for="calc_amount" style="margin-top:8px;">Quantity:</label>
-            <input id="calc_amount" name="calc_amount" type="number" step="1" min="1" placeholder="Enter amount">
-
-            <div class="two-col" style="margin-top:10px; gap:8px;">
-              <button type="submit" name="calc_action" value="add">➕ Add Resource</button>
-              <button type="submit" name="calc_action" value="clear">🗑️ Clear All</button>
+      <div class="mp-sections">
+        <!-- 🧮 Donation Planner -->
+        <div class="mp-section" data-mp-section="planner" style="display:block;">
+          <div class="mp-planner-grid">
+            <!-- Left: tier table -->
+            <div class="section">
+              <h2 style="margin-top:0;">Tier ladder</h2>
+              <p class="subtle">
+                Official tier thresholds for the active general Masterpiece.
+              </p>
+              <div class="scroll-x">
+                <table class="mp-tier-table">
+                  <tr>
+                    <th>Tier</th>
+                    <th>Required points</th>
+                    <th>Delta vs previous</th>
+                  </tr>
+                  {% for row in tier_rows %}
+                    <tr>
+                      <td>Tier {{ row.tier }}</td>
+                      <td>{{ "{:,}".format(row.required) }}</td>
+                      <td>
+                        {% if row.tier == 1 %}
+                          —
+                        {% else %}
+                          +{{ "{:,}".format(row.delta) }}
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
             </div>
 
-            <h3 style="margin-top:16px;">📋 Added Resources</h3>
-            {% if calc_resources %}
-              <table>
-                <tr>
-                  <th>Token</th>
-                  <th style="text-align:right;">Quantity</th>
-                  <th style="text-align:right;">Points</th>
-                  <th style="text-align:right;">XP</th>
-                </tr>
-                {% for row in calc_resources %}
-                  <tr>
-                    <td>{{ row.token }}</td>
-                    <td style="text-align:right;">{{ row.amount }}</td>
-                    <td style="text-align:right;">{{ row.points_str or "—" }}</td>
-                    <td style="text-align:right;">{{ row.xp_str or "—" }}</td>
-                  </tr>
-                {% endfor %}
-              </table>
-            {% else %}
-              <p class="hint">No resources added yet.</p>
+            <!-- Right: planner form & results -->
+            <div class="section">
+              <form method="post">
+                <input type="hidden" name="calc_state" value='{{ calc_state_json }}'>
+
+                <h2 style="margin-top:0;">Build a donation bundle</h2>
+                <p class="subtle">
+                  Choose resources, set amounts, and we&apos;ll predict total
+                  <strong>MP points</strong>, <strong>XP</strong>, and <strong>COIN cost</strong>
+                  using the current general Masterpiece.
+                </p>
+
+                <div class="two-col" style="gap:10px;">
+                  <div>
+                    <label for="calc_token">Resource</label>
+                    <select id="calc_token" name="calc_token">
+                      <option value="">-- Choose resource --</option>
+                      {% for tok in ALL_FACTORY_TOKENS %}
+                        <option value="{{ tok }}">{{ tok }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div>
+                    <label for="calc_amount">Quantity</label>
+                    <input id="calc_amount" name="calc_amount" type="number" step="1" min="1" placeholder="Enter amount">
+                  </div>
+                </div>
+
+                <div class="two-col" style="margin-top:10px; gap:8px;">
+                  <button type="submit" name="calc_action" value="add">➕ Add resource</button>
+                  <button type="submit" name="calc_action" value="clear">🗑️ Clear all</button>
+                </div>
+
+                <h3 style="margin-top:16px;">📋 Current bundle</h3>
+                {% if calc_resources %}
+                  <div class="scroll-x">
+                    <table>
+                      <tr>
+                        <th>Token</th>
+                        <th style="text-align:right;">Quantity</th>
+                        <th style="text-align:right;">Points</th>
+                        <th style="text-align:right;">XP</th>
+                      </tr>
+                      {% for row in calc_resources %}
+                        <tr>
+                          <td>{{ row.token }}</td>
+                          <td style="text-align:right;">{{ row.amount }}</td>
+                          <td style="text-align:right;">{{ row.points_str or "—" }}</td>
+                          <td style="text-align:right;">{{ row.xp_str or "—" }}</td>
+                        </tr>
+                      {% endfor %}
+                    </table>
+                  </div>
+                {% else %}
+                  <p class="hint">Nothing in the bundle yet. Add a resource to get started.</p>
+                {% endif %}
+
+                <h3 style="margin-top:16px;">📊 Result vs tier ladder</h3>
+                {% if calc_result %}
+                  <div class="mp-stat-block">
+                    <div>
+                      <div class="mp-stat-label">Total points</div>
+                      <div class="mp-stat-value">{{ calc_result.total_points_str }}</div>
+                    </div>
+                    <div>
+                      <div class="mp-stat-label">Total XP</div>
+                      <div class="mp-stat-value">{{ calc_result.total_xp_str }}</div>
+                    </div>
+                    <div>
+                      <div class="mp-stat-label">Total cost</div>
+                      <div class="mp-stat-value">COIN {{ calc_result.total_cost_str }}</div>
+                    </div>
+                    <div>
+                      <div class="mp-stat-label">Tier reached</div>
+                      <div class="mp-stat-value">
+                        {% if calc_result.tier > 0 %}
+                          Tier {{ calc_result.tier }}
+                        {% else %}
+                          Below Tier 1
+                        {% endif %}
+                      </div>
+                    </div>
+                  </div>
+
+                  {% if calc_result.next_tier_index %}
+                    <p style="margin-top:10px;" class="subtle">
+                      Progress to <strong>Tier {{ calc_result.next_tier_index }}</strong>:<br>
+                      {{ calc_result.progress_to_next_pct }}% — 
+                      {{ calc_result.points_to_next_str }} more points needed.
+                    </p>
+                  {% else %}
+                    <p style="margin-top:10px;" class="subtle">
+                      You&apos;re at the <strong>maximum tier</strong> for this masterpiece with this bundle.
+                    </p>
+                  {% endif %}
+                {% else %}
+                  <p class="hint">
+                    Add some resources and click <strong>➕ Add resource</strong> to see points, XP, and tier progress.
+                  </p>
+                {% endif %}
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- 📈 Current MP leaderboard -->
+        <div class="mp-section" data-mp-section="current" style="display:none;">
+          <div class="section" style="margin-top:4px;">
+            <h2>Live leaderboard – current Masterpiece</h2>
+            {% if error %}
+              <div class="error">{{ error }}</div>
             {% endif %}
 
-            <h3 style="margin-top:16px;">📊 Calculation Results</h3>
-            {% if calc_result %}
-              <p><strong>TOTAL POINTS</strong><br>{{ calc_result.total_points_str }}</p>
-              <p><strong>TOTAL XP</strong><br>{{ calc_result.total_xp_str }}</p>
-              <p><strong>MASTERPIECE TIER</strong><br>
-                {% if calc_result.tier > 0 %}
-                  Tier {{ calc_result.tier }}
-                {% else %}
-                  Below Tier 1
-                {% endif %}
+            {% if current_mp %}
+              <p class="subtle">
+                MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}<br>
+                Showing top {{ current_mp_top50|length }} players.
               </p>
-              <p><strong>TOTAL COST</strong><br>COIN {{ calc_result.total_cost_str }}</p>
-
-              {% if calc_result.next_tier_index %}
-                <p>
-                  <strong>Progress to Tier {{ calc_result.next_tier_index }}:</strong><br>
-                  {{ calc_result.progress_to_next_pct }}% —
-                  {{ calc_result.points_to_next_str }} more points needed.
-                </p>
+              {% if current_mp_top50 %}
+                <div class="mp-table-wrap">
+                  <table>
+                    <tr>
+                      <th>Pos</th>
+                      <th>Player</th>
+                      <th>Points</th>
+                    </tr>
+                    {% for row in current_mp_top50 %}
+                      <tr>
+                        <td>{{ row.position }}</td>
+                        <td class="subtle">
+                          {% if row.profile and row.profile.displayName %}
+                            {{ row.profile.displayName }}
+                          {% elif row.profile and row.profile.uid %}
+                            {{ row.profile.uid }}
+                          {% else %}
+                            —
+                          {% endif %}
+                        </td>
+                        <td>{{ row.masterpiecePoints | int }}</td>
+                      </tr>
+                    {% endfor %}
+                  </table>
+                </div>
               {% else %}
-                <p><strong>You are at max tier.</strong></p>
+                <p class="hint">No leaderboard data yet for the current masterpiece.</p>
               {% endif %}
             {% else %}
-              <p class="hint">Add some resources and hit "Add" to see results.</p>
+              <p class="hint">No active masterpieces detected.</p>
             {% endif %}
-          </form>
+          </div>
         </div>
-      </div>
-    </div>
 
-    <div class="card">
-      <h1>Current Masterpieces</h1>
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
+        <!-- 📜 History & events browser -->
+        <div class="mp-section" data-mp-section="history" style="display:none;">
+          <div class="section" style="margin-top:4px;">
+            <h2>History &amp; event browser</h2>
+            <p class="subtle">
+              Inspect the top <strong>50</strong> positions for any general or event masterpiece.
+            </p>
 
-      {% if current_mp %}
-        <div class="section" style="margin-top:8px;">
-          <h2>Live Leaderboard – Current Masterpiece</h2>
-          <p class="subtle">
-            MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}<br>
-            Showing top {{ current_mp_top50|length }} players.
-          </p>
-          {% if current_mp_top50 %}
-            <div class="mp-table-wrap">
-              <table>
-                <tr>
-                  <th>Pos</th>
-                  <th>Player</th>
-                  <th>Points</th>
-                </tr>
-                {% for row in current_mp_top50 %}
+            {% if general_mps or event_mps %}
+              <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
+                <label for="mp_view_id">Choose a masterpiece</label>
+                <select id="mp_view_id" name="mp_view_id" style="max-width:320px;">
+                  {% if general_mps %}
+                    <optgroup label="General masterpieces">
+                      {% for mp in general_mps %}
+                        <option value="{{ mp.id }}"
+                          {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
+                          MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
+                          {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
+                        </option>
+                      {% endfor %}
+                    </optgroup>
+                  {% endif %}
+                  {% if event_mps %}
+                    <optgroup label="Event masterpieces">
+                      {% for mp in event_mps %}
+                        <option value="{{ mp.id }}"
+                          {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
+                          MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
+                        </option>
+                      {% endfor %}
+                    </optgroup>
+                  {% endif %}
+                </select>
+                <button type="submit" style="margin-left:6px;">View leaderboard</button>
+              </form>
+            {% else %}
+              <p class="hint">No masterpieces available to browse.</p>
+            {% endif %}
+
+            {% if selected_mp_top50 and selected_mp %}
+              <div class="hint" style="margin-bottom:6px;">
+                Showing top {{ selected_mp_top50|length }} positions for
+                <strong>
+                  MP {{ selected_mp.id }} — {{ selected_mp.name or selected_mp.addressableLabel or selected_mp.type }}
+                </strong>.
+              </div>
+              <div class="mp-table-wrap">
+                <table>
                   <tr>
-                    <td>{{ row.position }}</td>
-                    <td>
-                      {% if row.profile and row.profile.displayName %}
-                        {{ row.profile.displayName }}
-                      {% elif row.profile and row.profile.uid %}
-                        {{ row.profile.uid }}
-                      {% else %}
-                        —
-                      {% endif %}
-                    </td>
-                    <td>{{ row.masterpiecePoints | int }}</td>
+                    <th>Pos</th>
+                    <th>Player</th>
+                    <th>Points</th>
                   </tr>
-                {% endfor %}
-              </table>
-            </div>
-          {% else %}
-            <p class="hint">No leaderboard data yet for the current masterpiece.</p>
-          {% endif %}
+                  {% for row in selected_mp_top50 %}
+                    <tr>
+                      <td>{{ row.position }}</td>
+                      <td class="subtle">
+                        {% if row.profile and row.profile.displayName %}
+                          {{ row.profile.displayName }}
+                        {% elif row.profile and row.profile.uid %}
+                          {{ row.profile.uid }}
+                        {% else %}
+                          —
+                        {% endif %}
+                      </td>
+                      <td>{{ row.masterpiecePoints | int }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
+            {% elif general_mps or event_mps %}
+              <p class="hint">Select a masterpiece above to view its leaderboard.</p>
+            {% else %}
+              <p class="hint">No leaderboard data available.</p>
+            {% endif %}
+          </div>
         </div>
-      {% endif %}
-
-      <div class="section" style="margin-top:16px;">
-        <h2>Leaderboard – Masterpiece Browser (All MPs)</h2>
-
-        {% if mp_selector_options %}
-          <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
-            <label for="mp_view_id">Select Masterpiece:</label>
-            <select id="mp_view_id" name="mp_view_id">
-              {% for mp in mp_selector_options %}
-                <option value="{{ mp.id }}"
-                  {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
-                  MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
-                  {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
-                </option>
-              {% endfor %}
-            </select>
-            <button type="submit">View</button>
-          </form>
-        {% else %}
-          <p class="hint">No masterpieces available to browse.</p>
-        {% endif %}
-
-        {% if selected_mp_top50 and selected_mp %}
-          <div class="hint">
-            Showing top {{ selected_mp_top50|length }} positions for
-            <strong>{{ selected_mp.name or selected_mp.id }}</strong>.
-          </div>
-          <div class="mp-table-wrap">
-            <table>
-              <tr>
-                <th>Pos</th>
-                <th>Player</th>
-                <th>Points</th>
-              </tr>
-              {% for row in selected_mp_top50 %}
-                <tr>
-                  <td>{{ row.position }}</td>
-                  <td>
-                    {% if row.profile and row.profile.displayName %}
-                      {{ row.profile.displayName }}
-                    {% elif row.profile and row.profile.uid %}
-                      {{ row.profile.uid }}
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td>{{ row.masterpiecePoints | int }}</td>
-                </tr>
-              {% endfor %}
-            </table>
-          </div>
-        {% else %}
-          <p class="hint">No leaderboard data available for the selected masterpiece.</p>
-        {% endif %}
       </div>
     </div>
+
+    <script>
+      (function() {
+        const tabs = document.querySelectorAll('.mp-tab');
+        const sections = document.querySelectorAll('.mp-section');
+
+        function activate(name) {
+          tabs.forEach(btn => {
+            const t = btn.getAttribute('data-mp-tab');
+            if (t === name) {
+              btn.classList.add('active');
+            } else {
+              btn.classList.remove('active');
+            }
+          });
+          sections.forEach(sec => {
+            const s = sec.getAttribute('data-mp-section');
+            if (s === name) {
+              sec.style.display = 'block';
+            } else {
+              sec.style.display = 'none';
+            }
+          });
+        }
+
+        tabs.forEach(btn => {
+          btn.addEventListener('click', function() {
+            const t = this.getAttribute('data-mp-tab') || 'planner';
+            activate(t);
+          });
+        });
+
+        // Default landing tab
+        activate('planner');
+      })();
+    </script>
     """
 
     # Render inner content with context
@@ -2191,6 +2466,7 @@ def masterpieces_view():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -3342,6 +3618,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
