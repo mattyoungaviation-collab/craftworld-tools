@@ -189,194 +189,164 @@ def fetch_craftworld(uid: str) -> Dict[str, Any]:
     return data["fetchCraftWorld"]
 
 
-def fetch_masterpieces() -> List[Dict[str, Any]]:
-    """
-    Fetch current Masterpieces info + leaderboard (all entries).
-    """
-    query = """
-    query Masterpieces {
-      masterpieces {
-        id
-        name
-        type
-        eventId
-        collectedPoints
-        requiredPoints
-        addressableLabel
-        leaderboard {
-          position
-          masterpiecePoints
-          profile {
-            uid
-            walletAddress
-            avatarUrl
-            displayName
-          }
-        }
-      }
-    }
-    """
-    data = call_graphql(query, None)
-    return data.get("masterpieces") or []
 
-
-def fetch_masterpiece_details(
-    masterpiece_id: int | str,
-    jwt: Optional[str] = None,
-) -> Dict[str, Any]:
+def fetch_masterpiece_details(masterpiece_id: int) -> Dict[str, Any]:
     """
-    Fetch a single masterpiece including resources, leaderboard,
-    reward stages, and leaderboard rewards.
+    Fetch full masterpiece details for the given ID, including
+    rewardStages, battlePassRewards, leaderboardRewards, and
+    your own profile/resources for that MP.
     """
-    # Use the big GraphQL query you already defined above:
-    query = MASTERPIECE_DETAILS_QUERY
-
-    # Fall back to the default JWT if none explicitly provided
-    jwt = jwt or CRAFTWORLD_JWT
-
-    # Variables expected by the query
-    variables: Dict[str, Any] = {"id": str(masterpiece_id)}
-
-    # Call Craft World GraphQL
-    data = call_graphql(query, variables=variables, jwt=jwt)
+    data = call_graphql(
+        MASTERPIECE_DETAILS_QUERY,
+        variables={"id": str(masterpiece_id)},
+    )
 
     masterpiece = data.get("masterpiece")
     if masterpiece is None:
-        raise CraftWorldAPIError(f"No masterpiece found for id={masterpiece_id}")
+        raise RuntimeError(f"No masterpiece found for id {masterpiece_id}")
 
     return masterpiece
 
+
+
 MASTERPIECE_DETAILS_QUERY = """
-query Masterpiece($id: ID) {
-    masterpiece(id: $id) {
-        id
-        name
-        type
-        eventId
-        collectedPoints
-        requiredPoints
-        addressableLabel
-
-        resources {
-            symbol
-            amount
-            target
-            consumedPowerPerUnit
-        }
-
-        leaderboard {
-            position
-            masterpiecePoints
-            profile {
-                uid
-                walletAddress
-                avatarUrl
-                displayName
+    query Masterpiece($id: ID) {
+        masterpiece(id: $id) {
+            id
+            name
+            type
+            eventId
+            collectedPoints
+            requiredPoints
+            addressableLabel
+            resources {
+                symbol
+                amount
+                target
+                consumedPowerPerUnit
             }
-        }
-
-        rewardStages {
-            requiredMasterpiecePoints
-
-            rewards {
-                __typename
-                ... on Resource {
-                    symbol
-                    amount
-                }
-                ... on Avatar {
+            leaderboard {
+                position
+                masterpiecePoints
+                profile {
+                    uid
+                    walletAddress
                     avatarUrl
-                    isEns
-                }
-                ... on Badge {
-                    badgeName
-                    url
-                    description
                     displayName
-                    infoUrl
-                }
-                ... on OnChainToken {
-                    symbol
-                    infoUrl
-                }
-                ... on TradePack {
-                    amount
-                }
-                ... on BuildingReward {
-                    buildingType
-                    buildingSubType
                 }
             }
-
-            battlePassRewards {
-                __typename
-                ... on Resource {
-                    symbol
-                    amount
+            rewardStages {
+                requiredMasterpiecePoints
+                rewards {
+                    __typename
+                    ... on Resource {
+                        symbol
+                        amount
+                    }
+                    ... on Avatar {
+                        avatarUrl
+                        isEns
+                    }
+                    ... on Badge {
+                        badgeName
+                        url
+                        description
+                        displayName
+                        infoUrl
+                    }
+                    ... on OnChainToken {
+                        symbol
+                        infoUrl
+                    }
+                    ... on TradePack {
+                        amount
+                    }
+                    ... on BuildingReward {
+                        buildingType
+                        buildingSubType
+                    }
                 }
-                ... on Avatar {
+                battlePassRewards {
+                    __typename
+                    ... on Resource {
+                        symbol
+                        amount
+                    }
+                    ... on Avatar {
+                        avatarUrl
+                        isEns
+                    }
+                    ... on Badge {
+                        badgeName
+                        url
+                        description
+                        displayName
+                        infoUrl
+                    }
+                    ... on OnChainToken {
+                        symbol
+                        infoUrl
+                    }
+                    ... on TradePack {
+                        amount
+                    }
+                    ... on BuildingReward {
+                        buildingType
+                        buildingSubType
+                    }
+                }
+            }
+            leaderboardRewards {
+                top
+                rewards {
+                    __typename
+                    ... on Resource {
+                        symbol
+                        amount
+                    }
+                    ... on Avatar {
+                        avatarUrl
+                        isEns
+                    }
+                    ... on Badge {
+                        badgeName
+                        url
+                        description
+                        displayName
+                        infoUrl
+                    }
+                    ... on OnChainToken {
+                        symbol
+                        infoUrl
+                    }
+                    ... on TradePack {
+                        amount
+                    }
+                    ... on BuildingReward {
+                        buildingType
+                        buildingSubType
+                    }
+                }
+            }
+            startedAt
+            profileByUserId(userId: "GfUeRBCZv8OwuUKq7Tu9JVpA70l1") {
+                position
+                masterpiecePoints
+                profile {
+                    uid
+                    walletAddress
                     avatarUrl
-                    isEns
-                }
-                ... on Badge {
-                    badgeName
-                    url
-                    description
                     displayName
-                    infoUrl
                 }
-                ... on OnChainToken {
-                    symbol
-                    infoUrl
-                }
-                ... on TradePack {
-                    amount
-                }
-                ... on BuildingReward {
-                    buildingType
-                    buildingSubType
-                }
+            }
+            resourcesByUserId(userId: "GfUeRBCZv8OwuUKq7Tu9JVpA70l1") {
+                symbol
+                amount
             }
         }
-
-        leaderboardRewards {
-            top
-
-            rewards {
-                __typename
-                ... on Resource {
-                    symbol
-                    amount
-                }
-                ... on Avatar {
-                    avatarUrl
-                    isEns
-                }
-                ... on Badge {
-                    badgeName
-                    url
-                    description
-                    displayName
-                    infoUrl
-                }
-                ... on OnChainToken {
-                    symbol
-                    infoUrl
-                }
-                ... on TradePack {
-                    amount
-                }
-                ... on BuildingReward {
-                    buildingType
-                    buildingSubType
-                }
-            }
-        }
-
-        startedAt
     }
-}
 """
+
 
 
 
@@ -420,6 +390,7 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
 
