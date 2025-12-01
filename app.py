@@ -2625,7 +2625,7 @@ def masterpieces_view():
 
                 <div style="margin-bottom:10px;">
                   <label for="planner_mp_id">Masterpiece</label>
-                  <select id="planner_mp_id" name="planner_mp_id">
+                  <select id="planner_mp_id" name="planner_mp_id" onchange="this.form.submit();">
                     {% if planner_mp_options %}
                       {% for mp in planner_mp_options %}
                         <option value="{{ mp.id }}"
@@ -4263,6 +4263,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
