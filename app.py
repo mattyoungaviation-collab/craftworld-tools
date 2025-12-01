@@ -3291,25 +3291,38 @@ def masterpieces_view():
         masterpieces_data=masterpieces_data,
         general_mps=general_mps,
         event_mps=event_mps,
+
+        # current MP leaderboard
         current_mp=current_mp,
         current_mp_top50=current_mp_top50,
         current_gap=current_gap,
+
+        # history / selected MP leaderboard
         selected_mp=selected_mp,
         selected_mp_top50=selected_mp_top50,
         selected_gap=selected_gap,
-        history_mp_options=history_mp_options,
-        history_tab=tab == "history",
-        current_tab=tab == "current",
-        planner_tab=(tab == "" or tab == "planner"),
-        mp_per_unit=mp_per_unit,
+
+        # planner / donation bundle state
+        planner_mp=planner_mp,
+        planner_mp_options=planner_mp_options,
+        planner_tokens=planner_tokens,
         calc_resources=calc_resources,
+        calc_result=calc_result,
         calc_state_json=calc_state_json,
+
+        # tier + ladder info
         tier_rows=tier_rows,
         reward_tier_rows=reward_tier_rows,
-        target_result=target_result,
+        leaderboard_reward_rows=leaderboard_reward_rows,
+
+        # leaderboard size options
+        top_n=top_n,
+        top_n_options=TOP_N_OPTIONS,
+
+        # MP selector for history tab + highlight
+        history_mp_options=history_mp_options,
         highlight_query=highlight_query,
     )
-
     # Wrap in base template
     html = render_template_string(
         BASE_TEMPLATE,
@@ -4459,6 +4472,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
