@@ -551,7 +551,7 @@ BASE_TEMPLATE = """
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>CraftWorld Tools.LIVE</title>
+  <title>CraftWorld Tools</title>
   <!-- Make it mobile friendly -->
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
@@ -917,7 +917,7 @@ BASE_TEMPLATE = """
 </head>
 <body>
   <div class="nav">
-    <div class="nav-title">CraftWorld Tools.LIVE</div>
+    <div class="nav-title">CraftWorld Tools</div>
     <div class="nav-links">
       <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
       {% if has_uid %}
@@ -2034,14 +2034,14 @@ content = """
           </tr>
         </thead>
         <tbody>
-    {% for row in reward_tier_rows %}
-      <tr class="{% if row.passed %}table-success{% endif %}">
-        <td class="text-center fw-bold">Tier {{ row.tier }}</td>
-        <td class="text-end">{{ row.required | commafy }}</td>
-        <td>{{ row.rewards }}</td>
-        <td>{{ row.battlepass }}</td>
-      </tr>
-    {% endfor %}
+          {% for row in reward_tier_rows %}
+            <tr>
+              <td>{{ row.tier }}</td>
+              <td>{{ row.required }}</td>
+              <td>{{ row.rewards_text }}</td>
+              <td>{{ row.battlepass_text }}</td>
+            </tr>
+          {% endfor %}
         </tbody>
       </table>
     {% else %}
@@ -3041,17 +3041,7 @@ def masterpieces_view():
     # Use the selected MP for History first, then planner, then current
     src_mp = selected_mp or planner_mp or current_mp
 
-    # Current player points for this MP (used to highlight passed tiers)
-    you_points: int = 0
-
     if isinstance(src_mp, dict):
-        # Try to get your current MP points from the MP profile, if available
-        try:
-            prof = src_mp.get("profileByUserId") or {}
-            you_points = int(prof.get("masterpiecePoints") or 0)
-        except Exception:
-            you_points = 0
-
         raw_stages = src_mp.get("rewardStages") or []
 
         # rewardStages can be either a list or dict; normalise to list
@@ -3154,15 +3144,12 @@ def masterpieces_view():
 
             reward_tier_rows.append(
                 {
-                    "tier":       stage_index,
-                    "required":   required,
-                    "rewards":    base_list,
-                    "battlepass": bp_list,
-                    # Highlight if you have at least this many MP points
-                    "passed": bool(you_points and you_points >= required),
+                    "tier": tier_num,
+                    "required": required,
+                    "rewards_text": base_text,
+                    "battlepass_text": bp_text,
                 }
             )
-
 
     # Turn totals into lists with value in COIN / USD
     def _totals_to_rows(totals: Dict[str, float]) -> List[Dict[str, Any]]:
@@ -5953,9 +5940,6 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
 
 
 
