@@ -2636,19 +2636,19 @@ def masterpieces_view():
             if not isinstance(blk, dict):
                 continue
 
-    from_rank = (
-        blk.get("from")
-        or blk.get("fromRank")
-        or blk.get("minRank")
-        or blk.get("top")          # Craft World uses "top" for single-rank brackets
-    )
-    to_rank = (
-        blk.get("to")
-        or blk.get("toRank")
-        or blk.get("maxRank")
-        or blk.get("top")          # same for “top 1”, “top 2”, etc.
-    )
-
+            # Rank range for this reward bracket
+            from_rank = (
+                blk.get("from")
+                or blk.get("fromRank")
+                or blk.get("minRank")
+                or blk.get("top")  # "top" is used for single-rank brackets
+            )
+            to_rank = (
+                blk.get("to")
+                or blk.get("toRank")
+                or blk.get("maxRank")
+                or blk.get("top")
+            )
 
             rewards_list = blk.get("rewards") or blk.get("items") or []
             reward_parts: list[str] = []
@@ -2683,6 +2683,7 @@ def masterpieces_view():
                     "rewards_text": ", ".join(reward_parts),
                 }
             )
+
 
 
     # ---------- Render content for this tab ----------
@@ -4928,6 +4929,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
