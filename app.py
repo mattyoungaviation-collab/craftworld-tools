@@ -2814,21 +2814,48 @@ def masterpieces_view():
         except Exception:
             my_rank_int = None
 
-    # Find the bracket that contains my rank and grab its numeric resource totals
-    if my_rank_int is not None:
+    # Cumulative leaderboard rewards:
+    # sum all brackets whose threshold rank is >= my rank
+    # (e.g. if you're rank 5, you get #5, #6, #7, ..., #1000)
+    if my_rank_int is not None and leaderboard_bracket_totals:
         for b in leaderboard_bracket_totals:
             fr = b.get("from_rank")
-            to = b.get("to_rank") or fr
+            to = b.get("to_rank")
+
+            # Choose a "threshold" rank for this bracket: the higher of from/to
+            thr: Optional[int] = None
             try:
-                fr_i = int(fr) if fr is not None else None
-                to_i = int(to) if to is not None else fr_i
+                if fr is not None:
+                    thr = int(fr)
             except Exception:
+                thr = None
+
+            try:
+                if to is not None:
+                    to_i = int(to)
+                    if thr is None or to_i > thr:
+                        thr = to_i
+            except Exception:
+                # ignore bad to_rank, keep whatever thr we had
+                pass
+
+            if thr is None:
                 continue
-            if fr_i is None:
-                continue
-            if fr_i <= my_rank_int <= (to_i if to_i is not None else fr_i):
-                my_rank_totals = dict(b.get("totals") or {})
-                break
+
+            # If your rank is better or equal than this threshold,
+            # you earn this bracket's bag as well.
+            if thr >= my_rank_int:
+                blk_totals = b.get("totals") or {}
+                for sym, amt in blk_totals.items():
+                    try:
+                        val = float(amt or 0.0)
+                    except (TypeError, ValueError):
+                        val = 0.0
+                    if val <= 0:
+                        continue
+                    sym_u = str(sym).upper()
+                    my_rank_totals[sym_u] = my_rank_totals.get(sym_u, 0.0) + val
+
 
     if my_rank_totals:
         # Rank-only rewards (for your bracket)
@@ -3772,7 +3799,7 @@ def masterpieces_view():
 
     {% if my_rank_totals_list %}
       <div style="margin-top:16px;">
-        <h4 style="margin-top:0;">🎯 Your rank rewards (current bracket)</h4>
+        <h4 style="margin-top:0;">🎯 Your cumulative rank rewards (all brackets up to your position)</h4>
         <p class="subtle">
           Uses your highlighted position
           {% if selected_reward_snapshot %}
@@ -5427,6 +5454,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
