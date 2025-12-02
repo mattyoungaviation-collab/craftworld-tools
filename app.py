@@ -2682,6 +2682,7 @@ def masterpieces_view():
             )
         return rows
 
+    # Tier totals as lists
     tier_base_totals_list = _totals_to_rows(tier_base_totals)
     tier_bp_totals_list = _totals_to_rows(tier_bp_totals)
 
@@ -2689,10 +2690,115 @@ def masterpieces_view():
     combined_totals: Dict[str, float] = dict(tier_base_totals)
     for sym, amt in tier_bp_totals.items():
         combined_totals[sym] = combined_totals.get(sym, 0.0) + amt
-    tier_combined_totals_list = _totals_to_rows(combined_totals)
 
+    tier_combined_totals_list = _totals_to_rows(combined_totals)
     tier_combined_total_coin = sum(r["coin_value"] for r in tier_combined_totals_list)
     tier_combined_total_usd = tier_combined_total_coin * coin_usd if coin_usd else 0.0
+
+    # ---------- Leaderboard placement rewards (leaderboardRewards) ----------
+    leaderboard_reward_rows: List[Dict[str, Any]] = []
+    # Per-bracket numeric resource totals: [{from_rank, to_rank, totals:{SYM:amount}}]
+    leaderboard_bracket_totals: List[Dict[str, Any]] = []
+
+    if isinstance(selected_mp, dict):
+        raw_lb_rewards = (
+            selected_mp.get("leaderboardRewards")
+            or selected_mp.get("leaderboardRewardStages")
+            or []
+        )
+
+        if isinstance(raw_lb_rewards, dict):
+            lb_iter = list(raw_lb_rewards.values())
+        elif isinstance(raw_lb_rewards, list):
+            lb_iter = raw_lb_rewards
+        else:
+            lb_iter = []
+
+        for blk in lb_iter:
+            if not isinstance(blk, dict):
+                continue
+
+            # Rank range for this reward bracket
+            from_rank = (
+                blk.get("from")
+                or blk.get("fromRank")
+                or blk.get("minRank")
+                or blk.get("top")  # "top" is used for single-rank brackets
+            )
+            to_rank = (
+                blk.get("to")
+                or blk.get("toRank")
+                or blk.get("maxRank")
+            )
+
+            # Normalise to ints when possible for internal use
+            from_int: Optional[int] = None
+            to_int: Optional[int] = None
+            try:
+                if from_rank is not None:
+                    from_int = int(from_rank)
+            except Exception:
+                from_int = None
+            try:
+                if to_rank is not None:
+                    to_int = int(to_rank)
+            except Exception:
+                to_int = from_int
+
+            totals_for_blk: Dict[str, float] = {}
+            rewards_list = blk.get("rewards") or blk.get("items") or []
+            reward_parts: List[str] = []
+
+            if isinstance(rewards_list, list):
+                for rw in rewards_list:
+                    if not isinstance(rw, dict):
+                        continue
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+
+                    # Aggregate numeric *resource* rewards for this bracket
+                    try:
+                        amt_val = float(amount or 0)
+                    except (TypeError, ValueError):
+                        amt_val = 0.0
+
+                    if token and amt_val > 0 and (not rtype or str(rtype).lower() == "resource"):
+                        sym = str(token).upper()
+                        totals_for_blk[sym] = totals_for_blk.get(sym, 0.0) + amt_val
+
+                    # Text label for the table
+                    label_bits: List[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
+
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        reward_parts.append(label)
+
+            if not reward_parts:
+                reward_parts.append("See in-game rewards")
+
+            leaderboard_reward_rows.append(
+                {
+                    "from_rank": from_int or from_rank,
+                    "to_rank": to_int or to_rank,
+                    "rewards_text": ", ".join(reward_parts),
+                }
+            )
+
+            if totals_for_blk:
+                leaderboard_bracket_totals.append(
+                    {
+                        "from_rank": from_int or from_rank,
+                        "to_rank": to_int or to_rank,
+                        "totals": totals_for_blk,
+                    }
+                )
 
     # ---------- My rank rewards (from leaderboard bracket) ----------
     my_rank_totals: Dict[str, float] = {}
@@ -2736,160 +2842,6 @@ def masterpieces_view():
         grand_totals_list = _totals_to_rows(combined_plus_rank)
         grand_total_coin = sum(r["coin_value"] for r in grand_totals_list)
         grand_total_usd = grand_total_coin * coin_usd if coin_usd else 0.0
-
-
-    # ---------- Leaderboard placement rewards (leaderboardRewards) ----------
-    leaderboard_reward_rows: list[dict[str, object]] = []
-    # Per-bracket numeric resource totals: [{from_rank, to_rank, totals:{SYM:amount}}]
-    leaderboard_bracket_totals: list[Dict[str, Any]] = []
-
-    if isinstance(selected_mp, dict):
-        raw_lb_rewards = (
-            selected_mp.get("leaderboardRewards")
-            or selected_mp.get("leaderboardRewardStages")
-            or []
-        )
-
-        if isinstance(raw_lb_rewards, dict):
-            lb_iter = list(raw_lb_rewards.values())
-        elif isinstance(raw_lb_rewards, list):
-            lb_iter = raw_lb_rewards
-        else:
-            lb_iter = []
-
-        for blk in lb_iter:
-            if not isinstance(blk, dict):
-                continue
-
-            # Rank range for this reward bracket
-            from_rank = (
-                blk.get("from")
-                or blk.get("fromRank")
-                or blk.get("minRank")
-                or blk.get("top")  # "top" is used for single-rank brackets
-            )
-            to_rank = (
-                blk.get("to")
-                or blk.get("toRank")
-                or blk.get("maxRank")
-                or blk.get("top")
-            )
-
-            rewards_list = blk.get("rewards") or blk.get("items") or []
-            reward_parts: list[str] = []
-            totals_for_blk: Dict[str, float] = {}
-
-            if isinstance(rewards_list, list):
-                for rw in rewards_list:
-                    if not isinstance(rw, dict):
-                        continue
-                    amount = rw.get("amount") or rw.get("quantity")
-                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
-                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
-
-                    # Aggregate numeric *resource* rewards for this bracket
-                    try:
-                        amt_val = float(amount or 0)
-                    except (TypeError, ValueError):
-                        amt_val = 0.0
-
-                    if token and amt_val > 0 and (not rtype or str(rtype).lower() == "resource"):
-                        sym = str(token).upper()
-                        totals_for_blk[sym] = totals_for_blk.get(sym, 0.0) + amt_val
-
-                    # Text label for the table
-                    label_bits: list[str] = []
-                    if amount not in (None, "", 0):
-                        label_bits.append(str(amount))
-                    if token:
-                        label_bits.append(str(token))
-                    elif rtype:
-                        label_bits.append(str(rtype))
-
-                    label = " ".join(label_bits).strip()
-                    if label:
-                        reward_parts.append(label)
-
-            if not reward_parts:
-                reward_parts.append("See in-game rewards")
-
-            leaderboard_reward_rows.append(
-                {
-                    "from_rank": from_rank,
-                    "to_rank": to_rank,
-                    "rewards_text": ", ".join(reward_parts),
-                }
-            )
-
-            # Store numeric totals for this bracket (if any)
-            leaderboard_bracket_totals.append(
-                {
-                    "from_rank": from_rank,
-                    "to_rank": to_rank,
-                    "totals": totals_for_blk,
-                }
-            )
-
-
-        if isinstance(raw_lb_rewards, dict):
-            lb_iter = list(raw_lb_rewards.values())
-        elif isinstance(raw_lb_rewards, list):
-            lb_iter = raw_lb_rewards
-        else:
-            lb_iter = []
-
-        for blk in lb_iter:
-            if not isinstance(blk, dict):
-                continue
-
-            # Rank range for this reward bracket
-            from_rank = (
-                blk.get("from")
-                or blk.get("fromRank")
-                or blk.get("minRank")
-                or blk.get("top")  # "top" is used for single-rank brackets
-            )
-            to_rank = (
-                blk.get("to")
-                or blk.get("toRank")
-                or blk.get("maxRank")
-                or blk.get("top")
-            )
-
-            rewards_list = blk.get("rewards") or blk.get("items") or []
-            reward_parts: list[str] = []
-
-            if isinstance(rewards_list, list):
-                for rw in rewards_list:
-                    if not isinstance(rw, dict):
-                        continue
-                    amount = rw.get("amount") or rw.get("quantity")
-                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
-                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
-
-                    label_bits: list[str] = []
-                    if amount not in (None, "", 0):
-                        label_bits.append(str(amount))
-                    if token:
-                        label_bits.append(str(token))
-                    elif rtype:
-                        label_bits.append(str(rtype))
-
-                    label = " ".join(label_bits).strip()
-                    if label:
-                        reward_parts.append(label)
-
-            if not reward_parts:
-                reward_parts.append("See in-game rewards")
-
-            leaderboard_reward_rows.append(
-                {
-                    "from_rank": from_rank,
-                    "to_rank": to_rank,
-                    "rewards_text": ", ".join(reward_parts),
-                }
-            )
-
 
 
     # ---------- Render content for this tab ----------
@@ -4169,6 +4121,13 @@ def masterpieces_view():
         tier_combined_total_coin=tier_combined_total_coin,
         tier_combined_total_usd=tier_combined_total_usd,
         coin_usd=coin_usd,
+
+        # rank + grand totals
+        my_rank_totals_list=my_rank_totals_list,
+        grand_totals_list=grand_totals_list,
+        grand_total_coin=grand_total_coin,
+        grand_total_usd=grand_total_usd,
+
 
         # leaderboard size options
         top_n=top_n,
@@ -5468,6 +5427,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
