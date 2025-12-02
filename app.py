@@ -2139,6 +2139,8 @@ def masterpieces_view():
     # ---------- Personal reward snapshots for active general & event MPs ----------
     general_snapshot: Optional[Dict[str, Any]] = None
     event_snapshot: Optional[Dict[str, Any]] = None
+    src_mp: Optional[Dict[str, Any]] = None
+
 
     # Use the same highlight_query the user entered at the top of the page.
     if highlight_query:
@@ -2335,6 +2337,18 @@ def masterpieces_view():
         selected_mp_top50,
         highlight_query,
     )
+    # Snapshot of your current tier / rewards on the selected masterpiece (for Rewards tab)
+    selected_reward_snapshot: Optional[Dict[str, Any]] = None
+    if highlight_query and selected_mp and selected_mp_top50:
+        try:
+            selected_reward_snapshot = _build_reward_snapshot_for_mp(
+                selected_mp,
+                selected_mp_top50,
+                highlight_query,
+            )
+        except Exception:
+            selected_reward_snapshot = None
+
 
 
 
@@ -2523,8 +2537,9 @@ def masterpieces_view():
     # ---------- Tier rewards from the Masterpiece (rewardStages) ----------
     reward_tier_rows: list[dict[str, object]] = []
 
-    # Use the planner MP as the "source of truth" for tier rewards
-    src_mp = planner_mp or selected_mp or current_mp
+    # Use the selected MP for History first, then planner, then current
+    src_mp = selected_mp or planner_mp or current_mp
+
 
     if isinstance(src_mp, dict):
         raw_stages = src_mp.get("rewardStages") or []
@@ -3006,10 +3021,14 @@ def masterpieces_view():
         <button type="button" class="mp-tab" data-mp-tab="current">
           <span class="icon">📈</span> Current MP leaderboard
         </button>
+        <button type="button" class="mp-tab" data-mp-tab="rewards">
+          <span class="icon">🎁</span> Rewards
+        </button>
         <button type="button" class="mp-tab" data-mp-tab="history">
           <span class="icon">📜</span> History &amp; events
         </button>
       </div>
+
 
       <div class="mp-sections">
         <!-- 🧮 Donation Planner -->
@@ -3401,6 +3420,162 @@ def masterpieces_view():
           </div>
         </div>
 
+        <!-- 🎁 Rewards overview -->
+        <div class="mp-section" data-mp-section="rewards" style="display:none;">
+          <div class="section" style="margin-top:4px;">
+            <h2>Rewards overview</h2>
+            {% if src_mp %}
+              <p class="subtle">
+                MP {{ src_mp.id }} — {{ src_mp.name or src_mp.addressableLabel or src_mp.type }}<br>
+                Tier completion rewards{% if leaderboard_reward_rows %} + leaderboard placement rewards{% endif %}.
+              </p>
+            {% else %}
+              <p class="hint">
+                No masterpiece selected yet. Use the History selector or Donation Planner to choose one.
+              </p>
+            {% endif %}
+
+            <!-- RawrPass toggle on Rewards tab -->
+            <form method="post" style="margin-top:4px; margin-bottom:10px;">
+              <input type="hidden" name="tab" value="rewards">
+              <label style="font-size:13px; cursor:pointer;">
+                <input type="checkbox"
+                       name="has_battle_pass"
+                       value="1"
+                       onchange="this.form.submit()"
+                       {% if has_battle_pass %}checked{% endif %}>
+                I have the RawrPass for this Masterpiece
+              </label>
+            </form>
+
+            {% if selected_reward_snapshot %}
+              <div class="mp-gap-card">
+                <div class="mp-gap-title">Your current reward level</div>
+                <div class="mp-gap-grid">
+                  <div class="mp-gap-block">
+                    <div class="mp-gap-label">Leaderboard position</div>
+                    <div class="mp-gap-number">
+                      #{{ selected_reward_snapshot.position }}
+                    </div>
+                    <div class="mp-gap-sub">
+                      {{ "{:,.0f}".format(selected_reward_snapshot.points or 0) }} points
+                    </div>
+                  </div>
+                  {% if selected_reward_snapshot.tier_index %}
+                    <div class="mp-gap-block">
+                      <div class="mp-gap-label">Completion tier</div>
+                      <div class="mp-gap-number">
+                        Tier {{ selected_reward_snapshot.tier_index }}
+                      </div>
+                      {% if selected_reward_snapshot.tier_min %}
+                        <div class="mp-gap-sub">
+                          ≥ {{ "{:,.0f}".format(selected_reward_snapshot.tier_min or 0) }} points
+                        </div>
+                      {% endif %}
+                    </div>
+                  {% endif %}
+                  {% if selected_reward_snapshot.leaderboard_rewards %}
+                    <div class="mp-gap-block">
+                      <div class="mp-gap-label">Leaderboard rewards</div>
+                      <div class="mp-gap-sub">
+                        {{ selected_reward_snapshot.leaderboard_rewards }}
+                      </div>
+                    </div>
+                  {% endif %}
+                </div>
+              </div>
+            {% elif highlight_query %}
+              <p class="hint">
+                We couldn't find <code>{{ highlight_query }}</code> in the visible leaderboard for this masterpiece.
+                Make sure you're in the top {{ top_n }} and that the name / UID matches exactly.
+              </p>
+            {% else %}
+              <p class="hint">
+                Enter your name or Voya ID in the highlight box at the top of this page to see your own tier highlighted.
+              </p>
+            {% endif %}
+
+            <div class="two-col" style="margin-top:10px; gap:12px;">
+              <div>
+                <h3 style="margin-top:0;">Tier rewards</h3>
+                {% if reward_tier_rows %}
+                  {% set my_tier = selected_reward_snapshot.tier_index if selected_reward_snapshot else None %}
+                  <div class="scroll-x">
+                    <table class="mp-tier-table">
+                      <tr>
+                        <th>Tier</th>
+                        <th>Required points</th>
+                        <th>Rewards{% if has_battle_pass %} (base + RawrPass){% endif %}</th>
+                      </tr>
+                      {% for row in reward_tier_rows %}
+                        {% set tier_num = row.tier or loop.index %}
+                        <tr class="{% if my_tier and tier_num == my_tier %}mp-row-me{% endif %}">
+                          <td>Tier {{ tier_num }}</td>
+                          <td>
+                            {% if row.required %}
+                              {{ "{:,}".format(row.required) }}
+                            {% else %}
+                              —
+                            {% endif %}
+                          </td>
+                          <td>
+                            {{ row.rewards_text }}
+                            {% if has_battle_pass and row.battlepass_text %}
+                              <br>
+                              <span class="subtle">+ RawrPass: {{ row.battlepass_text }}</span>
+                            {% endif %}
+                          </td>
+                        </tr>
+                      {% endfor %}
+                    </table>
+                  </div>
+                {% else %}
+                  <p class="hint">
+                    No tier reward metadata in the API for this masterpiece yet — check in-game rewards.
+                  </p>
+                {% endif %}
+              </div>
+
+              <div>
+                <h3 style="margin-top:0;">Leaderboard placement rewards</h3>
+                {% if leaderboard_reward_rows %}
+                  {% set my_rank = selected_reward_snapshot.position if selected_reward_snapshot else None %}
+                  <div class="scroll-x">
+                    <table>
+                      <tr>
+                        <th>Rank range</th>
+                        <th>Rewards</th>
+                      </tr>
+                      {% for row in leaderboard_reward_rows %}
+                        {% set from_rank = row.from_rank %}
+                        {% set to_rank = row.to_rank or row.from_rank %}
+                        {% set is_me = my_rank and from_rank and to_rank and (my_rank >= from_rank and my_rank <= to_rank) %}
+                        <tr class="{% if is_me %}mp-row-me{% endif %}">
+                          <td>
+                            {% if from_rank and to_rank and from_rank != to_rank %}
+                              #{{ from_rank }} – #{{ to_rank }}
+                            {% elif from_rank %}
+                              #{{ from_rank }}
+                            {% else %}
+                              (unknown)
+                            {% endif %}
+                          </td>
+                          <td>{{ row.rewards_text }}</td>
+                        </tr>
+                      {% endfor %}
+                    </table>
+                  </div>
+                {% else %}
+                  <p class="hint">
+                    No leaderboard reward metadata found for this masterpiece in the API.
+                  </p>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+
+
 
         <!-- 📜 History & events browser -->
         <div class="mp-section" data-mp-section="history" style="display:none;">
@@ -3614,7 +3789,6 @@ def masterpieces_view():
         general_snapshot=general_snapshot,
         event_snapshot=event_snapshot,
 
-
         # current MP leaderboard
         current_mp=current_mp,
         current_mp_top50=current_mp_top50,
@@ -3624,6 +3798,8 @@ def masterpieces_view():
         selected_mp=selected_mp,
         selected_mp_top50=selected_mp_top50,
         selected_gap=selected_gap,
+        selected_reward_snapshot=selected_reward_snapshot,
+        src_mp=src_mp,
 
         # planner / donation bundle state
         planner_mp=planner_mp,
@@ -3647,13 +3823,7 @@ def masterpieces_view():
         highlight_query=highlight_query,
         has_battle_pass=has_battle_pass,
     )
-    # Wrap in base template
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=inner,
-        active_page="masterpieces",
-        has_uid=has_uid_flag(),
-    )
+
     return html
 
 def _build_reward_snapshot_for_mp(
@@ -3686,6 +3856,7 @@ def _build_reward_snapshot_for_mp(
 
     # Figure out completion tier
     tier_label, tier_min, tier_max = None, None, None
+    tier_index: Optional[int] = None
     if my_points is not None:
         try:
             pts = float(my_points)
@@ -3693,23 +3864,25 @@ def _build_reward_snapshot_for_mp(
             pts = None
 
         if pts is not None:
-            tier_index = 0
+            t_index = 0
             # MP_TIER_THRESHOLDS is a simple list of ints
             for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
                 if pts >= req:
-                    tier_index = i
+                    t_index = i
                 else:
                     break
 
-            if tier_index > 0:
-                tier_label = f"Tier {tier_index}"
-                tier_min = MP_TIER_THRESHOLDS[tier_index - 1]
-                if tier_index < len(MP_TIER_THRESHOLDS):
+            if t_index > 0:
+                tier_index = t_index
+                tier_label = f"Tier {t_index}"
+                tier_min = MP_TIER_THRESHOLDS[t_index - 1]
+                if t_index < len(MP_TIER_THRESHOLDS):
                     # Next tier starts at the next threshold; treat max as one less
-                    tier_max = MP_TIER_THRESHOLDS[tier_index] - 1
+                    tier_max = MP_TIER_THRESHOLDS[t_index] - 1
                 else:
                     # Top tier: no upper bound
                     tier_max = None
+
 
 
     # Figure out reward bracket we fall into
@@ -3769,6 +3942,7 @@ def _build_reward_snapshot_for_mp(
         "tier_label": tier_label,
         "tier_min": tier_min,
         "tier_max": tier_max,
+        "tier_index": tier_index,
 
         # leaderboard reward bracket from API
         "reward_bracket": reward_bracket,
@@ -3782,6 +3956,7 @@ def _build_reward_snapshot_for_mp(
         # template expects .leaderboard_rewards for human-readable text
         "leaderboard_rewards": reward_label,
     }
+
 
 
 
@@ -4929,6 +5104,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
