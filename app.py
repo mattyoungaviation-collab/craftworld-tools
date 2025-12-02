@@ -1926,9 +1926,6 @@ def masterpieces_view():
         error = f"Error fetching masterpieces: {e}"
         masterpieces_data = []
 
-    if not isinstance(masterpieces_data, list):
-        masterpieces_data = []
-
     # Split masterpieces into general vs event
     general_mps: List[Dict[str, Any]] = []
     event_mps: List[Dict[str, Any]] = []
@@ -1949,35 +1946,10 @@ def masterpieces_view():
 
     general_mps = sorted(general_mps, key=_mp_id)
     event_mps = sorted(event_mps, key=_mp_id)
-
-    # ---- Determine the "active" masterpieces (general + event) ----
+    # Identify the "active" general and event masterpieces (highest ID)
     current_general_mp: Optional[Dict[str, Any]] = general_mps[-1] if general_mps else None
     current_event_mp: Optional[Dict[str, Any]] = event_mps[-1] if event_mps else None
 
-    # ---- Hydrate active masterpieces with full details (leaderboard, rewards, etc.) ----
-    def _safe_fetch_details(mp: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        if not mp:
-            return None
-        mp_id = mp.get("id")
-        if not mp_id:
-            return None
-        try:
-            detailed = fetch_masterpiece_details(int(mp_id))
-            # merge: keep any fields already present, overlay with detailed
-            merged = dict(mp)
-            merged.update(detailed or {})
-            # cache for future loads
-            try:
-                cache_masterpiece_metadata(merged)
-            except Exception:
-                pass
-            return merged
-        except Exception as e_fetch:
-            print(f"[MP] Failed to fetch details for masterpiece {mp_id}: {e_fetch}")
-            return mp  # fall back to summary
-
-    current_general_mp = _safe_fetch_details(current_general_mp)
-    current_event_mp = _safe_fetch_details(current_event_mp)
 
     # Build a lookup by ID and compute the highest MP ID we know about.
     mp_by_id: Dict[int, Dict[str, Any]] = {}
@@ -1991,7 +1963,6 @@ def masterpieces_view():
             mp_by_id[mid] = mp
             if mid > max_mp_id:
                 max_mp_id = mid
-
     # Seed the metadata cache with the list we just fetched.
     for mp in masterpieces_data:
         try:
@@ -2017,7 +1988,6 @@ def masterpieces_view():
             mp_by_id[mid] = dict(meta)
         if mid > max_mp_id:
             max_mp_id = mid
-
     # ----- How many leaderboard entries to show? (Top 10 / 25 / 50 / 100) -----
     TOP_N_OPTIONS = [10, 25, 50, 100]
     DEFAULT_TOP_N = 50
@@ -2039,38 +2009,94 @@ def masterpieces_view():
 
     # Persist per logged-in browser session
     session["mp_top_n"] = top_n
-
+    
     # Highlight name / UID across leaderboards
     highlight_query = (request.args.get("highlight") or request.form.get("highlight") or "").strip()
     if highlight_query:
         # Save to session so it sticks when you switch tabs / refresh
         session["mp_highlight"] = highlight_query
     else:
-        highlight_query = session.get("mp_highlight", "")
+        highlight_query = session.get("mp_highlight", "") or ""
 
     # Which sub-tab is active: "planner", "current", or "history"?
     tab = (request.args.get("tab") or request.form.get("tab") or "").strip() or "planner"
 
-    # ------------ Donation Planner (per-unit MP points) ------------
+    
 
-    # Planner MP selection: use query/form, fallback to latest general MP
-    planner_mp: Optional[Dict[str, Any]] = None
-    planner_mp_id_str = (request.args.get("planner_mp_id") or request.form.get("planner_mp_id") or "").strip()
 
-    # Build dropdown options from all masterpieces, latest first by ID
-    planner_mp_options = sorted(
-        masterpieces_data,
-        key=lambda m: _mp_id(m),
-        reverse=True,
+    # Pick the "current" masterpiece (for the live leaderboard):
+    # latest general if available, otherwise latest event.
+    current_mp: Optional[Dict[str, Any]] = None
+    current_mp_top50: List[Dict[str, Any]] = []
+
+    if general_mps:
+        current_mp = general_mps[-1]
+    elif event_mps:
+        current_mp = event_mps[-1]
+
+    if current_mp:
+        lb = current_mp.get("leaderboard") or []
+        try:
+            current_mp_top50 = list(lb[:top_n])
+        except Exception:
+            current_mp_top50 = []
+    else:
+        current_mp_top50 = []
+
+    # ---------- Personal reward snapshots for active general & event MPs ----------
+    general_snapshot: Optional[Dict[str, Any]] = None
+    event_snapshot: Optional[Dict[str, Any]] = None
+
+    # Use the same highlight_query the user entered at the top of the page.
+    if highlight_query:
+        # Active general MP snapshot
+        if current_general_mp:
+            try:
+                gen_rows = list((current_general_mp.get("leaderboard") or [])[:top_n])
+            except Exception:
+                gen_rows = []
+            general_snapshot = _build_reward_snapshot_for_mp(
+                current_general_mp,
+                gen_rows,
+                highlight_query,
+            )
+
+        # Active event MP snapshot
+        if current_event_mp:
+            try:
+                event_rows = list((current_event_mp.get("leaderboard") or [])[:top_n])
+            except Exception:
+                event_rows = []
+            event_snapshot = _build_reward_snapshot_for_mp(
+                current_event_mp,
+                event_rows,
+                highlight_query,
+            )
+
+
+    # Gap info for highlighted player on the current leaderboard
+    current_gap: Optional[Dict[str, Any]] = compute_leaderboard_gap_for_highlight(
+        current_mp_top50,
+        highlight_query,
     )
 
-    if planner_mp_id_str:
-        try:
-            planner_mp_id = int(planner_mp_id_str)
-        except ValueError:
-            planner_mp_id = None
+    # This will be set after resolving the planner target masterpiece.
+    mp_id_for_calc: Optional[str] = None
+
+    # ----- Planner target masterpiece (Donation Planner uses this) -----
+    # Build planner options as MP1 .. MP[max_mp_id], even if we haven't pulled them yet.
+    planner_mp_options: List[Dict[str, Any]] = []
+    if max_mp_id > 0:
+        for mid in range(1, max_mp_id + 1):
+            mp = mp_by_id.get(mid, {"id": mid})
+            planner_mp_options.append(mp)
     else:
-        planner_mp_id = None
+        # Fallback if we somehow have no IDs: just use whatever general list we have.
+        planner_mp_options = list(general_mps)
+
+    planner_mp: Optional[Dict[str, Any]] = None
+
+    planner_mp_id: str = (request.args.get("planner_mp_id") or request.form.get("planner_mp_id") or "").strip()
 
     if planner_mp_id:
         for mp in planner_mp_options:
@@ -2102,146 +2128,79 @@ def masterpieces_view():
         mp_id_for_calc = str(planner_mp.get("id") or "")
         # Also store/refresh this one in the DB for future loads
         try:
-            detailed = fetch_masterpiece_details(int(mp_id_for_calc))
-            cache_masterpiece_metadata(detailed)
+            cache_masterpiece_metadata(planner_mp)
         except Exception:
             pass
+    # Figure out which resources are valid for the selected planner masterpiece.
+    # Default: show all factory tokens; if we can, narrow to only tokens this MP accepts.
+    planner_tokens: List[str] = list(ALL_FACTORY_TOKENS)
+
+    mp_id_for_resources: Optional[str] = None
+    if planner_mp:
+        try:
+            mp_id_for_resources = str(planner_mp.get("id") or "") or None
+        except Exception:
+            mp_id_for_resources = None
+    if not mp_id_for_resources and planner_mp_id:
+        mp_id_for_resources = str(planner_mp_id)
+
+    if mp_id_for_resources:
+        try:
+            mp_detail_for_planner = fetch_masterpiece_details(mp_id_for_resources)
+            resources = mp_detail_for_planner.get("resources") or []
+            symbols: List[str] = []
+            for r in resources:
+                sym = (r.get("symbol") or "").upper()
+                if sym and sym in ALL_FACTORY_TOKENS:
+                    symbols.append(sym)
+
+            if symbols:
+                # Sort using your standard factory display order when possible.
+                def _sort_key(sym: str) -> int:
+                    try:
+                        return FACTORY_DISPLAY_INDEX.get(sym, 9999)
+                    except Exception:
+                        return ALL_FACTORY_TOKENS.index(sym) if sym in ALL_FACTORY_TOKENS else 9999
+
+                planner_tokens = sorted({s for s in symbols}, key=_sort_key)
+        except Exception:
+            # If anything fails, just fall back to the full token list.
+            planner_tokens = list(ALL_FACTORY_TOKENS)
     else:
-        mp_id_for_calc = ""
+        planner_tokens = list(ALL_FACTORY_TOKENS)
 
-    # Donation planner tokens and calc
-    planner_tokens = sorted(
-        list(ALL_FACTORY_TOKENS | EXTRA_MASTERPIECE_TOKENS),
-        key=lambda s: s.upper(),
-    )
 
-    calc_resources: List[Dict[str, Any]] = []
-    calc_result: Optional[Dict[str, Any]] = None
-    calc_state_json: str = ""
 
-    if request.method == "POST" and tab == "planner":
-        # Parse dynamic donation rows: resource_symbol_X, resource_amount_X
-        resources_input: List[Dict[str, Any]] = []
-        prefix = "mp_resource_symbol_"
-        for key, value in request.form.items():
-            if not key.startswith(prefix):
-                continue
-            suffix = key[len(prefix) :]
-            symbol = value.strip().upper()
-            if not symbol:
-                continue
-            amount_str = request.form.get(f"mp_resource_amount_{suffix}", "").strip()
-            try:
-                amount_val = float(amount_str.replace(",", "")) if amount_str else 0.0
-            except ValueError:
-                amount_val = 0.0
-            if amount_val <= 0:
-                continue
-            resources_input.append({"symbol": symbol, "amount": amount_val})
 
-        calc_resources = resources_input
+    # ----- Masterpiece selector for "History & Events" leaderboard browser -----
 
-        # If we have a planner_mp and some resources, call predict_reward
-        if planner_mp and mp_id_for_calc and resources_input:
-            try:
-                calc_result = predict_reward(int(mp_id_for_calc), resources_input)
-            except Exception as e:
-                error = f"Error predicting reward: {e}"
-
-        # Store calc state so the UI can rehydrate the rows
-        try:
-            calc_state_json = json.dumps(
-                {
-                    "planner_mp_id": mp_id_for_calc,
-                    "resources": resources_input,
-                }
-            )
-        except Exception:
-            calc_state_json = ""
-
-    # ------------ Current MP: live leaderboard & "my reward" snapshot ------------
-
-    current_mp: Optional[Dict[str, Any]] = None
-    current_mp_top50: List[Dict[str, Any]] = []
-    current_gap: Optional[Dict[str, Any]] = None
-    general_snapshot: Optional[Dict[str, Any]] = None
-    event_snapshot: Optional[Dict[str, Any]] = None
-
-    # Choose which MP we consider "current" (favor general over event)
-    if current_general_mp:
-        current_mp = current_general_mp
-    elif current_event_mp:
-        current_mp = current_event_mp
-
-    # Top N rows for the current MP
-    if current_mp:
-        lb = current_mp.get("leaderboard") or []
-        try:
-            current_mp_top50 = list(lb[:top_n])
-        except Exception:
-            current_mp_top50 = []
+    # Build a simple list of MP1 .. MP[max_mp_id] for the dropdown, even if
+    # we don't yet have them in `masterpieces_data`.
+    history_mp_options: List[Dict[str, Any]] = []
+    if max_mp_id > 0:
+        for mid in range(1, max_mp_id + 1):
+            mp = mp_by_id.get(mid, {"id": mid})
+            history_mp_options.append(mp)
     else:
-        current_mp_top50 = []
+        # Fallback: just whatever masterpieces we have.
+        history_mp_options = list(masterpieces_data)
 
-    # Personal gap for the current MP (if highlight_query is set)
-    if current_mp_top50 and highlight_query:
-        try:
-            current_gap = compute_leaderboard_gap_for_highlight(current_mp_top50, highlight_query)
-        except Exception:
-            current_gap = None
-
-    # Personal reward snapshots for active general & event MPs
-    if current_general_mp:
-        try:
-            gen_rows = list((current_general_mp.get("leaderboard") or [])[:top_n])
-        except Exception:
-            gen_rows = []
-        general_snapshot = _build_reward_snapshot_for_mp(
-            current_general_mp,
-            gen_rows,
-            highlight_query,
-        )
-
-    if current_event_mp:
-        try:
-            event_rows = list((current_event_mp.get("leaderboard") or [])[:top_n])
-        except Exception:
-            event_rows = []
-        event_snapshot = _build_reward_snapshot_for_mp(
-            current_event_mp,
-            event_rows,
-            highlight_query,
-        )
-
-    # ------------ History tab: pick arbitrary MP ID & show top-50 + my gap ------------
-
-    history_mp_options: List[Dict[str, Any]] = sorted(
-        masterpieces_data,
-        key=lambda m: _mp_id(m),
-        reverse=True,
-    )
+    # Which masterpiece should the browser leaderboard show?
+    selected_mp_id = request.args.get("mp_view_id")
+    if not selected_mp_id:
+        if current_mp:
+            selected_mp_id = str(current_mp.get("id") or "")
+        elif max_mp_id > 0:
+            selected_mp_id = str(max_mp_id)
 
     selected_mp: Optional[Dict[str, Any]] = None
     selected_mp_top50: List[Dict[str, Any]] = []
-    selected_gap: Optional[Dict[str, Any]] = None
-
-    selected_mp_id_str = (request.args.get("history_mp_id") or request.form.get("history_mp_id") or "").strip()
-    if selected_mp_id_str:
-        try:
-            selected_mp_id = int(selected_mp_id_str)
-        except ValueError:
-            selected_mp_id = None
-    else:
-        selected_mp_id = None
 
     if selected_mp_id:
         try:
+            # Always fetch fresh details so it works even for MPs we don't have
+            # in the initial `masterpieces` list.
             selected_mp = fetch_masterpiece_details(selected_mp_id)
-        except Exception as e:
-            error = f"Error fetching selected masterpiece {selected_mp_id}: {e}"
-            selected_mp = None
-
-        if selected_mp:
             # Cache its metadata for future loads
             try:
                 cache_masterpiece_metadata(selected_mp)
@@ -2257,76 +2216,1239 @@ def masterpieces_view():
                 for mp in history_mp_options:
                     try:
                         if int(mp.get("id") or 0) == mid_int:
-                            mp.update(
-                                {
-                                    "name": selected_mp.get("name") or mp.get("name"),
-                                    "addressable_label": selected_mp.get("addressableLabel")
-                                    or selected_mp.get("addressable_label")
-                                    or mp.get("addressable_label"),
-                                    "type": selected_mp.get("type") or mp.get("type"),
-                                }
-                            )
+                            mp.clear()
+                            mp.update(selected_mp)
                             break
                     except Exception:
                         continue
 
-            # Derive top N + personal gap
+            lb = selected_mp.get("leaderboard") or []
             try:
-                selected_lb = list((selected_mp.get("leaderboard") or [])[:top_n])
+                selected_mp_top50 = list(lb[:top_n])
             except Exception:
-                selected_lb = []
-            selected_mp_top50 = selected_lb
+                selected_mp_top50 = []
+        except Exception:
+            selected_mp = None
+            selected_mp_top50 = []
 
-            if highlight_query and selected_lb:
+
+    if not selected_mp and current_mp:
+        # Fallback: show current_mp leaderboard if selector fails
+        selected_mp = current_mp
+        selected_mp_top50 = current_mp_top50
+
+    # Gap info for highlighted player on the selected/history leaderboard
+    selected_gap: Optional[Dict[str, Any]] = compute_leaderboard_gap_for_highlight(
+        selected_mp_top50,
+        highlight_query,
+    )
+
+
+
+
+    # ---------- Donation Planner state (list of {token, amount}) ----------
+    calc_resources: List[Dict[str, Any]] = []
+    calc_result: Optional[Dict[str, Any]] = None
+
+    if request.method == "POST":
+        action = (request.form.get("calc_action") or "").strip().lower()
+
+        # Detect if the planner Masterpiece changed; if so, wipe the previous bundle.
+        last_planner_mp = session.get("planner_mp_id_for_planner") or ""
+        current_planner_mp = (request.form.get("planner_mp_id") or "").strip()
+        changed_mp = bool(current_planner_mp and current_planner_mp != last_planner_mp)
+
+        # Persist the latest planner MP selection so we can compare on the next POST.
+        if current_planner_mp:
+            session["planner_mp_id_for_planner"] = current_planner_mp
+        elif planner_mp_id:
+            session["planner_mp_id_for_planner"] = planner_mp_id
+
+        state_raw = request.form.get("calc_state") or "[]"
+
+        # Load previous state from hidden JSON field, unless the MP changed
+        if not changed_mp:
+            try:
+                loaded = json.loads(state_raw)
+                if isinstance(loaded, list):
+                    for row in loaded:
+                        if not isinstance(row, dict):
+                            continue
+                        tok = str(row.get("token", "")).upper().strip()
+                        try:
+                            amt = float(row.get("amount", 0) or 0)
+                        except (TypeError, ValueError):
+                            amt = 0.0
+                        if tok and amt > 0:
+                            calc_resources.append({"token": tok, "amount": amt})
+            except Exception:
+                calc_resources = []
+
+
+        # Apply the current action
+        if action == "add":
+            tok = (request.form.get("calc_token") or "").upper().strip()
+            amt_raw = (request.form.get("calc_amount") or "").replace(",", "").strip()
+            try:
+                amt = float(amt_raw or "0")
+            except ValueError:
+                amt = 0.0
+            if tok and amt > 0:
+                calc_resources.append({"token": tok, "amount": amt})
+
+        elif action == "clear":
+            calc_resources = []
+
+        # ---------- Compute totals if we have resources ----------
+        if calc_resources and not error:
+            # 1) Live prices → total COIN cost
+            try:
+                prices = fetch_live_prices_in_coin()
+            except Exception:
+                prices = {}
+
+            total_cost = 0.0
+            for row in calc_resources:
+                price = prices.get(row["token"], 0.0) or 0.0
+                total_cost += float(row["amount"]) * float(price)
+
+            # 2) Total points + XP + battery (requiredPower) via predict_reward
+            total_points = 0.0
+            total_xp = 0.0
+            total_power = 0.0
+            per_unit_points: Dict[str, float] = {}
+            per_unit_xp: Dict[str, float] = {}
+            per_unit_power: Dict[str, float] = {}
+
+            if mp_id_for_calc:
+                # First: total points / XP / power for the whole bundle
                 try:
-                    selected_gap = compute_leaderboard_gap_for_highlight(selected_lb, highlight_query)
+                    contrib = [
+                        {"symbol": r["token"], "amount": float(r["amount"])}
+                        for r in calc_resources
+                    ]
+                    reward = predict_reward(mp_id_for_calc, contrib) or {}
+                    total_points = float(reward.get("masterpiecePoints") or 0)
+                    total_xp = float(reward.get("experiencePoints") or 0)
+                    total_power = float(reward.get("requiredPower") or 0)
                 except Exception:
-                    selected_gap = None
+                    total_points = 0.0
+                    total_xp = 0.0
+                    total_power = 0.0
 
-    # ------------ Reward tiers & ladder rewards (if we have a "current" MP) ------------
+                # Then: per-unit cache so each row can show its own contribution
+                try:
+                    per_unit = get_mp_per_unit_rewards(
+                        mp_id_for_calc,
+                        [r.get("token", "") for r in calc_resources],
+                    )
+                    per_unit_points = per_unit.get("points", {}) or {}
+                    per_unit_xp = per_unit.get("xp", {}) or {}
+                    per_unit_power = per_unit.get("power", {}) or {}
+                except Exception:
+                    per_unit_points = {}
+                    per_unit_xp = {}
+                    per_unit_power = {}
 
-    tier_rows: List[Dict[str, Any]] = []
-    reward_tier_rows: List[Dict[str, Any]] = []
-    leaderboard_reward_rows: List[Dict[str, Any]] = []
+            # Per-row points / XP / battery (safe even if we have no per-unit data)
+            for row in calc_resources:
+                tok = (row.get("token") or "").upper()
+                try:
+                    amt = float(row.get("amount") or 0.0)
+                except (TypeError, ValueError):
+                    amt = 0.0
 
-    if current_mp:
-        # MP tier thresholds as simple rows
-        for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
-            tier_rows.append(
-                {
-                    "tier": i,
-                    "required_points": req,
-                }
+                p_unit = per_unit_points.get(tok, 0.0)
+                x_unit = per_unit_xp.get(tok, 0.0)
+                pw_unit = per_unit_power.get(tok, 0.0)
+                row_points = p_unit * amt
+                row_xp = x_unit * amt
+                row_power = pw_unit * amt
+
+                row["points_str"] = f"{row_points:,.0f}" if row_points else "—"
+                row["xp_str"] = f"{row_xp:,.0f}" if row_xp else "—"
+                row["battery_str"] = f"{row_power:,.0f}" if row_power else "—"
+
+
+            # 3) Map to tiers
+            tier = 0
+            next_tier_index: Optional[int] = None
+            points_to_next: Optional[float] = None
+            progress_to_next: Optional[float] = None
+
+            for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
+                if total_points >= req:
+                    tier = i
+                else:
+                    next_tier_index = i
+                    points_to_next = max(0.0, float(req) - total_points)
+                    progress_to_next = total_points / float(req) if req > 0 else 0.0
+                    break
+
+            if tier == len(MP_TIER_THRESHOLDS):
+                next_tier_index = None
+                points_to_next = None
+                progress_to_next = 1.0
+
+            calc_result = {
+                "total_points": total_points,
+                "total_points_str": f"{total_points:,.0f}",
+                "total_xp": total_xp,
+                "total_xp_str": f"{total_xp:,.0f}",
+                "total_power": total_power,
+                "total_power_str": f"{total_power:,.0f}",
+                "total_cost": total_cost,
+                "total_cost_str": f"{total_cost:,.2f}",
+                "tier": tier,
+                "next_tier_index": next_tier_index,
+                "points_to_next": points_to_next,
+                "points_to_next_str": (
+                    f"{points_to_next:,.0f}" if points_to_next is not None else None
+                ),
+                "progress_to_next_pct": (
+                    round(progress_to_next * 100, 1)
+                    if progress_to_next is not None
+                    else None
+                ),
+            }
+
+    # Serialize calculator state back into hidden JSON field
+    calc_state_json = json.dumps(calc_resources)
+
+    # ---------- Tier thresholds (static ladder) ----------
+    tier_rows = []
+    for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
+        prev_req = MP_TIER_THRESHOLDS[i - 2] if i > 1 else 0
+        tier_rows.append(
+            {
+                "tier": i,
+                "required": req,
+                "delta": req - prev_req,
+            }
+        )
+
+    # ---------- Tier rewards from the Masterpiece (rewardStages) ----------
+    reward_tier_rows: list[dict[str, object]] = []
+
+    # Use the planner MP as the "source of truth" for tier rewards
+    # (you can swap to selected_mp/current_mp if you want)
+    src_mp = planner_mp or selected_mp or current_mp
+
+    if isinstance(src_mp, dict):
+        raw_stages = src_mp.get("rewardStages") or []
+
+        # rewardStages can be either a list or dict; normalise to list
+        if isinstance(raw_stages, dict):
+            stages_iter = list(raw_stages.values())
+        elif isinstance(raw_stages, list):
+            stages_iter = raw_stages
+        else:
+            stages_iter = []
+
+        for idx, st in enumerate(stages_iter, start=1):
+            if not isinstance(st, dict):
+                continue
+
+            # Try to guess tier index and required points from common keys
+            tier_num = st.get("tier") or st.get("stage") or idx
+            required = (
+                st.get("requiredPoints")
+                or st.get("minPoints")
+                or st.get("minimumPoints")
+                or st.get("points")
             )
 
-        # Reward tiers (battle pass / regular rewards from current_mp["rewards"])
-        rewards = current_mp.get("rewardStages") or []
-        for stage in rewards:
-            try:
-                req_points = stage.get("requiredMasterpiecePoints")
-            except AttributeError:
-                continue
-            if req_points is None:
-                continue
+            rewards_list = st.get("rewards") or st.get("items") or []
+            reward_parts: list[str] = []
+
+            if isinstance(rewards_list, list):
+                for rw in rewards_list:
+                    if not isinstance(rw, dict):
+                        continue
+
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+
+                    label_bits: list[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
+
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        reward_parts.append(label)
+
+            if not reward_parts:
+                reward_parts.append("See in-game rewards")
+
             reward_tier_rows.append(
                 {
-                    "required_points": req_points,
-                    "rewards": stage.get("rewards") or [],
-                    "battlePassRewards": stage.get("battlePassRewards") or [],
+                    "tier": tier_num,
+                    "required": required,
+                    "rewards_text": ", ".join(reward_parts),
                 }
             )
 
-        # Leaderboard reward brackets
-        for bracket in current_mp.get("leaderboardRewards", []) or []:
-            leaderboard_reward_rows.append(bracket)
+    # ---------- Leaderboard placement rewards (leaderboardRewards) ----------
+    leaderboard_reward_rows: list[dict[str, object]] = []
 
-    # ---- Build the per-tab HTML ----
+    if isinstance(selected_mp, dict):
+        raw_lb_rewards = (
+            selected_mp.get("leaderboardRewards")
+            or selected_mp.get("leaderboardRewardStages")
+            or []
+        )
 
+        if isinstance(raw_lb_rewards, dict):
+            lb_iter = list(raw_lb_rewards.values())
+        elif isinstance(raw_lb_rewards, list):
+            lb_iter = raw_lb_rewards
+        else:
+            lb_iter = []
+
+        for blk in lb_iter:
+            if not isinstance(blk, dict):
+                continue
+
+            from_rank = blk.get("from") or blk.get("fromRank")
+            to_rank = blk.get("to") or blk.get("toRank")
+
+            rewards_list = blk.get("rewards") or blk.get("items") or []
+            reward_parts: list[str] = []
+
+            if isinstance(rewards_list, list):
+                for rw in rewards_list:
+                    if not isinstance(rw, dict):
+                        continue
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+
+                    label_bits: list[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
+
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        reward_parts.append(label)
+
+            if not reward_parts:
+                reward_parts.append("See in-game rewards")
+
+            leaderboard_reward_rows.append(
+                {
+                    "from_rank": from_rank,
+                    "to_rank": to_rank,
+                    "rewards_text": ", ".join(reward_parts),
+                }
+            )
+
+
+    # ---------- Render content for this tab ----------
     content = """
-    <!-- (your large MP HTML/Jinja template stays here unchanged) -->
-    {{!-- I'm not retyping the full template here since it's already in your file.
-          You can keep your existing template content between content = """ and the
-          closing triple quotes. --}}
+    <div class="card">
+      <style>
+        .mp-top-summary {
+          margin-top: 8px;
+          margin-bottom: 10px;
+        }
+        .mp-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 8px;
+        }
+        .mp-summary-tile {
+          border-radius: 12px;
+          padding: 8px 10px;
+          background: radial-gradient(circle at top, rgba(30,64,175,0.55), rgba(15,23,42,0.95));
+          border: 1px solid rgba(129,140,248,0.7);
+          font-size: 13px;
+        }
+        .mp-summary-title {
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #bfdbfe;
+          margin-bottom: 2px;
+        }
+        .mp-summary-main {
+          font-size: 14px;
+          font-weight: 600;
+          color: #f9fafb;
+        }
+        .mp-summary-sub {
+          font-size: 12px;
+          color: #9ca3af;
+        }
+
+        .mp-subnav {
+          margin-top: 14px;
+          margin-bottom: 6px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .mp-tab {
+          border-radius: 999px;
+          border: 1px solid rgba(148,163,184,0.7);
+          background: rgba(15,23,42,0.9);
+          padding: 5px 11px;
+          font-size: 13px;
+          color: #e5e7eb;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .mp-tab span.icon {
+          font-size: 14px;
+        }
+        .mp-tab.active {
+          border-color: transparent;
+          background: linear-gradient(135deg, #22c55e, #0ea5e9);
+          color: #020617;
+          box-shadow: 0 0 0 1px rgba(34,197,94,0.6), 0 8px 24px rgba(34,197,94,0.4);
+        }
+
+        .mp-section {
+          margin-top: 10px;
+        }
+
+        .mp-pill {
+          display:inline-block;
+          padding: 2px 8px;
+          border-radius:999px;
+          font-size:11px;
+          border:1px solid rgba(52,211,153,0.7);
+          color:#a7f3d0;
+          background:rgba(6,95,70,0.35);
+        }
+        .mp-pill-secondary {
+          border-color: rgba(129,140,248,0.9);
+          color:#c7d2fe;
+          background:rgba(30,64,175,0.45);
+        }
+
+        .mp-tier-table th,
+        .mp-tier-table td {
+          white-space: nowrap;
+        }
+
+        .mp-planner-grid {
+          display:grid;
+          grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+          gap: 10px;
+        }
+
+        .mp-stat-block {
+          display:flex;
+          flex-direction:row;
+          flex-wrap:wrap;
+          gap: 10px;
+          font-size:13px;
+        }
+        .mp-stat-label {
+          color:#9ca3af;
+          font-size:12px;
+        }
+        .mp-stat-value {
+          font-size:14px;
+          font-weight:600;
+        }
+        .mp-gap-card {
+          margin-top: 8px;
+          margin-bottom: 8px;
+          padding: 10px 12px;
+          border-radius: 10px;
+          background: linear-gradient(90deg, rgba(56,189,248,0.09), rgba(56,189,248,0.02));
+          border: 1px solid rgba(56,189,248,0.45);
+        }
+        .mp-gap-title {
+          font-size: 13px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #38bdf8;
+          margin-bottom: 4px;
+        }
+        .mp-gap-grid {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          align-items: flex-end;
+        }
+        .mp-gap-block {
+          min-width: 140px;
+        }
+        .mp-gap-label {
+          font-size: 12px;
+          color: #9ca3af;
+          margin-bottom: 2px;
+        }
+        .mp-gap-number {
+          font-size: 20px;
+          font-weight: 800;
+          line-height: 1.1;
+        }
+        .mp-gap-sub {
+          font-size: 12px;
+          color: #e5e7eb;
+        }
+
+
+        .mp-row-me {
+          background: linear-gradient(90deg, rgba(250,204,21,0.14), transparent);
+        }
+        .mp-row-me td {
+          border-top: 1px solid rgba(250,204,21,0.35);
+          border-bottom: 1px solid rgba(250,204,21,0.18);
+        }
+        .me-pill {
+          display:inline-block;
+          margin-left:6px;
+          padding:1px 6px;
+          border-radius:999px;
+          font-size:11px;
+          border:1px solid rgba(250,204,21,0.7);
+          color:#facc15;
+          background:rgba(30,64,175,0.65);
+        }
+
+        @media (max-width: 768px) {
+          .mp-planner-grid {
+
+            grid-template-columns: 1fr;
+          }
+        }
+      </style>
+
+      <h1>🏛 Masterpiece Hub</h1>
+      <p class="subtle">
+        Plan donations, watch the live race, and browse past &amp; event Masterpieces —
+        all wired directly to <code>predictReward</code> and live COIN prices.
+      </p>
+
+      <form method="get" class="section" style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+        <input type="hidden" name="tab" value="{{ request.args.get('tab') or 'planner' }}">
+        <label for="mp_highlight" class="subtle">Highlight my name / Voya ID (top 100 only):</label>
+        <input id="mp_highlight"
+               name="highlight"
+               type="text"
+               value="{{ highlight_query }}"
+               placeholder="Your display name or Voya ID"
+               style="min-width:220px;">
+        <button type="submit">Apply</button>
+        {% if highlight_query %}
+          <span class="hint">Highlighting rows matching: <strong>{{ highlight_query }}</strong></span>
+        {% else %}
+          <span class="hint">Works if you&apos;re in the visible top {{ top_n }}.</span>
+        {% endif %}
+      </form>
+
+
+      {% if current_mp %}
+        <div class="mp-top-summary">
+          <div class="mp-summary-grid">
+            <div class="mp-summary-tile">
+              <div class="mp-summary-title">Current masterpiece (used for planner)</div>
+              <div class="mp-summary-main">
+                MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}
+              </div>
+              <div class="mp-summary-sub">
+                {% if current_mp.eventId %}
+                  <span class="mp-pill">Event Masterpiece</span>
+                {% else %}
+                  <span class="mp-pill">General Masterpiece</span>
+                {% endif %}
+                <span style="margin-left:6px;" class="mp-pill mp-pill-secondary">
+                  Scoring source for 🧮 Planner
+                </span>
+              </div>
+            </div>
+            <div class="mp-summary-tile">
+              <div class="mp-summary-title">Masterpiece pool</div>
+              <div class="mp-summary-main">
+                {{ general_mps|length }} general · {{ event_mps|length }} event
+              </div>
+              <div class="mp-summary-sub">
+                History browser lets you inspect any MP&apos;s top 50 at any time.
+              </div>
+            </div>
+            <div class="mp-summary-tile">
+              <div class="mp-summary-title">Live leaderboard snapshot</div>
+              <div class="mp-summary-main">
+                Top {{ current_mp_top50|length }} tracked
+              </div>
+              <div class="mp-summary-sub">
+                Switch to the <strong>📈 Current MP</strong> tab to see positions &amp; point gaps.
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+        {% if highlight_query and (general_snapshot or event_snapshot) %}
+        <div class="section" style="margin-top:10px;">
+          <h2 style="margin-top:0;">🎁 Your current MP rewards (if it ended now)</h2>
+          <p class="subtle">
+            Based on your <strong>current leaderboard position</strong> for the active General &amp; Event Masterpieces.
+          </p>
+
+          <div class="mp-summary-grid">
+            {% if general_snapshot %}
+              <div class="mp-summary-tile">
+                <div class="mp-summary-title">Active General Masterpiece</div>
+                <div class="mp-summary-main">
+                  MP {{ general_snapshot.mp.id }} —
+                  {{ general_snapshot.mp.name or general_snapshot.mp.addressableLabel or general_snapshot.mp.type }}
+                </div>
+                <div class="mp-summary-sub">
+                  Rank <strong>#{{ general_snapshot.position }}</strong> ·
+                  {{ "{:,.0f}".format(general_snapshot.points or 0) }} points<br>
+                  {% if general_snapshot.tier %}
+                    Completion tier: <strong>Tier {{ general_snapshot.tier }}</strong>
+                    {% if general_snapshot.tier_required %}
+                      (requires ≥ {{ "{:,.0f}".format(general_snapshot.tier_required or 0) }} pts)
+                    {% endif %}
+                    <br>
+                  {% else %}
+                    Completion tier: <strong>Below Tier 1</strong><br>
+                  {% endif %}
+
+                  {% if general_snapshot.leaderboard_rewards %}
+                    Leaderboard rewards: {{ general_snapshot.leaderboard_rewards }}
+                  {% else %}
+                    Leaderboard rewards: <span class="subtle">See in-game details</span>
+                  {% endif %}
+                </div>
+              </div>
+            {% endif %}
+
+            {% if event_snapshot %}
+              <div class="mp-summary-tile">
+                <div class="mp-summary-title">Active Event Masterpiece</div>
+                <div class="mp-summary-main">
+                  MP {{ event_snapshot.mp.id }} —
+                  {{ event_snapshot.mp.name or event_snapshot.mp.addressableLabel or event_snapshot.mp.type }}
+                </div>
+                <div class="mp-summary-sub">
+                  Rank <strong>#{{ event_snapshot.position }}</strong> ·
+                  {{ "{:,.0f}".format(event_snapshot.points or 0) }} points<br>
+                  {% if event_snapshot.tier %}
+                    Completion tier: <strong>Tier {{ event_snapshot.tier }}</strong>
+                    {% if event_snapshot.tier_required %}
+                      (requires ≥ {{ "{:,.0f}".format(event_snapshot.tier_required or 0) }} pts)
+                    {% endif %}
+                    <br>
+                  {% else %}
+                    Completion tier: <strong>Below Tier 1</strong><br>
+                  {% endif %}
+
+                  {% if event_snapshot.leaderboard_rewards %}
+                    Leaderboard rewards: {{ event_snapshot.leaderboard_rewards }}
+                  {% else %}
+                    Leaderboard rewards: <span class="subtle">See in-game details</span>
+                  {% endif %}
+                </div>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+
+      <div class="mp-subnav">
+        <button type="button" class="mp-tab active" data-mp-tab="planner">
+          <span class="icon">🧮</span> Donation Planner
+        </button>
+        <button type="button" class="mp-tab" data-mp-tab="current">
+          <span class="icon">📈</span> Current MP leaderboard
+        </button>
+        <button type="button" class="mp-tab" data-mp-tab="history">
+          <span class="icon">📜</span> History &amp; events
+        </button>
+      </div>
+
+      <div class="mp-sections">
+        <!-- 🧮 Donation Planner -->
+        <div class="mp-section" data-mp-section="planner" style="display:block;">
+          <div class="mp-planner-grid">
+            <!-- Left: tier table -->
+            <div class="section">
+              <h2 style="margin-top:0;">Tier ladder</h2>
+              <p class="subtle">
+                Official tier thresholds for the active general Masterpiece.
+              </p>
+              <div class="scroll-x">
+                <table class="mp-tier-table">
+                  <tr>
+                    <th>Tier</th>
+                    <th>Required points</th>
+                    <th>Delta vs previous</th>
+                  </tr>
+                  {% for row in tier_rows %}
+                    <tr>
+                      <td>Tier {{ row.tier }}</td>
+                      <td>{{ "{:,}".format(row.required) }}</td>
+                      <td>
+                        {% if row.tier == 1 %}
+                          —
+                        {% else %}
+                          +{{ "{:,}".format(row.delta) }}
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
+            </div>
+            <div class="section" style="margin-top:10px;">
+              <h3 style="margin-top:0;">Tier rewards</h3>
+              <p class="subtle">
+                Guaranteed rewards for each completion tier (from the Masterpiece rewardStages API).
+              </p>
+
+              {% if reward_tier_rows %}
+                <div class="scroll-x">
+                  <table class="mp-tier-table">
+                    <tr>
+                      <th>Tier</th>
+                      <th>Required points</th>
+                      <th>Rewards</th>
+                    </tr>
+                    {% for row in reward_tier_rows %}
+                      <tr>
+                        <td>Tier {{ row.tier or loop.index }}</td>
+                        <td>
+                          {% if row.required %}
+                            {{ "{:,}".format(row.required) }}
+                          {% else %}
+                            —
+                          {% endif %}
+                        </td>
+                        <td>{{ row.rewards_text }}</td>
+                      </tr>
+                    {% endfor %}
+                  </table>
+                </div>
+              {% else %}
+                <p class="hint">
+                  No tier reward metadata in the API for this Masterpiece yet — check in-game rewards.
+                </p>
+              {% endif %}
+            </div>
+
+
+            <!-- Right: planner form & results -->
+            <div class="section">
+              <form method="post">
+                <input type="hidden" name="calc_state" value='{{ calc_state_json }}'>
+
+                <div style="margin-bottom:10px;">
+                  <label for="planner_mp_id">Masterpiece</label>
+                  <select id="planner_mp_id" name="planner_mp_id" onchange="this.form.submit();">
+                    {% if planner_mp_options %}
+                      {% for mp in planner_mp_options %}
+                        <option value="{{ mp.id }}"
+                          {% if planner_mp and mp.id == planner_mp.id %}selected{% endif %}>
+                          MP {{ mp.id }} — {{ mp.name or mp.addressableLabel or mp.type }}
+                        </option>
+                      {% endfor %}
+                    {% else %}
+                      <option value="">(no general masterpieces found)</option>
+                    {% endif %}
+                  </select>
+                </div>
+
+                <h2 style="margin-top:0;">Build a donation bundle</h2>
+
+                <p class="subtle">
+                  Choose resources, set amounts, and we&apos;ll predict total
+                  <strong>MP points</strong>, <strong>XP</strong>, and <strong>COIN cost</strong>
+                  using the selected Masterpiece above.
+                </p>
+
+                <div class="two-col" style="gap:10px;">
+                  <div>
+                <label for="calc_token">Resource</label>
+                <select id="calc_token" name="calc_token">
+                  <option value="">-- Choose resource --</option>
+                  {% for tok in planner_tokens %}
+                    <option value="{{ tok }}">{{ tok }}</option>
+                  {% endfor %}
+                </select>
+
+                  </div>
+                  <div>
+                    <label for="calc_amount">Quantity</label>
+                    <input id="calc_amount" name="calc_amount" type="number" step="1" min="1" placeholder="Enter amount">
+                  </div>
+                </div>
+
+                <div class="two-col" style="margin-top:10px; gap:8px;">
+                  <button type="submit" name="calc_action" value="add">➕ Add resource</button>
+                  <button type="submit" name="calc_action" value="clear">🗑️ Clear all</button>
+                </div>
+
+                <h3 style="margin-top:16px;">📋 Current bundle</h3>
+                {% if calc_resources %}
+                  <div class="scroll-x">
+                    <table>
+                      <tr>
+                        <th>Token</th>
+                        <th style="text-align:right;">Quantity</th>
+                        <th style="text-align:right;">Points</th>
+                        <th style="text-align:right;">XP</th>
+                        <th style="text-align:right;">Battery</th>
+
+                      </tr>
+                    {% for row in calc_resources %}
+                      <tr>
+                        <td>{{ row.token }}</td>
+                        <td style="text-align:right;">{{ row.amount }}</td>
+                        <td style="text-align:right;">{{ row.points_str or "—" }}</td>
+                        <td style="text-align:right;">{{ row.xp_str or "—" }}</td>
+                        <td style="text-align:right;">{{ row.battery_str or "—" }}</td>
+                      </tr>
+                    {% endfor %}
+
+                    </table>
+                  </div>
+                {% else %}
+                  <p class="hint">Nothing in the bundle yet. Add a resource to get started.</p>
+                {% endif %}
+
+                <h3 style="margin-top:16px;">📊 Result vs tier ladder</h3>
+                {% if calc_result %}
+                  <div class="mp-stat-block">
+                    <div>
+                      <div class="mp-stat-label">Total points</div>
+                      <div class="mp-stat-value">{{ calc_result.total_points_str }}</div>
+                    </div>
+                    <div>
+                      <div class="mp-stat-label">Total XP</div>
+                      <div class="mp-stat-value">{{ calc_result.total_xp_str }}</div>
+                    </div>
+                    <div>
+                        <div class="mp-stat-label">Total battery</div>
+                        <div class="mp-stat-value">{{ calc_result.total_power_str }}</div>
+                     </div>
+                     <div>
+                        <div class="mp-stat-label">Tier reached</div>
+                      <div class="mp-stat-value">
+                        {% if calc_result.tier > 0 %}
+                          Tier {{ calc_result.tier }}
+                        {% else %}
+                          Below Tier 1
+                        {% endif %}
+                      </div>
+                    </div>
+                  </div>
+
+                  {% if calc_result.next_tier_index %}
+                    <p style="margin-top:10px;" class="subtle">
+                      Progress to <strong>Tier {{ calc_result.next_tier_index }}</strong>:<br>
+                      {{ calc_result.progress_to_next_pct }}% — 
+                      {{ calc_result.points_to_next_str }} more points needed.
+                    </p>
+                  {% else %}
+                    <p style="margin-top:10px;" class="subtle">
+                      You&apos;re at the <strong>maximum tier</strong> for this masterpiece with this bundle.
+                    </p>
+                  {% endif %}
+                {% else %}
+                  <p class="hint">
+                    Add some resources and click <strong>➕ Add resource</strong> to see points, XP, and tier progress.
+                  </p>
+                {% endif %}
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- 📈 Current MP leaderboard -->
+        <div class="mp-section" data-mp-section="current" style="display:none;">
+          <div class="section" style="margin-top:4px;">
+            <h2>Live leaderboard – current Masterpiece</h2>
+            {% if error %}
+              <div class="error">{{ error }}</div>
+            {% endif %}
+
+            {% if current_mp %}
+              <p class="subtle">
+                MP {{ current_mp.id }} — {{ current_mp.name or current_mp.addressableLabel or current_mp.type }}<br>
+                Showing top {{ current_mp_top50|length }} players (Top {{ top_n }}).
+              </p>
+
+              <form method="get" class="section" style="margin-bottom:8px; display:flex; align-items:center; gap:8px;">
+                <input type="hidden" name="tab" value="current">
+                <label for="top_n" class="subtle">Show:</label>
+                <select id="top_n" name="top_n">
+                  {% for n in top_n_options %}
+                    <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
+                  {% endfor %}
+                </select>
+                <button type="submit">Apply</button>
+                <span class="hint">Only the top 100 are supported.</span>
+              </form>
+              
+              {% if highlight_query and current_gap %}
+                <div class="mp-gap-card">
+                  <div class="mp-gap-title">Your position on this masterpiece</div>
+                  <div class="mp-gap-grid">
+                    <div class="mp-gap-block">
+                      <div class="mp-gap-label">Your rank &amp; points</div>
+                    <div class="mp-gap-number">
+                      #{{ current_gap.position }} · {{ "{:,.0f}".format(current_gap.points or 0) }}
+                    </div>
+
+                      <div class="mp-gap-sub">
+                        Highlight: <code>{{ highlight_query }}</code>
+                      </div>
+                    </div>
+          <div class="section" style="margin-top:14px;">
+            <h3 style="margin-top:0;">Leaderboard rewards</h3>
+            <p class="subtle">
+              Placement rewards for this Masterpiece (from the <code>leaderboardRewards</code> API field).
+            </p>
+
+            {% if leaderboard_reward_rows %}
+              <div class="scroll-x">
+                <table>
+                  <tr>
+                    <th>Rank range</th>
+                    <th>Rewards</th>
+                  </tr>
+                  {% for row in leaderboard_reward_rows %}
+                    <tr>
+                      <td>
+                        {% if row.from_rank and row.to_rank and row.from_rank != row.to_rank %}
+                          #{{ row.from_rank }} &ndash; #{{ row.to_rank }}
+                        {% elif row.from_rank %}
+                          #{{ row.from_rank }}
+                        {% else %}
+                          (unknown)
+                        {% endif %}
+                      </td>
+                      <td>{{ row.rewards_text }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
+            {% else %}
+              <p class="hint">
+                No leaderboard reward metadata found for this Masterpiece in the API.
+              </p>
+            {% endif %}
+          </div>
+
+
+                    {% if current_gap.gap_up is not none %}
+                      <div class="mp-gap-block">
+                        <div class="mp-gap-label">Points to pass above</div>
+                    <div class="mp-gap-number">
+                      {{ "{:,.0f}".format(current_gap.gap_up or 0) }}
+                    </div>
+
+                        <div class="mp-gap-sub">
+                          To pass <strong>{{ current_gap.above_name }}</strong>
+                          (#{{ current_gap.above_pos }})
+                        </div>
+                      </div>
+                    {% else %}
+                      <div class="mp-gap-block">
+                        <div class="mp-gap-label">Points to pass above</div>
+                        <div class="mp-gap-number">
+                          —
+                        </div>
+                        <div class="mp-gap-sub">
+                          You&apos;re currently at the top 👑
+                        </div>
+                      </div>
+                    {% endif %}
+
+                    {% if current_gap.gap_down is not none %}
+                      <div class="mp-gap-block">
+                        <div class="mp-gap-label">Lead over player behind</div>
+                    <div class="mp-gap-number">
+                      {{ "{:,.0f}".format(current_gap.gap_down or 0) }}
+                    </div>
+
+                        <div class="mp-gap-sub">
+                          Ahead of <strong>{{ current_gap.below_name }}</strong>
+                          (#{{ current_gap.below_pos }})
+                        </div>
+                      </div>
+                    {% else %}
+                      <div class="mp-gap-block">
+                        <div class="mp-gap-label">Lead over player behind</div>
+                        <div class="mp-gap-number">
+                          —
+                        </div>
+                        <div class="mp-gap-sub">
+                          No one is listed behind you
+                        </div>
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endif %}
+
+
+              {% if current_mp_top50 %}
+                <div class="mp-table-wrap">
+                  <table>
+                    <tr>
+                      <th>Pos</th>
+                      <th>Player</th>
+                      <th>Points</th>
+                    </tr>
+{% for row in current_mp_top50 %}
+  {% set prof = row.profile or {} %}
+  {% set name = prof.displayName or "" %}
+  {% set uid = prof.uid or "" %}
+  {% set is_me = highlight_query and (
+    highlight_query|lower in name|lower
+    or highlight_query|lower in uid|lower
+  ) %}
+  <tr class="{% if is_me %}mp-row-me{% endif %}">
+    <td>{{ row.position }}</td>
+    <td class="subtle">
+      {% if name %}
+        {{ name }}
+      {% elif uid %}
+        {{ uid }}
+      {% else %}
+        —
+      {% endif %}
+      {% if is_me %}
+        <span class="me-pill">← you</span>
+      {% endif %}
+    </td>
+    <td>{{ "{:,.0f}".format(row.masterpiecePoints or 0) }}</td>
+  </tr>
+{% endfor %}
+    </table>
+  </div>
+
+              {% else %}
+                <p class="hint">No leaderboard data yet for the current masterpiece.</p>
+              {% endif %}
+            {% else %}
+              <p class="hint">No active masterpieces detected.</p>
+            {% endif %}
+          </div>
+        </div>
+
+
+        <!-- 📜 History & events browser -->
+        <div class="mp-section" data-mp-section="history" style="display:none;">
+          <div class="section" style="margin-top:4px;">
+            <h2>History &amp; event browser</h2>
+            <p class="subtle">
+              Inspect the top <strong>{{ top_n }}</strong> positions for any general or event masterpiece.
+            </p>
+
+            {% if history_mp_options %}
+              <form method="get" class="mp-selector-form" style="margin-bottom:12px;">
+                <label for="mp_view_id">Choose a masterpiece</label>
+                <select id="mp_view_id" name="mp_view_id" style="max-width:320px;">
+                  {% for mp in history_mp_options %}
+                    <option value="{{ mp.id }}"
+                      {% if selected_mp and mp.id == selected_mp.id %}selected{% endif %}>
+                      MP {{ mp.id }}
+                      {% if mp.name or mp.addressableLabel or mp.type %}
+                        — {{ mp.name or mp.addressableLabel or mp.type }}
+                      {% endif %}
+                      {% if current_mp and mp.id == current_mp.id %}(current){% endif %}
+                    </option>
+                  {% endfor %}
+                </select>
+
+
+                <label for="history_top_n" style="margin-left:8px;">Show:</label>
+                <select id="history_top_n" name="top_n">
+                  {% for n in top_n_options %}
+                    <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
+                  {% endfor %}
+                </select>
+
+                <input type="hidden" name="tab" value="history">
+                <button type="submit" style="margin-left:6px;">View leaderboard</button>
+              </form>
+
+              {% if selected_mp %}
+                {% if selected_mp_top50 %}
+
+                  {% if highlight_query and selected_gap %}
+                    <div class="mp-gap-card">
+                      <div class="mp-gap-title">Your position on this masterpiece</div>
+                      <div class="mp-gap-grid">
+                        <div class="mp-gap-block">
+                          <div class="mp-gap-label">Your rank &amp; points</div>
+                          <div class="mp-gap-number">
+                              #{{ selected_gap.position }} · {{ "{:,.0f}".format(selected_gap.points or 0) }}
+                          </div>
+
+                          <div class="mp-gap-sub">
+                            Highlight: <code>{{ highlight_query }}</code>
+                          </div>
+                        </div>
+
+                        {% if selected_gap.gap_up is not none %}
+                          <div class="mp-gap-block">
+                            <div class="mp-gap-label">Points to pass above</div>
+                            <div class="mp-gap-number">
+                              {{ "{:,.0f}".format(selected_gap.gap_up or 0) }}
+                            </div>
+
+                            <div class="mp-gap-sub">
+                              To pass <strong>{{ selected_gap.above_name }}</strong>
+                              (#{{ selected_gap.above_pos }})
+                            </div>
+                          </div>
+                        {% else %}
+                          <div class="mp-gap-block">
+                            <div class="mp-gap-label">Points to pass above</div>
+                            <div class="mp-gap-number">
+                              —
+                            </div>
+                            <div class="mp-gap-sub">
+                              You&apos;re currently at the top 👑
+                            </div>
+                          </div>
+                        {% endif %}
+
+                        {% if selected_gap.gap_down is not none %}
+                          <div class="mp-gap-block">
+                            <div class="mp-gap-label">Lead over player behind</div>
+                            <div class="mp-gap-number">
+                              {{ "{:,.0f}".format(selected_gap.gap_down or 0) }}
+                            </div>
+
+                            <div class="mp-gap-sub">
+                              Ahead of <strong>{{ selected_gap.below_name }}</strong>
+                              (#{{ selected_gap.below_pos }})
+                            </div>
+                          </div>
+                        {% else %}
+                          <div class="mp-gap-block">
+                            <div class="mp-gap-label">Lead over player behind</div>
+                            <div class="mp-gap-number">
+                              —
+                            </div>
+                            <div class="mp-gap-sub">
+                              No one is listed behind you
+                            </div>
+                          </div>
+                        {% endif %}
+                      </div>
+                    </div>
+                  {% endif %}
+
+
+                  <div class="mp-table-wrap">
+                    <table>
+                      <tr>
+                        <th>Pos</th>
+                        <th>Player</th>
+                        <th>Points</th>
+                      </tr>
+                      {% for row in selected_mp_top50 %}
+                        {% set prof = row.profile or {} %}
+                        {% set name = prof.displayName or "" %}
+                        {% set uid = prof.uid or "" %}
+                        {% set is_me = highlight_query and (
+                          highlight_query|lower in name|lower
+                          or highlight_query|lower in uid|lower
+                        ) %}
+                        <tr class="{% if is_me %}mp-row-me{% endif %}">
+                          <td>{{ row.position }}</td>
+                          <td class="subtle">
+                            {% if name %}
+                              {{ name }}
+                            {% elif uid %}
+                              {{ uid }}
+                            {% else %}
+                              —
+                            {% endif %}
+                            {% if is_me %}
+                              <span class="me-pill">← you</span>
+                            {% endif %}
+                          </td>
+                          <td>{{ "{:,.0f}".format(row.masterpiecePoints or 0) }}</td>
+                        </tr>
+                      {% endfor %}
+                    </table>
+                  </div>
+                {% else %}
+                  <p class="hint">No leaderboard data for this masterpiece.</p>
+                {% endif %}
+              {% else %}
+                <p class="hint">Select a masterpiece above to view its leaderboard.</p>
+              {% endif %}
+            {% else %}
+              <p class="hint">No masterpieces available to browse.</p>
+            {% endif %}
+          </div>
+        </div>
+
+
+<script>
+  (function() {
+    const tabs = document.querySelectorAll('.mp-tab');
+    const sections = document.querySelectorAll('.mp-section');
+
+    function activate(name) {
+      tabs.forEach(btn => {
+        const t = btn.getAttribute('data-mp-tab');
+        btn.classList.toggle('active', t === name);
+      });
+      sections.forEach(sec => {
+        const s = sec.getAttribute('data-mp-section');
+        if (s === name) {
+          sec.style.display = 'block';
+        } else {
+          sec.style.display = 'none';
+        }
+      });
+    }
+
+    // Read "tab" from query string (so reloads keep the same sub-tab)
+    const params = new URLSearchParams(window.location.search);
+    let currentTab = params.get('tab') || 'planner';
+    activate(currentTab);
+
+    // When you click a tab, update URL (no reload) and state
+    tabs.forEach(btn => {
+      btn.addEventListener('click', function() {
+        const t = this.getAttribute('data-mp-tab') || 'planner';
+        currentTab = t;
+        activate(t);
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', t);
+        window.history.replaceState({}, '', url);
+      });
+    });
+
+    // Auto-refresh the page every 30s when on the "current" tab
+    const REFRESH_MS = 30000;
+    setInterval(() => {
+      if (currentTab !== 'current') return;
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', 'current');
+      window.location.href = url.toString();
+    }, REFRESH_MS);
+  })();
+</script>
     """
 
     # Render inner content with context
@@ -2338,6 +3460,7 @@ def masterpieces_view():
         event_mps=event_mps,
         general_snapshot=general_snapshot,
         event_snapshot=event_snapshot,
+
 
         # current MP leaderboard
         current_mp=current_mp,
@@ -2370,7 +3493,6 @@ def masterpieces_view():
         history_mp_options=history_mp_options,
         highlight_query=highlight_query,
     )
-
     # Wrap in base template
     html = render_template_string(
         BASE_TEMPLATE,
@@ -2379,7 +3501,6 @@ def masterpieces_view():
         has_uid=has_uid_flag(),
     )
     return html
-
 
 def _build_reward_snapshot_for_mp(
     mp: Optional[Dict[str, Any]],
@@ -2423,14 +3544,19 @@ def _build_reward_snapshot_for_mp(
             for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
                 if pts >= req:
                     tier_index = i
+                else:
+                    break
+
             if tier_index > 0:
                 tier_label = f"Tier {tier_index}"
                 tier_min = MP_TIER_THRESHOLDS[tier_index - 1]
                 if tier_index < len(MP_TIER_THRESHOLDS):
-                    tier_max = MP_TIER_THRESHOLDS[tier_index]
+                    # Next tier starts at the next threshold; treat max as one less
+                    tier_max = MP_TIER_THRESHOLDS[tier_index] - 1
                 else:
                     # Top tier: no upper bound
                     tier_max = None
+
 
     # Figure out reward bracket we fall into
     reward_bracket: Optional[Dict[str, Any]] = None
@@ -2457,23 +3583,14 @@ def _build_reward_snapshot_for_mp(
         xp = rr.get("experience")
         if xp is not None:
             label_parts.append(f"{xp:,} XP")
-        resources = rr.get("resources") or []
-        if resources:
-            # e.g. " +10 WATER, +5 FIRE"
-            res_bits = []
-            for r in resources:
-                sym = r.get("symbol")
-                amt = r.get("amount")
-                if sym and amt is not None:
-                    try:
-                        amt_f = float(amt)
-                    except Exception:
-                        amt_f = None
-                    if amt_f is not None:
-                        res_bits.append(f"{amt_f:g} {sym}")
-            if res_bits:
-                label_parts.append(", ".join(res_bits))
+        mp_tokens = rr.get("masterpiecePoints")
+        if mp_tokens is not None:
+            label_parts.append(f"{mp_tokens:,} MP")
+        coins = rr.get("coins")
+        if coins is not None:
+            label_parts.append(f"{coins:,} coins")
 
+        # Add 1-based rank range label
         min_rank = reward_bracket.get("minRank")
         max_rank = reward_bracket.get("maxRank")
         if min_rank is not None and max_rank is not None:
@@ -2493,6 +3610,15 @@ def _build_reward_snapshot_for_mp(
         "reward_bracket": reward_bracket,
         "reward_label": reward_label,
     }
+
+
+
+
+
+
+
+
+
 
 # -------- Snipe Calculator tab --------
 @app.route("/snipe", methods=["GET", "POST"])
@@ -3631,9 +4757,6 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
 
 
 
