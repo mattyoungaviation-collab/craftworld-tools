@@ -1842,7 +1842,72 @@ def boosts():
     )
     return html
 
-# -------- Masterpieces tab --------
+# ================= MASTERPIECES TAB TEMPLATE ==================
+content = """
+<div class="card">
+  <h1>Masterpieces</h1>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <div class="tabs">
+    <a href="#general">General MPs</a>
+    <a href="#event">Event MPs</a>
+    <a href="#history">History</a>
+    <a href="#planner">Donation Planner</a>
+  </div>
+
+  <div id="general">
+    <h2>Current General Masterpiece</h2>
+    {% if current_mp %}
+      <p><strong>{{ current_mp.name }}</strong> (ID {{ current_mp.id }})</p>
+      {{ current_mp_top50|safe }}
+    {% else %}
+      <p>No general masterpiece found.</p>
+    {% endif %}
+  </div>
+
+  <div id="event">
+    <h2>Current Event Masterpiece</h2>
+    {% if current_event_mp %}
+      <p><strong>{{ current_event_mp.name }}</strong> (ID {{ current_event_mp.id }})</p>
+      {{ selected_mp_top50|safe }}
+    {% else %}
+      <p>No event masterpiece found.</p>
+    {% endif %}
+  </div>
+
+  <div id="history">
+    <h2>History & Selector</h2>
+    <form method="post">
+      <select name="history_mp">
+        <option value="">-- Select Masterpiece --</option>
+        {% for opt in history_mp_options %}
+          <option value="{{ opt.id }}"
+            {% if selected_mp and selected_mp.id|string == opt.id|string %}selected{% endif %}>
+            {{ opt.label }}
+          </option>
+        {% endfor %}
+      </select>
+      <input type="text" name="highlight_query" placeholder="Your name or Voya ID" value="{{ highlight_query }}">
+      <button type="submit">Load</button>
+    </form>
+
+    {% if selected_mp %}
+      <h3>{{ selected_mp.name }} (ID {{ selected_mp.id }})</h3>
+      {{ selected_mp_top50|safe }}
+    {% endif %}
+  </div>
+
+  <div id="planner">
+    <h2>Donation Planner</h2>
+    {{ calc_result|safe }}
+  </div>
+</div>
+"""
+# ================= END MASTERPIECES TEMPLATE ==================
+
 @app.route("/masterpieces", methods=["GET", "POST"])
 def masterpieces_view():
     """
@@ -4691,6 +4756,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
