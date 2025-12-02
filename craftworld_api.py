@@ -191,11 +191,7 @@ def fetch_craftworld(uid: str) -> Dict[str, Any]:
 def fetch_masterpieces() -> list[dict]:
     """
     Fetch a lightweight list of all masterpieces.
-
-    Used by the /masterpieces view to:
-    - separate general vs event masterpieces
-    - know requiredPoints / collectedPoints
-    - know addressableLabel, type, eventId, etc.
+    The current masterpiece is the last with a non-null collectedPoints.
     """
     query = """
     query Masterpieces {
@@ -215,13 +211,11 @@ def fetch_masterpieces() -> list[dict]:
     data = call_graphql(query)
     masterpieces = data.get("masterpieces") or []
 
-
     all_masterpieces: list[dict] = []
-
     for mp in masterpieces:
         all_masterpieces.append(
             {
-                "id": mp.get("id"),
+                "id": int(mp.get("id") or 0),
                 "name": mp.get("name"),
                 "type": mp.get("type"),
                 "eventId": mp.get("eventId"),
@@ -232,27 +226,34 @@ def fetch_masterpieces() -> list[dict]:
             }
         )
 
+    # Sort newest first by startedAt
+    all_masterpieces.sort(key=lambda m: m.get("startedAt") or "", reverse=True)
     return all_masterpieces
 
 
 
 
-def fetch_masterpiece_details(masterpiece_id: int) -> Dict[str, Any]:
-    """
-    Fetch full masterpiece details for the given ID, including
-    rewardStages, battlePassRewards, leaderboardRewards, and
-    your own profile/resources for that MP.
-    """
-    data = call_graphql(
-        MASTERPIECE_DETAILS_QUERY,
-        variables={"id": str(masterpiece_id)},
-    )
 
-    masterpiece = data.get("masterpiece")
-    if masterpiece is None:
-        raise RuntimeError(f"No masterpiece found for id {masterpiece_id}")
+def fetch_masterpiece_details(masterpiece_id: int | str) -> dict:
+    """
+    Fetch full masterpiece details for the given ID safely.
+    """
+    if not masterpiece_id:
+        return {}
 
-    return masterpiece
+    try:
+        data = call_graphql(
+            MASTERPIECE_DETAILS_QUERY,
+            variables={"id": str(int(masterpiece_id))},
+        )
+        masterpiece = data.get("masterpiece")
+        if not masterpiece:
+            raise RuntimeError(f"No masterpiece found for id {masterpiece_id}")
+        return masterpiece
+    except Exception as e:
+        print(f"[ERROR] fetch_masterpiece_details({masterpiece_id}): {e}")
+        return {}
+
 
 
 
@@ -437,6 +438,7 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
 
