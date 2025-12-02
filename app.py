@@ -2694,9 +2694,54 @@ def masterpieces_view():
     tier_combined_total_coin = sum(r["coin_value"] for r in tier_combined_totals_list)
     tier_combined_total_usd = tier_combined_total_coin * coin_usd if coin_usd else 0.0
 
+    # ---------- My rank rewards (from leaderboard bracket) ----------
+    my_rank_totals: Dict[str, float] = {}
+    my_rank_totals_list: List[Dict[str, Any]] = []
+    grand_totals_list: List[Dict[str, Any]] = []
+    grand_total_coin = 0.0
+    grand_total_usd = 0.0
+
+    my_rank_int: Optional[int] = None
+    if selected_reward_snapshot and selected_reward_snapshot.get("position") is not None:
+        try:
+            my_rank_int = int(str(selected_reward_snapshot["position"]).strip())
+        except Exception:
+            my_rank_int = None
+
+    # Find the bracket that contains my rank and grab its numeric resource totals
+    if my_rank_int is not None:
+        for b in leaderboard_bracket_totals:
+            fr = b.get("from_rank")
+            to = b.get("to_rank") or fr
+            try:
+                fr_i = int(fr) if fr is not None else None
+                to_i = int(to) if to is not None else fr_i
+            except Exception:
+                continue
+            if fr_i is None:
+                continue
+            if fr_i <= my_rank_int <= (to_i if to_i is not None else fr_i):
+                my_rank_totals = dict(b.get("totals") or {})
+                break
+
+    if my_rank_totals:
+        # Rank-only rewards (for your bracket)
+        my_rank_totals_list = _totals_to_rows(my_rank_totals)
+
+        # Grand total = all tier rewards (base + RawrPass) + your rank bracket bag
+        combined_plus_rank: Dict[str, float] = dict(combined_totals)
+        for sym, amt in my_rank_totals.items():
+            combined_plus_rank[sym] = combined_plus_rank.get(sym, 0.0) + amt
+
+        grand_totals_list = _totals_to_rows(combined_plus_rank)
+        grand_total_coin = sum(r["coin_value"] for r in grand_totals_list)
+        grand_total_usd = grand_total_coin * coin_usd if coin_usd else 0.0
+
 
     # ---------- Leaderboard placement rewards (leaderboardRewards) ----------
     leaderboard_reward_rows: list[dict[str, object]] = []
+    # Per-bracket numeric resource totals: [{from_rank, to_rank, totals:{SYM:amount}}]
+    leaderboard_bracket_totals: list[Dict[str, Any]] = []
 
     if isinstance(selected_mp, dict):
         raw_lb_rewards = (
@@ -2704,6 +2749,87 @@ def masterpieces_view():
             or selected_mp.get("leaderboardRewardStages")
             or []
         )
+
+        if isinstance(raw_lb_rewards, dict):
+            lb_iter = list(raw_lb_rewards.values())
+        elif isinstance(raw_lb_rewards, list):
+            lb_iter = raw_lb_rewards
+        else:
+            lb_iter = []
+
+        for blk in lb_iter:
+            if not isinstance(blk, dict):
+                continue
+
+            # Rank range for this reward bracket
+            from_rank = (
+                blk.get("from")
+                or blk.get("fromRank")
+                or blk.get("minRank")
+                or blk.get("top")  # "top" is used for single-rank brackets
+            )
+            to_rank = (
+                blk.get("to")
+                or blk.get("toRank")
+                or blk.get("maxRank")
+                or blk.get("top")
+            )
+
+            rewards_list = blk.get("rewards") or blk.get("items") or []
+            reward_parts: list[str] = []
+            totals_for_blk: Dict[str, float] = {}
+
+            if isinstance(rewards_list, list):
+                for rw in rewards_list:
+                    if not isinstance(rw, dict):
+                        continue
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+
+                    # Aggregate numeric *resource* rewards for this bracket
+                    try:
+                        amt_val = float(amount or 0)
+                    except (TypeError, ValueError):
+                        amt_val = 0.0
+
+                    if token and amt_val > 0 and (not rtype or str(rtype).lower() == "resource"):
+                        sym = str(token).upper()
+                        totals_for_blk[sym] = totals_for_blk.get(sym, 0.0) + amt_val
+
+                    # Text label for the table
+                    label_bits: list[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
+
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        reward_parts.append(label)
+
+            if not reward_parts:
+                reward_parts.append("See in-game rewards")
+
+            leaderboard_reward_rows.append(
+                {
+                    "from_rank": from_rank,
+                    "to_rank": to_rank,
+                    "rewards_text": ", ".join(reward_parts),
+                }
+            )
+
+            # Store numeric totals for this bracket (if any)
+            leaderboard_bracket_totals.append(
+                {
+                    "from_rank": from_rank,
+                    "to_rank": to_rank,
+                    "totals": totals_for_blk,
+                }
+            )
+
 
         if isinstance(raw_lb_rewards, dict):
             lb_iter = list(raw_lb_rewards.values())
@@ -3691,12 +3817,71 @@ def masterpieces_view():
         This is your <strong>full completion bag</strong> if you hit every tier.
       </div>
     </div>
+
+    {% if my_rank_totals_list %}
+      <div style="margin-top:16px;">
+        <h4 style="margin-top:0;">🎯 Your rank rewards (current bracket)</h4>
+        <p class="subtle">
+          Uses your highlighted position
+          {% if selected_reward_snapshot %}
+            (#{{ selected_reward_snapshot.position }})
+          {% endif %}
+          on the leaderboard for this masterpiece.
+        </p>
+        <div class="scroll-x">
+          <table>
+            <tr>
+              <th>Token</th>
+              <th style="text-align:right;">Amount</th>
+              <th style="text-align:right;">Value (COIN)</th>
+              <th style="text-align:right;">Value (USD)</th>
+            </tr>
+            {% for r in my_rank_totals_list %}
+              <tr>
+                <td>{{ r.symbol }}</td>
+                <td style="text-align:right;">{{ "{:,.0f}".format(r.amount) }}</td>
+                <td style="text-align:right;">{{ "{:,.4f}".format(r.coin_value) }}</td>
+                <td style="text-align:right;">
+                  {% if coin_usd %}
+                    ${{ "{:,.2f}".format(r.usd_value) }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+
+        {% if grand_totals_list %}
+          <div style="margin-top:10px;">
+            <div class="mp-stat-label">Total estimated rewards (tiers + rank)</div>
+            <div class="mp-stat-value">
+              ≈ {{ "%.4f"|format(grand_total_coin) }} COIN
+              {% if coin_usd and grand_total_usd %}
+                (≈ ${{ "%.2f"|format(grand_total_usd) }})
+              {% endif %}
+            </div>
+            <div class="hint">
+              This combines the full tier completion bag above with your current
+              leaderboard bracket rewards.
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    {% elif selected_reward_snapshot %}
+      <p class="hint" style="margin-top:10px;">
+        We found your leaderboard bracket, but it doesn't include numeric resource
+        rewards we can price. Totals above show completion tiers only.
+      </p>
+    {% endif %}
   {% else %}
     <p class="hint">
       No numeric resource rewards available to estimate totals for this masterpiece.
     </p>
   {% endif %}
 </div>
+
 
 
               <div>
@@ -5283,6 +5468,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
