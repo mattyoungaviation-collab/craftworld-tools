@@ -1976,34 +1976,6 @@ def masterpieces_view():
     current_general_mp = _safe_fetch_details(current_general_mp)
     current_event_mp = _safe_fetch_details(current_event_mp)
 
-    # ---- Pick the "current" masterpiece for the Current tab leaderboard ----
-    current_mp: Optional[Dict[str, Any]] = None
-    current_mp_top50: List[Dict[str, Any]] = []
-
-    # Prefer general as "main" current MP, fall back to event
-    if current_general_mp:
-        current_mp = current_general_mp
-    elif current_event_mp:
-        current_mp = current_event_mp
-
-    if current_mp:
-        lb = current_mp.get("leaderboard") or []
-        try:
-            current_mp_top50 = list(lb[:top_n])
-        except Exception:
-            current_mp_top50 = []
-    else:
-        current_mp_top50 = []
-
-
-    # Pick most recent general masterpiece
-    general_mps = [m for m in masterpieces_data if m.get("type") == "GENERAL"]
-    if general_mps:
-        general_mps.sort(key=lambda x: x.get("startedAt") or "", reverse=True)
-        current_mp = general_mps[0]
-    if current_mp and current_mp.get("id"):
-        current_mp_top50 = fetch_masterpiece_details(current_mp["id"])
-
 
     # Build a lookup by ID and compute the highest MP ID we know about.
     mp_by_id: Dict[int, Dict[str, Any]] = {}
@@ -4811,6 +4783,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
