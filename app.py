@@ -1954,13 +1954,30 @@ def _build_reward_snapshot_for_mp(
     # Figure out completion tier
     tier_label, tier_min, tier_max = None, None, None
     if my_points is not None:
-        # thresholds sorted by min MP descending, so first match is highest tier you've reached
-        for tier in MP_TIER_THRESHOLDS:
-            if my_points >= tier["min_mp"]:
-                tier_label = tier["label"]
-                tier_min = tier["min_mp"]
-                tier_max = tier["max_mp"]
-                break
+        try:
+            pts = float(my_points)
+        except Exception:
+            pts = None
+
+        if pts is not None:
+            tier_index = 0
+            # MP_TIER_THRESHOLDS is a simple list of ints
+            for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
+                if pts >= req:
+                    tier_index = i
+                else:
+                    break
+
+            if tier_index > 0:
+                tier_label = f"Tier {tier_index}"
+                tier_min = MP_TIER_THRESHOLDS[tier_index - 1]
+                if tier_index < len(MP_TIER_THRESHOLDS):
+                    # Next tier starts at the next threshold; treat max as one less
+                    tier_max = MP_TIER_THRESHOLDS[tier_index] - 1
+                else:
+                    # Top tier: no upper bound
+                    tier_max = None
+
 
     # Figure out reward bracket we fall into
     reward_bracket: Optional[Dict[str, Any]] = None
@@ -2015,110 +2032,6 @@ def _build_reward_snapshot_for_mp(
         "reward_label": reward_label,
     }
 
-                    if min_mp is None:
-                        continue
-                    try:
-                        min_mp_f = float(min_mp)
-                    except Exception:
-                        continue
-
-                    try_points = float(my_points)
-                    if try_points >= min_mp_f:
-                        tier_label = tier.get("label")
-                        tier_min = min_mp_f
-                        tier_max = tier.get("max_mp")
-                        break
-
-            # figure out leaderboard reward bracket
-            lb_rewards_raw = (
-                mp.get("leaderboardRewardStages")
-                or mp.get("leaderboardRewards")
-                or []
-            )
-            lb_brackets: list[dict[str, Any]] = []
-            if isinstance(lb_rewards_raw, dict):
-                lb_brackets = list(lb_rewards_raw.values())
-            elif isinstance(lb_rewards_raw, list):
-                lb_brackets = lb_rewards_raw
-
-            my_reward_bracket = None
-            if my_position_int is not None:
-                for br in lb_brackets:
-                    if not isinstance(br, dict):
-                        continue
-                    from_rank = br.get("from") or br.get("fromRank")
-                    to_rank = br.get("to") or br.get("toRank")
-                    try:
-                        from_i = int(from_rank or 0)
-                    except Exception:
-                        from_i = None
-                    try:
-                        to_i = int(to_rank or 0)
-                    except Exception:
-                        to_i = None
-
-                    if from_i is None and to_i is None:
-                        continue
-
-                    if from_i is None:
-                        # interpret as 1..to_i
-                        from_i = 1
-                    if to_i is None:
-                        # interpret as exact rank or open-ended
-                        to_i = from_i
-
-                    if from_i <= my_position_int <= to_i:
-                        my_reward_bracket = br
-                        break
-
-            # friendly text from reward bracket
-            reward_text = None
-            if isinstance(my_reward_bracket, dict):
-                rewards_list = (
-                    my_reward_bracket.get("rewards")
-                    or my_reward_bracket.get("items")
-                    or []
-                )
-                pieces: list[str] = []
-                if isinstance(rewards_list, list):
-                    for r in rewards_list:
-                        if not isinstance(r, dict):
-                            continue
-                        amount = r.get("amount") or r.get("quantity")
-                        token = r.get("token") or r.get("symbol") or r.get("resource")
-                        rtype = (
-                            r.get("type")
-                            or r.get("rewardType")
-                            or r.get("__typename")
-                        )
-                        label_parts: list[str] = []
-                        if amount not in (None, "", 0):
-                            label_parts.append(str(amount))
-                        if token:
-                            label_parts.append(str(token))
-                        elif rtype:
-                            label_parts.append(str(rtype))
-                        label = " ".join(label_parts).strip()
-                        if label:
-                            pieces.append(label)
-                if pieces:
-                    reward_text = ", ".join(pieces)
-
-            if not reward_text:
-                reward_text = "See in-game rewards"
-
-            return {
-                "mp_id": mp.get("id"),
-                "mp_name": mp.get("name")
-                or mp.get("addressableLabel")
-                or mp.get("type"),
-                "rank": my_position,
-                "points": my_points,
-                "completion_tier": tier_label,
-                "completion_tier_min": tier_min,
-                "completion_tier_max": tier_max,
-                "reward_text": reward_text,
-            }
 
 
 
@@ -4778,6 +4691,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
