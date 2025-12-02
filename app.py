@@ -1946,9 +1946,52 @@ def masterpieces_view():
 
     general_mps = sorted(general_mps, key=_mp_id)
     event_mps = sorted(event_mps, key=_mp_id)
+    
     # Identify the "active" general and event masterpieces (highest ID)
     current_general_mp: Optional[Dict[str, Any]] = general_mps[-1] if general_mps else None
     current_event_mp: Optional[Dict[str, Any]] = event_mps[-1] if event_mps else None
+
+    # For the active ones, pull full details (including leaderboard / rewards)
+    # so the "Current MP" tab and reward snapshots have data.
+    try:
+        if current_general_mp and not current_general_mp.get("leaderboard"):
+            try:
+                cg_id = int(current_general_mp.get("id") or 0)
+            except Exception:
+                cg_id = 0
+            if cg_id:
+                try:
+                    detailed = fetch_masterpiece_details(cg_id)
+                    current_general_mp = detailed
+                    try:
+                        cache_masterpiece_metadata(detailed)
+                    except Exception:
+                        pass
+                except Exception:
+                    # If this fails, we still keep the lightweight summary object.
+                    pass
+    except Exception:
+        pass
+
+    try:
+        if current_event_mp and not current_event_mp.get("leaderboard"):
+            try:
+                ce_id = int(current_event_mp.get("id") or 0)
+            except Exception:
+                ce_id = 0
+            if ce_id:
+                try:
+                    detailed = fetch_masterpiece_details(ce_id)
+                    current_event_mp = detailed
+                    try:
+                        cache_masterpiece_metadata(detailed)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     # Hydrate the active masterpieces so they include leaderboard/rewards data
     def _hydrate_masterpiece(mp: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not isinstance(mp, dict):
@@ -2057,37 +2100,17 @@ def masterpieces_view():
 
     
 
-
     # Pick the "current" masterpiece (for the live leaderboard):
     # latest general if available, otherwise latest event.
     current_mp: Optional[Dict[str, Any]] = None
     current_mp_top50: List[Dict[str, Any]] = []
 
-    if general_mps:
-        current_mp = general_mps[-1]
-    elif event_mps:
-        current_mp = event_mps[-1]
+    if current_general_mp is not None:
+        current_mp = current_general_mp
+    elif current_event_mp is not None:
+        current_mp = current_event_mp
 
     if current_mp:
-        # IMPORTANT:
-        # The list returned by fetch_masterpieces() is a summary and
-        # usually does NOT include the leaderboard. We need to refetch
-        # full details for the current masterpiece so the leaderboard
-        # is populated, same as the history tab.
-        try:
-            current_mp_id = str(current_mp.get("id") or "").strip()
-            if current_mp_id:
-                detailed = fetch_masterpiece_details(current_mp_id)
-                # cache for future loads
-                try:
-                    cache_masterpiece_metadata(detailed)
-                except Exception:
-                    pass
-                current_mp = detailed
-        except Exception:
-            # If detail fetch fails, we just fall back to whatever we had
-            pass
-
         lb = current_mp.get("leaderboard") or []
         try:
             current_mp_top50 = list(lb[:top_n])
@@ -2095,6 +2118,7 @@ def masterpieces_view():
             current_mp_top50 = []
     else:
         current_mp_top50 = []
+
 
 
     # ---------- Personal reward snapshots for active general & event MPs ----------
@@ -3655,14 +3679,32 @@ def _build_reward_snapshot_for_mp(
 
         reward_label = " ".join(label_parts).strip()
 
+    # Build a snapshot dict. Include both the newer descriptive keys
+    # and some backward-compatibility aliases that the Jinja template expects.
     return {
+        # raw masterpiece object (used for MP id / name in the template)
+        "mp": mp,
+
+        # core position / points
         "position": my_position,
         "points": my_points,
+
+        # detailed tier info
         "tier_label": tier_label,
         "tier_min": tier_min,
         "tier_max": tier_max,
+
+        # leaderboard reward bracket from API
         "reward_bracket": reward_bracket,
         "reward_label": reward_label,
+
+        # --- compatibility aliases for the template ---
+        # template expects .tier and .tier_required
+        "tier": tier_label,
+        "tier_required": tier_min,
+
+        # template expects .leaderboard_rewards for human-readable text
+        "leaderboard_rewards": reward_label,
     }
 
 
@@ -4811,6 +4853,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
