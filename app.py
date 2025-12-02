@@ -1918,6 +1918,17 @@ def masterpieces_view():
     """
     error: Optional[str] = None
     masterpieces_data: List[Dict[str, Any]] = []
+    
+    # Live prices for reward valuation
+    prices: Dict[str, float] = {}
+    coin_usd: float = 0.0
+    try:
+        prices = fetch_live_prices_in_coin()
+        coin_usd = float(prices.get("_COIN_USD", 0.0) or 0.0)
+    except Exception:
+        prices = {}
+        coin_usd = 0.0
+
 
     # Load MP list from Craft World
     try:
@@ -2537,9 +2548,12 @@ def masterpieces_view():
     # ---------- Tier rewards from the Masterpiece (rewardStages) ----------
     reward_tier_rows: list[dict[str, object]] = []
 
+    # Totals across all tiers (cumulative)
+    tier_base_totals: Dict[str, float] = {}
+    tier_bp_totals: Dict[str, float] = {}
+
     # Use the selected MP for History first, then planner, then current
     src_mp = selected_mp or planner_mp or current_mp
-
 
     if isinstance(src_mp, dict):
         raw_stages = src_mp.get("rewardStages") or []
@@ -2563,6 +2577,7 @@ def masterpieces_view():
                 or st.get("minPoints")
                 or st.get("minimumPoints")
                 or st.get("points")
+                or st.get("requiredMasterpiecePoints")
             )
 
             # --- base (free) rewards ---
@@ -2577,6 +2592,17 @@ def masterpieces_view():
                     token = rw.get("token") or rw.get("symbol") or rw.get("resource")
                     rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
 
+                    # Aggregate numeric resource rewards for totals
+                    try:
+                        amt_val = float(amount or 0)
+                    except (TypeError, ValueError):
+                        amt_val = 0.0
+
+                    if token and amt_val > 0 and (not rtype or str(rtype).lower() == "resource"):
+                        t_sym = str(token).upper()
+                        tier_base_totals[t_sym] = tier_base_totals.get(t_sym, 0.0) + amt_val
+
+                    # Text label for the table
                     label_bits: list[str] = []
                     if amount not in (None, "", 0):
                         label_bits.append(str(amount))
@@ -2601,6 +2627,17 @@ def masterpieces_view():
                     token = rw.get("token") or rw.get("symbol") or rw.get("resource")
                     rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
 
+                    # Aggregate numeric resource rewards for RawrPass totals
+                    try:
+                        amt_val = float(amount or 0)
+                    except (TypeError, ValueError):
+                        amt_val = 0.0
+
+                    if token and amt_val > 0 and (not rtype or str(rtype).lower() == "resource"):
+                        t_sym = str(token).upper()
+                        tier_bp_totals[t_sym] = tier_bp_totals.get(t_sym, 0.0) + amt_val
+
+                    # Text label for the table
                     label_bits: list[str] = []
                     if amount not in (None, "", 0):
                         label_bits.append(str(amount))
@@ -2628,6 +2665,34 @@ def masterpieces_view():
                 }
             )
 
+    # Turn totals into lists with value in COIN / USD
+    def _totals_to_rows(totals: Dict[str, float]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for sym, amt in sorted(totals.items()):
+            price_coin = float(prices.get(sym, 0.0) or 0.0)
+            coin_value = amt * price_coin
+            usd_value = coin_value * coin_usd if coin_usd else 0.0
+            rows.append(
+                {
+                    "symbol": sym,
+                    "amount": amt,
+                    "coin_value": coin_value,
+                    "usd_value": usd_value,
+                }
+            )
+        return rows
+
+    tier_base_totals_list = _totals_to_rows(tier_base_totals)
+    tier_bp_totals_list = _totals_to_rows(tier_bp_totals)
+
+    # Combined (base + RawrPass)
+    combined_totals: Dict[str, float] = dict(tier_base_totals)
+    for sym, amt in tier_bp_totals.items():
+        combined_totals[sym] = combined_totals.get(sym, 0.0) + amt
+    tier_combined_totals_list = _totals_to_rows(combined_totals)
+
+    tier_combined_total_coin = sum(r["coin_value"] for r in tier_combined_totals_list)
+    tier_combined_total_usd = tier_combined_total_coin * coin_usd if coin_usd else 0.0
 
 
     # ---------- Leaderboard placement rewards (leaderboardRewards) ----------
@@ -3535,6 +3600,104 @@ def masterpieces_view():
                   </p>
                 {% endif %}
               </div>
+              <div class="section" style="margin-top:8px;">
+  <h4 style="margin-top:0;">📦 Total estimated tier rewards (full completion)</h4>
+  <p class="subtle">
+    Sums all tier rewards for this masterpiece. Values use live market prices
+    (<code>fetch_live_prices_in_coin</code>).
+  </p>
+
+  {% if tier_base_totals_list or tier_bp_totals_list %}
+    <div class="two-col" style="gap:10px;">
+      <div>
+        <h3 style="margin-top:4px;font-size:14px;">Base rewards</h3>
+        {% if tier_base_totals_list %}
+          <div class="scroll-x">
+            <table>
+              <tr>
+                <th>Token</th>
+                <th style="text-align:right;">Amount</th>
+                <th style="text-align:right;">Value (COIN)</th>
+                <th style="text-align:right;">Value (USD)</th>
+              </tr>
+              {% for r in tier_base_totals_list %}
+                <tr>
+                  <td>{{ r.symbol }}</td>
+                  <td style="text-align:right;">{{ "{:,.0f}".format(r.amount) }}</td>
+                  <td style="text-align:right;">{{ "{:,.4f}".format(r.coin_value) }}</td>
+                  <td style="text-align:right;">
+                    {% if coin_usd %}
+                      ${{ "{:,.2f}".format(r.usd_value) }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </table>
+          </div>
+        {% else %}
+          <p class="hint">No numeric base resource rewards found.</p>
+        {% endif %}
+      </div>
+
+      <div>
+        <h3 style="margin-top:4px;font-size:14px;">RawrPass rewards</h3>
+        {% if tier_bp_totals_list %}
+          <div class="scroll-x">
+            <table>
+              <tr>
+                <th>Token</th>
+                <th style="text-align:right;">Amount</th>
+                <th style="text-align:right;">Value (COIN)</th>
+                <th style="text-align:right;">Value (USD)</th>
+              </tr>
+              {% for r in tier_bp_totals_list %}
+                <tr>
+                  <td>{{ r.symbol }}</td>
+                  <td style="text-align:right;">{{ "{:,.0f}".format(r.amount) }}</td>
+                  <td style="text-align:right;">{{ "{:,.4f}".format(r.coin_value) }}</td>
+                  <td style="text-align:right;">
+                    {% if coin_usd %}
+                      ${{ "{:,.2f}".format(r.usd_value) }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </table>
+          </div>
+        {% else %}
+          <p class="hint">
+            No numeric RawrPass resource rewards found in the API for this masterpiece.
+          </p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div class="mp-stat-label">
+        Total estimated tier rewards
+        {% if tier_bp_totals_list %}(Base + RawrPass){% endif %}
+      </div>
+      <div class="mp-stat-value">
+        ≈ {{ "%.4f"|format(tier_combined_total_coin) }} COIN
+        {% if coin_usd and tier_combined_total_usd %}
+          (≈ ${{ "%.2f"|format(tier_combined_total_usd) }})
+        {% endif %}
+      </div>
+      <div class="hint">
+        This is your <strong>full completion bag</strong> if you hit every tier.
+      </div>
+    </div>
+  {% else %}
+    <p class="hint">
+      No numeric resource rewards available to estimate totals for this masterpiece.
+    </p>
+  {% endif %}
+</div>
+
 
               <div>
                 <h3 style="margin-top:0;">Leaderboard placement rewards</h3>
@@ -3813,6 +3976,14 @@ def masterpieces_view():
         tier_rows=tier_rows,
         reward_tier_rows=reward_tier_rows,
         leaderboard_reward_rows=leaderboard_reward_rows,
+
+        # tier reward totals + valuation
+        tier_base_totals_list=tier_base_totals_list,
+        tier_bp_totals_list=tier_bp_totals_list,
+        tier_combined_totals_list=tier_combined_totals_list,
+        tier_combined_total_coin=tier_combined_total_coin,
+        tier_combined_total_usd=tier_combined_total_usd,
+        coin_usd=coin_usd,
 
         # leaderboard size options
         top_n=top_n,
@@ -5112,6 +5283,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
