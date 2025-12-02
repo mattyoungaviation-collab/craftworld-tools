@@ -1949,6 +1949,40 @@ def masterpieces_view():
     # Identify the "active" general and event masterpieces (highest ID)
     current_general_mp: Optional[Dict[str, Any]] = general_mps[-1] if general_mps else None
     current_event_mp: Optional[Dict[str, Any]] = event_mps[-1] if event_mps else None
+    # Hydrate the active masterpieces so they include leaderboard/rewards data
+    def _hydrate_masterpiece(mp: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not isinstance(mp, dict):
+            return None
+        mp_id = mp.get("id")
+        try:
+            mid_int = int(mp_id or 0)
+        except (TypeError, ValueError):
+            return mp
+        if mid_int <= 0:
+            return mp
+        try:
+            detailed = fetch_masterpiece_details(mid_int)
+        except Exception as e:
+            print(f"[MP] Failed to hydrate masterpiece {mp_id}: {e}")
+            return mp
+
+        # Merge base + detailed so we keep type/eventId/addressableLabel etc.
+        merged = dict(mp)
+        if isinstance(detailed, dict):
+            for k, v in detailed.items():
+                if v not in (None, ""):
+                    merged[k] = v
+
+        # Cache basic metadata for future loads (name/label/type)
+        try:
+            cache_masterpiece_metadata(merged)
+        except Exception:
+            pass
+
+        return merged
+
+    current_general_mp = _hydrate_masterpiece(current_general_mp)
+    current_event_mp = _hydrate_masterpiece(current_event_mp)
 
 
     # Build a lookup by ID and compute the highest MP ID we know about.
@@ -2029,10 +2063,11 @@ def masterpieces_view():
     current_mp: Optional[Dict[str, Any]] = None
     current_mp_top50: List[Dict[str, Any]] = []
 
-    if general_mps:
-        current_mp = general_mps[-1]
-    elif event_mps:
-        current_mp = event_mps[-1]
+    if current_general_mp:
+        current_mp = current_general_mp
+    elif current_event_mp:
+        current_mp = current_event_mp
+
 
     if current_mp:
         lb = current_mp.get("leaderboard") or []
@@ -4757,6 +4792,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
