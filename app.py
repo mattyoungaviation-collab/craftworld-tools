@@ -1296,7 +1296,7 @@ def profitability():
     error = None
     uid = session.get("voya_uid")
 
-        # 1) Load factories from Craft World (by UID)
+    # 1) Load factories from Craft World (by UID)
     player_factories: List[dict] = []
     try:
         cw = fetch_craftworld(uid)
@@ -2524,7 +2524,6 @@ def masterpieces_view():
     reward_tier_rows: list[dict[str, object]] = []
 
     # Use the planner MP as the "source of truth" for tier rewards
-    # (you can swap to selected_mp/current_mp if you want)
     src_mp = planner_mp or selected_mp or current_mp
 
     if isinstance(src_mp, dict):
@@ -2551,68 +2550,69 @@ def masterpieces_view():
                 or st.get("points")
             )
 
-        # --- base (free) rewards ---
-        rewards_list = st.get("rewards") or st.get("items") or []
-        base_parts: list[str] = []
+            # --- base (free) rewards ---
+            rewards_list = st.get("rewards") or st.get("items") or []
+            base_parts: list[str] = []
 
-        if isinstance(rewards_list, list):
-            for rw in rewards_list:
-                if not isinstance(rw, dict):
-                    continue
-                amount = rw.get("amount") or rw.get("quantity")
-                token = rw.get("token") or rw.get("symbol") or rw.get("resource")
-                rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+            if isinstance(rewards_list, list):
+                for rw in rewards_list:
+                    if not isinstance(rw, dict):
+                        continue
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
 
-                label_bits: list[str] = []
-                if amount not in (None, "", 0):
-                    label_bits.append(str(amount))
-                if token:
-                    label_bits.append(str(token))
-                elif rtype:
-                    label_bits.append(str(rtype))
+                    label_bits: list[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
 
-                label = " ".join(label_bits).strip()
-                if label:
-                    base_parts.append(label)
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        base_parts.append(label)
 
-        # --- RawrPass / battle pass rewards ---
-        bp_list = st.get("battlePassRewards") or []
-        bp_parts: list[str] = []
+            # --- RawrPass / battle pass rewards ---
+            bp_list = st.get("battlePassRewards") or []
+            bp_parts: list[str] = []
 
-        if isinstance(bp_list, list):
-            for rw in bp_list:
-                if not isinstance(rw, dict):
-                    continue
-                amount = rw.get("amount") or rw.get("quantity")
-                token = rw.get("token") or rw.get("symbol") or rw.get("resource")
-                rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+            if isinstance(bp_list, list):
+                for rw in bp_list:
+                    if not isinstance(rw, dict):
+                        continue
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
 
-                label_bits: list[str] = []
-                if amount not in (None, "", 0):
-                    label_bits.append(str(amount))
-                if token:
-                    label_bits.append(str(token))
-                elif rtype:
-                    label_bits.append(str(rtype))
+                    label_bits: list[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
 
-                label = " ".join(label_bits).strip()
-                if label:
-                    bp_parts.append(label)
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        bp_parts.append(label)
 
-        base_text = ", ".join(base_parts) if base_parts else ""
-        bp_text = ", ".join(bp_parts) if bp_parts else ""
+            base_text = ", ".join(base_parts) if base_parts else ""
+            bp_text = ", ".join(bp_parts) if bp_parts else ""
 
-        if not base_text and not bp_text:
-            base_text = "See in-game rewards"
+            if not base_text and not bp_text:
+                base_text = "See in-game rewards"
 
-        reward_tier_rows.append(
-            {
-                "tier": tier_num,
-                "required": required,
-                "rewards_text": base_text,
-                "battlepass_text": bp_text,
-            }
-        )
+            reward_tier_rows.append(
+                {
+                    "tier": tier_num,
+                    "required": required,
+                    "rewards_text": base_text,
+                    "battlepass_text": bp_text,
+                }
+            )
+
 
 
     # ---------- Leaderboard placement rewards (leaderboardRewards) ----------
@@ -4929,6 +4929,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
