@@ -2063,13 +2063,31 @@ def masterpieces_view():
     current_mp: Optional[Dict[str, Any]] = None
     current_mp_top50: List[Dict[str, Any]] = []
 
-    if current_general_mp:
-        current_mp = current_general_mp
-    elif current_event_mp:
-        current_mp = current_event_mp
-
+    if general_mps:
+        current_mp = general_mps[-1]
+    elif event_mps:
+        current_mp = event_mps[-1]
 
     if current_mp:
+        # IMPORTANT:
+        # The list returned by fetch_masterpieces() is a summary and
+        # usually does NOT include the leaderboard. We need to refetch
+        # full details for the current masterpiece so the leaderboard
+        # is populated, same as the history tab.
+        try:
+            current_mp_id = str(current_mp.get("id") or "").strip()
+            if current_mp_id:
+                detailed = fetch_masterpiece_details(current_mp_id)
+                # cache for future loads
+                try:
+                    cache_masterpiece_metadata(detailed)
+                except Exception:
+                    pass
+                current_mp = detailed
+        except Exception:
+            # If detail fetch fails, we just fall back to whatever we had
+            pass
+
         lb = current_mp.get("leaderboard") or []
         try:
             current_mp_top50 = list(lb[:top_n])
@@ -2077,6 +2095,7 @@ def masterpieces_view():
             current_mp_top50 = []
     else:
         current_mp_top50 = []
+
 
     # ---------- Personal reward snapshots for active general & event MPs ----------
     general_snapshot: Optional[Dict[str, Any]] = None
@@ -4792,6 +4811,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
