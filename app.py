@@ -2095,10 +2095,25 @@ def masterpieces_view():
     else:
         highlight_query = session.get("mp_highlight", "") or ""
 
+    # ---- Battle pass toggle (RawrPass) ----
+    has_battle_pass = False
+    bp_flag = (
+        (request.args.get("has_battle_pass") or request.form.get("has_battle_pass") or "")
+        .strip()
+        .lower()
+    )
+
+    if bp_flag:
+        # Treat typical checkbox values as "true"
+        has_battle_pass = bp_flag in ("1", "true", "on", "yes", "y", "checked")
+    else:
+        # Fall back to whatever was stored last time
+        has_battle_pass = bool(session.get("mp_has_battle_pass", False))
+
+    session["mp_has_battle_pass"] = has_battle_pass
+
     # Which sub-tab is active: "planner", "current", or "history"?
     tab = (request.args.get("tab") or request.form.get("tab") or "").strip() or "planner"
-
-    
 
     # Pick the "current" masterpiece (for the live leaderboard):
     # latest general if available, otherwise latest event.
@@ -2536,40 +2551,69 @@ def masterpieces_view():
                 or st.get("points")
             )
 
-            rewards_list = st.get("rewards") or st.get("items") or []
-            reward_parts: list[str] = []
+        # --- base (free) rewards ---
+        rewards_list = st.get("rewards") or st.get("items") or []
+        base_parts: list[str] = []
 
-            if isinstance(rewards_list, list):
-                for rw in rewards_list:
-                    if not isinstance(rw, dict):
-                        continue
+        if isinstance(rewards_list, list):
+            for rw in rewards_list:
+                if not isinstance(rw, dict):
+                    continue
+                amount = rw.get("amount") or rw.get("quantity")
+                token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
 
-                    amount = rw.get("amount") or rw.get("quantity")
-                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
-                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+                label_bits: list[str] = []
+                if amount not in (None, "", 0):
+                    label_bits.append(str(amount))
+                if token:
+                    label_bits.append(str(token))
+                elif rtype:
+                    label_bits.append(str(rtype))
 
-                    label_bits: list[str] = []
-                    if amount not in (None, "", 0):
-                        label_bits.append(str(amount))
-                    if token:
-                        label_bits.append(str(token))
-                    elif rtype:
-                        label_bits.append(str(rtype))
+                label = " ".join(label_bits).strip()
+                if label:
+                    base_parts.append(label)
 
-                    label = " ".join(label_bits).strip()
-                    if label:
-                        reward_parts.append(label)
+        # --- RawrPass / battle pass rewards ---
+        bp_list = st.get("battlePassRewards") or []
+        bp_parts: list[str] = []
 
-            if not reward_parts:
-                reward_parts.append("See in-game rewards")
+        if isinstance(bp_list, list):
+            for rw in bp_list:
+                if not isinstance(rw, dict):
+                    continue
+                amount = rw.get("amount") or rw.get("quantity")
+                token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
 
-            reward_tier_rows.append(
-                {
-                    "tier": tier_num,
-                    "required": required,
-                    "rewards_text": ", ".join(reward_parts),
-                }
-            )
+                label_bits: list[str] = []
+                if amount not in (None, "", 0):
+                    label_bits.append(str(amount))
+                if token:
+                    label_bits.append(str(token))
+                elif rtype:
+                    label_bits.append(str(rtype))
+
+                label = " ".join(label_bits).strip()
+                if label:
+                    bp_parts.append(label)
+
+        base_text = ", ".join(base_parts) if base_parts else ""
+        bp_text = ", ".join(bp_parts) if bp_parts else ""
+
+        if not base_text and not bp_text:
+            base_text = "See in-game rewards"
+
+        reward_tier_rows.append(
+            {
+                "tier": tier_num,
+                "required": required,
+                "rewards_text": base_text,
+                "battlepass_text": bp_text,
+            }
+        )
+
 
     # ---------- Leaderboard placement rewards (leaderboardRewards) ----------
     leaderboard_reward_rows: list[dict[str, object]] = []
@@ -2592,8 +2636,19 @@ def masterpieces_view():
             if not isinstance(blk, dict):
                 continue
 
-            from_rank = blk.get("from") or blk.get("fromRank")
-            to_rank = blk.get("to") or blk.get("toRank")
+    from_rank = (
+        blk.get("from")
+        or blk.get("fromRank")
+        or blk.get("minRank")
+        or blk.get("top")          # Craft World uses "top" for single-rank brackets
+    )
+    to_rank = (
+        blk.get("to")
+        or blk.get("toRank")
+        or blk.get("maxRank")
+        or blk.get("top")          # same for “top 1”, “top 2”, etc.
+    )
+
 
             rewards_list = blk.get("rewards") or blk.get("items") or []
             reward_parts: list[str] = []
@@ -2988,41 +3043,60 @@ def masterpieces_view():
                 </table>
               </div>
             </div>
-            <div class="section" style="margin-top:10px;">
-              <h3 style="margin-top:0;">Tier rewards</h3>
-              <p class="subtle">
-                Guaranteed rewards for each completion tier (from the Masterpiece rewardStages API).
-              </p>
+<div class="section" style="margin-top:10px;">
+  <h3 style="margin-top:0;">Tier rewards</h3>
+  <p class="subtle">
+    Base tier rewards are available to all players. If you’ve purchased the RawrPass
+    for this Masterpiece, you also get additional rewards on each tier.
+  </p>
 
-              {% if reward_tier_rows %}
-                <div class="scroll-x">
-                  <table class="mp-tier-table">
-                    <tr>
-                      <th>Tier</th>
-                      <th>Required points</th>
-                      <th>Rewards</th>
-                    </tr>
-                    {% for row in reward_tier_rows %}
-                      <tr>
-                        <td>Tier {{ row.tier or loop.index }}</td>
-                        <td>
-                          {% if row.required %}
-                            {{ "{:,}".format(row.required) }}
-                          {% else %}
-                            —
-                          {% endif %}
-                        </td>
-                        <td>{{ row.rewards_text }}</td>
-                      </tr>
-                    {% endfor %}
-                  </table>
-                </div>
+  <div style="margin-bottom:6px;">
+    <label style="font-size:13px; cursor:pointer;">
+      <input type="checkbox"
+             name="has_battle_pass"
+             value="1"
+             onchange="this.form.submit()"
+             {% if has_battle_pass %}checked{% endif %}>
+      I have the RawrPass for this Masterpiece
+    </label>
+  </div>
+
+  {% if reward_tier_rows %}
+    <div class="scroll-x">
+      <table class="mp-tier-table">
+        <tr>
+          <th>Tier</th>
+          <th>Required points</th>
+          <th>Rewards{% if has_battle_pass %} (base + RawrPass){% endif %}</th>
+        </tr>
+        {% for row in reward_tier_rows %}
+          <tr>
+            <td>Tier {{ row.tier or loop.index }}</td>
+            <td>
+              {% if row.required %}
+                {{ "{:,}".format(row.required) }}
               {% else %}
-                <p class="hint">
-                  No tier reward metadata in the API for this Masterpiece yet — check in-game rewards.
-                </p>
+                —
               {% endif %}
-            </div>
+            </td>
+            <td>
+              {{ row.rewards_text }}
+              {% if has_battle_pass and row.battlepass_text %}
+                <br>
+                <span class="subtle">+ RawrPass: {{ row.battlepass_text }}</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
+  {% else %}
+    <p class="hint">
+      No tier reward metadata in the API for this Masterpiece yet — check in-game rewards.
+    </p>
+  {% endif %}
+</div>
+
 
 
             <!-- Right: planner form & results -->
@@ -3570,6 +3644,7 @@ def masterpieces_view():
         # MP selector for history tab + highlight
         history_mp_options=history_mp_options,
         highlight_query=highlight_query,
+        has_battle_pass=has_battle_pass,
     )
     # Wrap in base template
     html = render_template_string(
@@ -4853,6 +4928,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
