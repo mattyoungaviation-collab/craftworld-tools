@@ -917,7 +917,7 @@ BASE_TEMPLATE = """
 </head>
 <body>
   <div class="nav">
-    <div class="nav-title">CraftWorld Tools</div>
+    <div class="nav-title">CraftWorld Tools.LIVE</div>
     <div class="nav-links">
       <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
       {% if has_uid %}
@@ -5940,6 +5940,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
