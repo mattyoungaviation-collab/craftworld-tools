@@ -1946,9 +1946,63 @@ def masterpieces_view():
 
     general_mps = sorted(general_mps, key=_mp_id)
     event_mps = sorted(event_mps, key=_mp_id)
+
     # Identify the "active" general and event masterpieces (highest ID)
     current_general_mp: Optional[Dict[str, Any]] = general_mps[-1] if general_mps else None
     current_event_mp: Optional[Dict[str, Any]] = event_mps[-1] if event_mps else None
+
+    # ---- Hydrate active masterpieces with full details (leaderboard, rewards, etc.) ----
+    def _safe_fetch_details(mp: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not mp:
+            return None
+        mp_id = mp.get("id")
+        if not mp_id:
+            return None
+        try:
+            detailed = fetch_masterpiece_details(int(mp_id))
+            # merge: keep any fields already present, overlay with detailed
+            merged = dict(mp)
+            merged.update(detailed or {})
+            # cache for future loads
+            try:
+                cache_masterpiece_metadata(merged)
+            except Exception:
+                pass
+            return merged
+        except Exception as e_fetch:
+            print(f"[MP] Failed to fetch details for masterpiece {mp_id}: {e_fetch}")
+            return mp  # fall back to summary
+
+    current_general_mp = _safe_fetch_details(current_general_mp)
+    current_event_mp = _safe_fetch_details(current_event_mp)
+
+    # ---- Pick the "current" masterpiece for the Current tab leaderboard ----
+    current_mp: Optional[Dict[str, Any]] = None
+    current_mp_top50: List[Dict[str, Any]] = []
+
+    # Prefer general as "main" current MP, fall back to event
+    if current_general_mp:
+        current_mp = current_general_mp
+    elif current_event_mp:
+        current_mp = current_event_mp
+
+    if current_mp:
+        lb = current_mp.get("leaderboard") or []
+        try:
+            current_mp_top50 = list(lb[:top_n])
+        except Exception:
+            current_mp_top50 = []
+    else:
+        current_mp_top50 = []
+
+
+    # Pick most recent general masterpiece
+    general_mps = [m for m in masterpieces_data if m.get("type") == "GENERAL"]
+    if general_mps:
+        general_mps.sort(key=lambda x: x.get("startedAt") or "", reverse=True)
+        current_mp = general_mps[0]
+    if current_mp and current_mp.get("id"):
+        current_mp_top50 = fetch_masterpiece_details(current_mp["id"])
 
 
     # Build a lookup by ID and compute the highest MP ID we know about.
@@ -4757,6 +4811,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
