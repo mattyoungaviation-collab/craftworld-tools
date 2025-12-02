@@ -551,7 +551,7 @@ BASE_TEMPLATE = """
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>CraftWorld Tools</title>
+  <title>CraftWorld Tools.LIVE</title>
   <!-- Make it mobile friendly -->
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
@@ -5940,6 +5940,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
