@@ -3824,7 +3824,15 @@ def masterpieces_view():
         has_battle_pass=has_battle_pass,
     )
 
+    # Wrap in the global base template (same pattern as other tabs)
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=inner,
+        active_page="masterpieces",
+        has_uid=has_uid_flag(),
+    )
     return html
+
 
 def _build_reward_snapshot_for_mp(
     mp: Optional[Dict[str, Any]],
@@ -5104,6 +5112,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
