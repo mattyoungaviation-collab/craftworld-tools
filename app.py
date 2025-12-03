@@ -1354,9 +1354,11 @@ def profitability():
     # Sort mode: "standard", "gain_loss", "loss_gain"
     saved_sort_mode: str = session.get("profit_sort_mode", "gain_loss")
     sort_mode: str = saved_sort_mode
-        # Input price mode: "sell" (default) or "buy"
+
+    # Input price mode: "sell" (default) or "buy"
     saved_input_price_mode: str = session.get("profit_input_price_mode", "sell")
     input_price_mode: str = saved_input_price_mode
+
 
 
     # On a fresh GET, ignore any old per-row overrides so we start
@@ -1402,6 +1404,14 @@ def profitability():
             mode = "gain_loss"
         sort_mode = mode
         session["profit_sort_mode"] = sort_mode
+
+        # Input price mode from form ("sell" or "buy")
+        pmode = (request.form.get("input_price_mode") or input_price_mode or "sell").strip()
+        if pmode not in ("sell", "buy"):
+            pmode = "sell"
+        input_price_mode = pmode
+        session["profit_input_price_mode"] = input_price_mode
+
 
         new_workers: Dict[str, int] = {}
         new_mastery: Dict[str, int] = {}
@@ -1459,10 +1469,11 @@ def profitability():
             }
             saved_selected = session["profit_selected_csv"]
         else:
+        else:
             # if nothing selected explicitly, assume all on
             saved_selected = {m["key"]: True for m in rows_meta}
             session["profit_selected_csv"] = saved_selected
-            session["profit_input_price_mode"] = input_price_mode
+
 
         saved_workers = new_workers
         saved_mastery = new_mastery
@@ -1521,6 +1532,7 @@ def profitability():
         # Main output price map is always SELL-focused
         prices = prices_sell
 
+
         for meta in rows_meta:
             key = meta["key"]
             token = meta["token"]
@@ -1567,10 +1579,12 @@ def profitability():
                 int(level),
                 target_level=None,
                 count=1,
-                yield_pct=yield_pct,               # mastery → input reduction
+                yield_pct=yield_pct,                  # mastery → input reduction
                 speed_factor=effective_speed_factor,  # workshop + AD → time reduction
                 workers=workers,
+                input_prices_coin=input_prices,       # NEW: BUY vs SELL input costs
             )
+
 
             prof_hour_per = float(res["profit_coin_per_hour"])
             prof_hour_total = prof_hour_per * count
@@ -6058,6 +6072,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
