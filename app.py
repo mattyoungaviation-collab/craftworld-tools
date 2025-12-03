@@ -14,8 +14,10 @@ from craftworld_api import (
     fetch_masterpiece_details,
     predict_reward,
     get_jwt,
-    GRAPHQL_URL,
+    fetch_proficiencies,
+    fetch_workshop_levels,
 )
+
 # ---------------- Database setup (users + saved boosts) ----------------
 
 import os
@@ -984,6 +986,7 @@ BASE_TEMPLATE = """
       {% endif %}
 
       <a href="{{ url_for('boosts') }}" class="{{ 'active' if active_page=='boosts' else '' }}">Boosts</a>
+      <a href="{{ url_for('mastery_view') }}" class="{{ 'active' if active_page=='mastery' else '' }}">Mastery</a>
       <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
       <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
       <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
@@ -3459,6 +3462,93 @@ def flex_planner():
     )
     return html
 
+# -------- Mastery & Workshop overview (CraftWorld.tips-style) --------
+
+@app.route("/mastery")
+def mastery_view():
+    """
+    Read your account proficiencies (mastery) + workshop levels via GraphQL
+    and show a combined table, similar to craftworld.tips.
+    """
+    error = None
+    rows: List[dict] = []
+
+    try:
+        profs = fetch_proficiencies()       # { "MUD": {"collectedAmount": ..., "claimedLevel": ...}, ... }
+        ws_levels = fetch_workshop_levels() # { "MUD": 2, "CLAY": 5, ... }
+
+        symbols = sorted(set(list(profs.keys()) + list(ws_levels.keys())))
+
+        for sym in symbols:
+            p = profs.get(sym, {})
+            collected = float(p.get("collectedAmount") or 0.0)
+            mastery = int(p.get("claimedLevel") or 0)
+
+            workshop = int(ws_levels.get(sym, 0))
+
+            rows.append(
+                {
+                    "symbol": sym,
+                    "collected": collected,
+                    "mastery": mastery,
+                    "workshop": workshop,
+                }
+            )
+
+    except Exception as e:
+        error = f"Error fetching mastery/workshop data: {e}"
+
+    content = """
+    <div class="card">
+      <h1>Mastery & Workshop</h1>
+      <p class="subtle">
+        Data is pulled live from Craft World's GraphQL API using your JWT:
+        <code>account.proficiencies</code> and <code>account.workshop</code>.
+        This matches the core information shown on <strong>craftworld.tips</strong>.
+      </p>
+
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% else %}
+        <div style="overflow-x:auto; margin-top: 10px;">
+          <table>
+            <tr>
+              <th>Token</th>
+              <th>Collected</th>
+              <th>Mastery Lvl</th>
+              <th>Workshop Lvl</th>
+            </tr>
+            {% for r in rows %}
+              {% set mastery_max = (r.mastery >= 10) %}
+              {% set ws_max = (r.workshop >= 10) %}
+              <tr>
+                <td>{{ r.symbol }}</td>
+                <td>{{ "{:,.0f}".format(r.collected) }}</td>
+                <td>
+                  <span class="{{ 'pill' if mastery_max else 'pill-soft' }}">
+                    L{{ r.mastery }}
+                  </span>
+                </td>
+                <td>
+                  <span class="{{ 'pill' if ws_max else 'pill-soft' }}">
+                    L{{ r.workshop }}
+                  </span>
+                </td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+      {% endif %}
+    </div>
+    """
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=render_template_string(content, rows=rows, error=error),
+        active_page="mastery",
+        has_uid=has_uid_flag(),
+    )
+    return html
 
 
 
@@ -7915,6 +8005,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
