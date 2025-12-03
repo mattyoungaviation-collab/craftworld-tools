@@ -2452,12 +2452,6 @@ def flex_planner():
               Try increasing the COIN budget or adjusting yield/speed.
             </p>
           {% endif %}
-
-            <p class="subtle">
-              No flex layout could be built with the current budget and inventory.
-              Try increasing the COIN budget or adjusting yield/speed.
-            </p>
-          {% endif %}
         </div>
       </div>
 
@@ -6864,6 +6858,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
