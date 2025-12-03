@@ -1330,6 +1330,8 @@ def attr_or_key(obj, name, default=None):
 
 # -------- Dashboard (CraftWorld.tips mode) --------
 
+# -------- Dashboard (CraftWorld.tips mode) --------
+
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     error = None
@@ -1441,7 +1443,7 @@ def dashboard():
             else:
                 error = f"Error fetching account data: {e}"
 
-    # --- 3) Global profit summary (COIN/hr, USD/hr, best & worst) ---
+    # --- 3) Global profit summary (COIN/hr, USD/hr) ---
 
     global_coin_hour = 0.0
     global_coin_day = 0.0
@@ -1450,13 +1452,16 @@ def dashboard():
     best_factory = None
     worst_factory = None
 
+    # Also build upgrade suggestions
+    upgrade_suggestions: List[dict] = []
+
     if prices and factory_rows:
         boost_levels = get_boost_levels()
         for row in factory_rows:
             token = str(row["token"]).upper()
             level = int(row["level"])
 
-            # Make sure we have CSV data for this factory+level
+            # Ensure CSV data exists
             if token not in FACTORIES_FROM_CSV:
                 continue
             if level not in FACTORIES_FROM_CSV[token]:
@@ -1488,22 +1493,23 @@ def dashboard():
                 workshop_pct = float(ws_table[workshop_level])
             speed_factor_eff = 1.0 + workshop_pct / 100.0
 
+            # --- Base profit at current level ---
             try:
-                res = compute_factory_result_csv(
+                res_cur = compute_factory_result_csv(
                     FACTORIES_FROM_CSV,
                     prices,
                     token,
                     level,
                     target_level=None,
                     count=1,
-                    yield_pct=yield_pct,           # mastery → yield
-                    speed_factor=speed_factor_eff, # workshop → speed
-                    workers=0,                     # assume 0 workers for summary
+                    yield_pct=yield_pct,
+                    speed_factor=speed_factor_eff,
+                    workers=0,
                 )
             except Exception:
                 continue
 
-            prof_hour = float(res.get("profit_coin_per_hour", 0.0))
+            prof_hour = float(res_cur.get("profit_coin_per_hour", 0.0))
             prof_day = prof_hour * 24.0
             usd_hour = prof_hour * coin_usd
             usd_day = prof_day * coin_usd
@@ -1536,11 +1542,64 @@ def dashboard():
                     "profit_usd_hour": usd_hour,
                 }
 
+            # --- Upgrade suggestion: level -> level+1 ---
+            next_level = level + 1
+            if next_level in FACTORIES_FROM_CSV.get(token, {}):
+                # Upgrade cost from current level (single-step)
+                up_info = res_cur.get("upgrade_single")
+                if up_info:
+                    try:
+                        upgrade_cost_coin = float(up_info.get("coin_per_factory", 0.0))
+                    except Exception:
+                        upgrade_cost_coin = 0.0
+                else:
+                    upgrade_cost_coin = 0.0
+
+                # Profit at next level
+                try:
+                    res_next = compute_factory_result_csv(
+                        FACTORIES_FROM_CSV,
+                        prices,
+                        token,
+                        next_level,
+                        target_level=None,
+                        count=1,
+                        yield_pct=yield_pct,
+                        speed_factor=speed_factor_eff,
+                        workers=0,
+                    )
+                    prof_hour_next = float(
+                        res_next.get("profit_coin_per_hour", 0.0)
+                    )
+                except Exception:
+                    prof_hour_next = prof_hour
+
+                delta_hour = prof_hour_next - prof_hour
+                if upgrade_cost_coin > 0 and delta_hour > 0:
+                    roi = delta_hour / upgrade_cost_coin  # COIN/hr gained per COIN spent
+                    payback_hours = upgrade_cost_coin / delta_hour
+
+                    upgrade_suggestions.append(
+                        {
+                            "token": row["token"],
+                            "from_level": level,
+                            "to_level": next_level,
+                            "delta_hour": delta_hour,
+                            "upgrade_cost_coin": upgrade_cost_coin,
+                            "roi": roi,
+                            "payback_hours": payback_hours,
+                        }
+                    )
+
+    # Sort upgrade suggestions by ROI (best first) and keep top 10
+    upgrade_suggestions.sort(key=lambda u: u["roi"], reverse=True)
+    upgrade_suggestions = upgrade_suggestions[:10]
+
     content = """
     <div class="card">
       <h1>📊 CraftWorld Dashboard</h1>
       <p class="subtle">
-        Live prices plus a quick snapshot of your account and estimated global profit.
+        Live prices, account snapshot, estimated global profit, and top upgrade ideas.
       </p>
 
       <div style="display:flex; gap:12px; flex-wrap:wrap;">
@@ -1601,6 +1660,36 @@ def dashboard():
     </div>
 
     {% if uid %}
+      <div class="card">
+        <h2>🎯 Suggested Upgrades (top {{ upgrade_suggestions|length }})</h2>
+        {% if upgrade_suggestions %}
+          <table>
+            <tr>
+              <th>Factory</th>
+              <th>From → To</th>
+              <th>Δ COIN/hr</th>
+              <th>Upgrade cost (COIN)</th>
+              <th>ROI (Δ/hr per COIN)</th>
+              <th>Payback (hours)</th>
+            </tr>
+            {% for u in upgrade_suggestions %}
+              <tr>
+                <td>{{ u.token }}</td>
+                <td>L{{ u.from_level }} → L{{ u.to_level }}</td>
+                <td>{{ '%+.6f'|format(u.delta_hour) }}</td>
+                <td>{{ '%.6f'|format(u.upgrade_cost_coin) }}</td>
+                <td>{{ '%.6f'|format(u.roi) }}</td>
+                <td>{{ '%.2f'|format(u.payback_hours) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <p class="subtle">
+            No positive-ROI upgrades found based on current prices and Boost levels.
+          </p>
+        {% endif %}
+      </div>
+
       <div class="card">
         <h2>📦 Inventory Snapshot</h2>
         {% if inventory_rows %}
@@ -1671,7 +1760,7 @@ def dashboard():
         <h2>Account Snapshot</h2>
         <p class="subtle">
           Enter your Voya UID on the <strong>Overview</strong> tab, then come back here
-          to see your inventory and factories alongside live prices and profit estimates.
+          to see your inventory, factories, profit estimates, and suggested upgrades.
         </p>
       </div>
     {% endif %}
@@ -1693,11 +1782,13 @@ def dashboard():
             global_usd_day=global_usd_day,
             best_factory=best_factory,
             worst_factory=worst_factory,
+            upgrade_suggestions=upgrade_suggestions,
         ),
         active_page="dashboard",
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -7336,6 +7427,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
