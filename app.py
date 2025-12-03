@@ -967,13 +967,16 @@ BASE_TEMPLATE = """
 <body>
   <div class="nav">
     <div class="nav-title">CraftWorld Tools</div>
-    <div class="nav-links">
-      <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
-      {% if has_uid %}
-  <a href="{{ url_for('dashboard') }}" class="{{ 'active' if active_page=='dashboard' else '' }}">Dashboard</a>
-{% else %}
-  <span class="nav-disabled">Dashboard</span>
-{% endif %}
+  <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
+
+  {% if has_uid %}
+    <a href="{{ url_for('dashboard') }}" class="{{ 'active' if active_page=='dashboard' else '' }}">Dashboard</a>
+    <a href="{{ url_for('inventory_view') }}" class="{{ 'active' if active_page=='inventory' else '' }}">Inventory</a>
+  {% else %}
+    <span class="nav-disabled">Dashboard</span>
+    <span class="nav-disabled">Inventory</span>
+  {% endif %}
+
 
 
 
@@ -3550,6 +3553,186 @@ def mastery_view():
     )
     return html
 
+# -------- Inventory overview (craftworld.tips-style) --------
+
+@app.route("/inventory")
+def inventory_view():
+    """
+    Full inventory page:
+    - Shows all tokens from account.resources
+    - Uses live prices in COIN + USD
+    - Sorts by total COIN value (highest first)
+    - Includes a Discord-ready summary block
+    """
+    error = None
+    uid = session.get("voya_uid")
+    if not uid:
+        content = """
+        <div class="card">
+          <h1>Inventory</h1>
+          <p class="subtle">
+            Enter your Voya UID on the <strong>Overview</strong> tab to unlock
+            the Inventory view.
+          </p>
+        </div>
+        """
+        html = render_template_string(
+            BASE_TEMPLATE,
+            content=content,
+            active_page="inventory",
+            has_uid=has_uid_flag(),
+        )
+        return html
+
+    prices = {}
+    coin_usd = 0.0
+    inventory_rows: List[dict] = []
+    total_coin_value = 0.0
+    total_usd_value = 0.0
+
+    try:
+        # Prices
+        prices = fetch_live_prices_in_coin()
+        coin_usd = float(prices.get("_COIN_USD", 0.0))
+
+        # Account data
+        cw = fetch_craftworld(uid)
+        resources = attr_or_key(cw, "resources", []) or []
+
+        for r in resources:
+            sym = str(attr_or_key(r, "symbol", "")).upper()
+            if not sym:
+                continue
+            try:
+                amt = float(attr_or_key(r, "amount", 0) or 0.0)
+            except Exception:
+                amt = 0.0
+
+            price_coin = float(prices.get(sym, 0.0))
+            value_coin = amt * price_coin
+            value_usd = value_coin * coin_usd if coin_usd else 0.0
+
+            total_coin_value += value_coin
+            total_usd_value += value_usd
+
+            inventory_rows.append(
+                {
+                    "token": sym,
+                    "amount": amt,
+                    "price_coin": price_coin,
+                    "value_coin": value_coin,
+                    "value_usd": value_usd,
+                }
+            )
+
+        # Sort by COIN value (highest first)
+        inventory_rows.sort(key=lambda row: row["value_coin"], reverse=True)
+
+    except Exception as e:
+        error = f"Error fetching inventory: {e}"
+
+    # Build a Discord-style summary string
+    top_rows = inventory_rows[:5]
+    summary_lines = []
+    summary_lines.append(
+        f"Inventory value: {total_coin_value:.4f} COIN (~${total_usd_value:.2f} USD at {coin_usd:.6f} USD/COIN)"
+    )
+    if top_rows:
+        summary_lines.append("Top holdings:")
+        for r in top_rows:
+            summary_lines.append(
+                f"- {r['token']}: {r['amount']:.0f} (≈ {r['value_coin']:.4f} COIN)"
+            )
+    summary_text = "\n".join(summary_lines)
+
+    content = """
+    <div class="card">
+      <h1>Inventory</h1>
+      <p class="subtle">
+        Live snapshot of your resources from <code>account.resources</code>, valued using live prices
+        (same source as Dashboard). This mirrors the inventory view concept from <strong>craftworld.tips</strong>.
+      </p>
+
+      <div style="display:flex; flex-wrap:wrap; gap:16px;">
+        <div>
+          <strong>UID:</strong><br>
+          {{ uid }}
+        </div>
+        <div>
+          <strong>COIN → USD:</strong><br>
+          {{ '%.6f'|format(coin_usd) }} USD / COIN
+        </div>
+        <div>
+          <strong>Total Inventory Value:</strong><br>
+          {{ '%.6f'|format(total_coin_value) }} COIN<br>
+          {{ '%.2f'|format(total_usd_value) }} USD
+        </div>
+      </div>
+
+      {% if error %}
+        <div class="error" style="margin-top:10px; white-space:pre-wrap;">{{ error }}</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>📤 Copy summary for Discord</h2>
+      <p class="subtle">
+        Quick text summary you can paste in chat or your notes.
+      </p>
+      <textarea readonly
+                style="width:100%;min-height:120px;font-family:monospace;font-size:12px;"
+                onclick="this.select();">
+{{ summary_text }}
+      </textarea>
+    </div>
+
+    <div class="card">
+      <h2>📦 Inventory Details</h2>
+      {% if inventory_rows %}
+        <div style="overflow-x:auto;">
+          <table>
+            <tr>
+              <th>Token</th>
+              <th>Amount</th>
+              <th>Price (COIN)</th>
+              <th>Value (COIN)</th>
+              <th>Value (USD)</th>
+            </tr>
+            {% for r in inventory_rows %}
+              <tr>
+                <td>
+                  <a href="{{ url_for('resource_view', token=r.token) }}">{{ r.token }}</a>
+                </td>
+                <td>{{ "{:,.6f}".format(r.amount) }}</td>
+                <td>{{ "%.8f"|format(r.price_coin) }}</td>
+                <td>{{ "%.6f"|format(r.value_coin) }}</td>
+                <td>{{ "%.4f"|format(r.value_usd) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+      {% else %}
+        <p class="subtle">No resources found for this account.</p>
+      {% endif %}
+    </div>
+    """
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=render_template_string(
+            content,
+            uid=uid,
+            coin_usd=coin_usd,
+            inventory_rows=inventory_rows,
+            total_coin_value=total_coin_value,
+            total_usd_value=total_usd_value,
+            summary_text=summary_text,
+            error=error,
+        ),
+        active_page="inventory",
+        has_uid=has_uid_flag(),
+    )
+    return html
 
 
 # -------- Boosts tab (per-token mastery / workshop levels) --------
@@ -8005,6 +8188,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
