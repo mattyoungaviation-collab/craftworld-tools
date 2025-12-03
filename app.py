@@ -3153,10 +3153,15 @@ def masterpieces_view():
     tier_base_totals_list = _totals_to_rows(tier_base_totals)
     tier_bp_totals_list = _totals_to_rows(tier_bp_totals)
 
-    # Combined (base + RawrPass)
-    combined_totals: Dict[str, float] = dict(tier_base_totals)
-    for sym, amt in tier_bp_totals.items():
-        combined_totals[sym] = combined_totals.get(sym, 0.0) + amt
+    # Combined totals:
+    # - If you DON'T have RawrPass, combined == base-only
+    # - If you DO have RawrPass, combined = base + RawrPass
+    if has_battle_pass:
+        combined_totals: Dict[str, float] = dict(tier_base_totals)
+        for sym, amt in tier_bp_totals.items():
+            combined_totals[sym] = combined_totals.get(sym, 0.0) + amt
+    else:
+        combined_totals = dict(tier_base_totals)
 
     tier_combined_totals_list = _totals_to_rows(combined_totals)
     tier_combined_total_coin = sum(r["coin_value"] for r in tier_combined_totals_list)
@@ -5921,6 +5926,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
