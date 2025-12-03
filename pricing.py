@@ -1,8 +1,10 @@
 from typing import Dict, Optional, List
+import time
 
 import requests
 
 from craftworld_api import call_graphql
+
 
 # Ronin token addresses (we mainly need COIN -> USD)
 TOKEN_ADDRESSES: Dict[str, str] = {
@@ -50,6 +52,12 @@ TOKEN_ADDRESSES: Dict[str, str] = {
 }
 
 GECKO_BASE = "https://api.geckoterminal.com/api/v2/networks/ronin/tokens/"
+
+# Simple in-memory cache for BUY/SELL quotes used by Profitability tab
+_QUOTE_CACHE: Dict[str, Dict[str, float]] = {}
+_QUOTE_CACHE_TS: Dict[str, float] = {}
+QUOTE_TTL_SECONDS = 60.0  # reuse quotes for 60 seconds per symbol
+
 
 
 def _get_usd_price(token_address: Optional[str]) -> Optional[float]:
@@ -201,13 +209,23 @@ def fetch_buy_sell_for_profitability(
         per_symbol[sym_u.upper()] = dict(rec_map)
 
     # For each requested symbol, try to refine with exactInputQuote
+    now = time.time()
     for sym in symbols:
         sym_u = sym.upper()
         if sym_u == "COIN":
             continue
 
-        # SELL price: resource -> COIN
+        # If we have a fresh cached quote for this symbol, reuse it
+        cached = _QUOTE_CACHE.get(sym_u)
+        cached_ts = _QUOTE_CACHE_TS.get(sym_u, 0.0)
+        if cached is not None and (now - cached_ts) < QUOTE_TTL_SECONDS:
+            per_symbol.setdefault(sym_u, {}).update(cached)
+            continue
+
         sell_price: Optional[float] = None
+        buy_price: Optional[float] = None
+
+        # SELL price: resource -> COIN
         quote_sell = _fetch_exact_input_quote(sym_u, "COIN", sample_amount)
         if quote_sell and quote_sell.get("output") and quote_sell.get("input"):
             try:
@@ -219,7 +237,6 @@ def fetch_buy_sell_for_profitability(
                 sell_price = None
 
         # BUY price: COIN -> resource
-        buy_price: Optional[float] = None
         quote_buy = _fetch_exact_input_quote("COIN", sym_u, sample_amount)
         if quote_buy and quote_buy.get("output") and quote_buy.get("input"):
             try:
@@ -232,10 +249,18 @@ def fetch_buy_sell_for_profitability(
 
         if sell_price is not None or buy_price is not None:
             per_symbol.setdefault(sym_u, {})
+            to_store: Dict[str, float] = {}
             if sell_price is not None:
                 per_symbol[sym_u]["SELL"] = sell_price
+                to_store["SELL"] = sell_price
             if buy_price is not None:
                 per_symbol[sym_u]["BUY"] = buy_price
+                to_store["BUY"] = buy_price
+
+            # Update per-symbol cache
+            if to_store:
+                _QUOTE_CACHE[sym_u] = to_store
+                _QUOTE_CACHE_TS[sym_u] = now
 
     # Ensure base COIN entries exist
     per_symbol.setdefault("COIN", {})
@@ -288,6 +313,7 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
     prices_coin["_COIN_USD"] = float(coin_usd) if coin_usd else 0.0
 
     return prices_coin
+
 
 
 
