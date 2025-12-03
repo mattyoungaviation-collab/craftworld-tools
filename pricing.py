@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 import requests
 
@@ -136,6 +136,115 @@ def fetch_exchange_prices_buy_sell() -> Dict[str, Dict[str, float]]:
 
     return per_symbol
 
+EXACT_INPUT_QUOTE_QUERY = """
+    query exactInputQuoteQuery($input: ExactInputInput!) {
+      exactInputQuote(input: $input) {
+        type
+        input {
+          symbol
+          amount
+        }
+        output {
+          symbol
+          amount
+        }
+        details {
+          priceImpactPercentage
+        }
+      }
+    }
+"""
+
+
+def _fetch_exact_input_quote(
+    input_symbol: str,
+    output_symbol: str,
+    input_amount: float,
+) -> Optional[dict]:
+    """
+    Call Craft World's exactInputQuote(inputSymbol -> outputSymbol).
+
+    Returns the inner "exactInputQuote" dict or None on failure.
+    """
+    variables = {
+        "input": {
+            "inputSymbol": input_symbol,
+            "outputSymbol": output_symbol,
+            "inputAmount": float(input_amount),
+        }
+    }
+    try:
+        data = call_graphql(EXACT_INPUT_QUOTE_QUERY, variables)
+        return data.get("exactInputQuote")
+    except Exception:
+        return None
+
+
+def fetch_buy_sell_for_profitability(
+    symbols: List[str],
+    sample_amount: float = 10_000.0,
+) -> Dict[str, Dict[str, float]]:
+    """
+    For a list of resource symbols, build a BUY/SELL map using exactInputQuote:
+
+      SELL:  sym  -> COIN  (how much COIN you get for N resource)
+      BUY:   COIN -> sym   (how much COIN you pay per 1 resource)
+
+    We start from fetch_exchange_prices_buy_sell() as a fallback and
+    then override entries where exactInputQuote succeeds.
+    """
+    # Start with the existing exchangePriceList-based data as a base.
+    base = fetch_exchange_prices_buy_sell()
+    per_symbol: Dict[str, Dict[str, float]] = {}
+
+    for sym_u, rec_map in base.items():
+        per_symbol[sym_u.upper()] = dict(rec_map)
+
+    # For each requested symbol, try to refine with exactInputQuote
+    for sym in symbols:
+        sym_u = sym.upper()
+        if sym_u == "COIN":
+            continue
+
+        # SELL price: resource -> COIN
+        sell_price: Optional[float] = None
+        quote_sell = _fetch_exact_input_quote(sym_u, "COIN", sample_amount)
+        if quote_sell and quote_sell.get("output") and quote_sell.get("input"):
+            try:
+                out_amt = float(quote_sell["output"]["amount"])
+                in_amt = float(quote_sell["input"]["amount"])
+                if in_amt > 0:
+                    sell_price = out_amt / in_amt  # COIN per 1 resource
+            except Exception:
+                sell_price = None
+
+        # BUY price: COIN -> resource
+        buy_price: Optional[float] = None
+        quote_buy = _fetch_exact_input_quote("COIN", sym_u, sample_amount)
+        if quote_buy and quote_buy.get("output") and quote_buy.get("input"):
+            try:
+                out_amt = float(quote_buy["output"]["amount"])
+                in_amt = float(quote_buy["input"]["amount"])
+                if out_amt > 0:
+                    buy_price = in_amt / out_amt  # COIN per 1 resource
+            except Exception:
+                buy_price = None
+
+        if sell_price is not None or buy_price is not None:
+            per_symbol.setdefault(sym_u, {})
+            if sell_price is not None:
+                per_symbol[sym_u]["SELL"] = sell_price
+            if buy_price is not None:
+                per_symbol[sym_u]["BUY"] = buy_price
+
+    # Ensure base COIN entries exist
+    per_symbol.setdefault("COIN", {})
+    per_symbol["COIN"].setdefault("SELL", 1.0)
+    per_symbol["COIN"].setdefault("BUY", 1.0)
+
+    return per_symbol
+
+
 
 def fetch_exchange_prices_coin() -> Dict[str, float]:
     """
@@ -179,4 +288,5 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
     prices_coin["_COIN_USD"] = float(coin_usd) if coin_usd else 0.0
 
     return prices_coin
+
 
