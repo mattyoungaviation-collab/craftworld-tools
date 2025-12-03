@@ -376,6 +376,21 @@ def compute_factory_result_csv(
     profit_coin_per_craft = value_coin_per_craft - cost_coin_per_craft
     profit_coin_per_hour = profit_coin_per_craft * crafts_per_hour * count
 
+    # Upgrade cost (single step)
+    upgrade_single = None
+    if up_token and up_amount and up_amount > 0:
+        up_coin_one = up_amount * p_in(up_token)
+        up_coin_total = up_coin_one * count
+        upgrade_single = {
+            "token": up_token,
+            "amount_per_factory": up_amount,
+            "coin_per_factory": up_coin_one,
+            "coin_total": up_coin_total,
+        }
+
+    # Upgrade chain (level → target_level)
+    upgrade_chain = []
+
     # Upgrade chain (level → target_level)
     upgrade_chain = []
     if multi_upgrade_tokens and target_level and target_level > level:
@@ -459,5 +474,6 @@ def compute_best_setups_csv(
 
     results.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
     return results[:top_n], combined_speed, worker_factor
+
 
 
