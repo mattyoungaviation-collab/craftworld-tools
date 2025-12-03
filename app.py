@@ -162,7 +162,11 @@ def load_masterpiece_metadata_cache() -> Dict[int, Dict[str, Any]]:
 
 
 
-from pricing import fetch_live_prices_in_coin, fetch_exchange_prices_buy_sell
+from pricing import (
+    fetch_live_prices_in_coin,
+    fetch_buy_sell_for_profitability,
+)
+
 
 from factories import (
     my_factories,
@@ -1494,11 +1498,12 @@ def profitability():
     try:
         # 1) Flat SELL-focused prices + COIN → USD
         prices_flat = fetch_live_prices_in_coin()
-
         coin_usd = float(prices_flat.get("_COIN_USD", 0.0))
 
-        # 2) Full BUY / SELL matrix from Craft World
-        per_symbol = fetch_exchange_prices_buy_sell()
+        # 2) BUY / SELL matrix for relevant symbols using exactInputQuote
+        #    Build a symbol list from your CSV factories (all tokens you care about).
+        relevant_symbols = list(FACTORIES_FROM_CSV.keys())
+        per_symbol = fetch_buy_sell_for_profitability(relevant_symbols)
 
         prices_sell: Dict[str, float] = {}
         prices_buy: Dict[str, float] = {}
@@ -1524,6 +1529,7 @@ def profitability():
         # Ensure COIN present as 1.0 in both maps
         prices_sell.setdefault("COIN", 1.0)
         prices_buy.setdefault("COIN", 1.0)
+
 
         # Debug: capture one token's BUY vs SELL for display (EARTH)
         debug_earth_sell = float(prices_sell.get("EARTH", 0.0))
@@ -6086,6 +6092,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
