@@ -1469,10 +1469,10 @@ def profitability():
             }
             saved_selected = session["profit_selected_csv"]
         else:
-        else:
             # if nothing selected explicitly, assume all on
             saved_selected = {m["key"]: True for m in rows_meta}
             session["profit_selected_csv"] = saved_selected
+
 
 
         saved_workers = new_workers
@@ -6072,6 +6072,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
