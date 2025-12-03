@@ -1947,6 +1947,43 @@ def flex_planner():
 
     sim_token = saved_sim_token
     sim_amount = saved_sim_amount
+    
+    # On first GET, auto-populate yield/speed from your Boosts tab
+    if request.method == "GET" and "flex_yield_pct" not in session:
+        try:
+            boost_levels = get_boost_levels() or {}
+            mastery_levels = []
+            workshop_levels = []
+
+            for _tok, lvls in boost_levels.items():
+                try:
+                    mastery_levels.append(int(lvls.get("mastery_level", 0)))
+                    workshop_levels.append(int(lvls.get("workshop_level", 0)))
+                except Exception:
+                    continue
+
+            if mastery_levels:
+                avg_m = sum(mastery_levels) / len(mastery_levels)
+                m_level = max(0, min(10, int(round(avg_m))))
+                mastery_factor = float(MASTERY_BONUSES.get(m_level, 1.0))
+                # Convert mastery multiplier (e.g. 1.12) → yield% (112%)
+                yield_pct = 100.0 * mastery_factor
+
+            if workshop_levels and WORKSHOP_MODIFIERS:
+                avg_w = sum(workshop_levels) / len(workshop_levels)
+                w_level = max(0, min(10, int(round(avg_w))))
+
+                # Pick any token's WS table as a generic reference
+                some_tok = next(iter(WORKSHOP_MODIFIERS.keys()), None)
+                if some_tok:
+                    ws_table = WORKSHOP_MODIFIERS.get(some_tok) or []
+                    if 0 <= w_level < len(ws_table):
+                        ws_pct = float(ws_table[w_level])
+                        # WS % is extra speed on top of 1.0x
+                        speed_factor = 1.0 + ws_pct / 100.0
+        except Exception:
+            # If anything fails, just keep the manual defaults
+            pass
 
 
     if request.method == "POST":
@@ -6857,6 +6894,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
