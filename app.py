@@ -1837,16 +1837,13 @@ def profitability():
             total_usd_day=total_usd_day,
             coin_usd=coin_usd,
             sort_mode=sort_mode,
-            active_page="profit",
-            has_uid=has_uid_flag(),
-            coin_usd=coin_usd,
-            sort_mode=sort_mode,
             input_price_mode=input_price_mode,
-
         ),
-
+        active_page="profit",
+        has_uid=has_uid_flag(),
     )
     return html
+
 
 # -------- Boosts tab (per-token mastery / workshop levels) --------
 
@@ -6072,6 +6069,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
