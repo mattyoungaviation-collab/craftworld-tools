@@ -1657,10 +1657,68 @@ def profitability():
 
         <div style="margin-top:14px;overflow-x:auto;">
           <table>
-            ...
+            <tr>
+              <th>Run</th>
+              <th>Token</th>
+              <th>Lvl</th>
+              <th>Count</th>
+              <th>Mastery Lvl</th>
+              <th>Yield %</th>
+              <th>Workshop Lvl</th>
+              <th>WS Speed %</th>
+              <th>Workers</th>
+              <th>P/hr (1)</th>
+              <th>P/hr (All)</th>
+              <th>P/day</th>
+              <th>USD/hr</th>
+            </tr>
+
+            {% for r in rows %}
+            <tr>
+              <td>
+                <input type="checkbox"
+                       name="run_{{r.key}}"
+                       {% if r.selected %}checked{% endif %}>
+              </td>
+              <td>{{ r.token }}</td>
+              <td>{{ r.level }}</td>
+              <td>{{ r.count }}</td>
+
+              <td>
+                <input type="number"
+                       min="0" max="10"
+                       name="mastery_{{ r.key }}"
+                       value="{{ r.mastery_level }}"
+                       style="width:60px;">
+              </td>
+              <td>{{ '%.2f'|format(r.yield_pct) }}</td>
+
+              <td>
+                <input type="number"
+                       min="0" max="10"
+                       name="workshop_{{ r.key }}"
+                       value="{{ r.workshop_level }}"
+                       style="width:60px;">
+              </td>
+              <td>{{ '%.2f'|format(r.workshop_pct) }}</td>
+
+              <td>
+                <input type="number"
+                       min="0" max="4"
+                       name="workers_{{ r.key }}"
+                       value="{{ r.workers }}"
+                       style="width:60px;">
+              </td>
+
+              <td>{{ '%.6f'|format(r.profit_hour_per) }}</td>
+              <td>{{ '%.6f'|format(r.profit_hour_total) }}</td>
+              <td>{{ '%.6f'|format(r.profit_day_total) }}</td>
+              <td>{{ '%.4f'|format(r.usd_hour_total) }}</td>
+            </tr>
             {% endfor %}
           </table>
         </div>
+
 
         <button type="submit" style="margin-top:12px;">Update</button>
       </form>
@@ -5926,6 +5984,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
