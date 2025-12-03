@@ -1030,7 +1030,6 @@ def index():
             try:
                 data = fetch_craftworld(uid)
                 result = data
-                
             except Exception as e:
                 error = f"Error fetching CraftWorld data: {e}"
 
@@ -1050,6 +1049,23 @@ def index():
         <div class="error">{{ error }}</div>
       {% endif %}
     </div>
+
+    {% if result %}
+      <div class="card">
+        <h2>Next steps</h2>
+        <p class="subtle">
+          Your UID is set and your account data is loaded. Where do you want to go next?
+        </p>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          <a href="{{ url_for('dashboard') }}" class="pill">📊 Dashboard</a>
+          <a href="{{ url_for('inventory_view') }}" class="pill">📦 Inventory</a>
+          <a href="{{ url_for('profitability') }}" class="pill">🏭 Profitability</a>
+          <a href="{{ url_for('flex_planner') }}" class="pill">🧠 Flex Planner</a>
+          <a href="{{ url_for('masterpieces_view') }}" class="pill">🎨 Masterpieces</a>
+          <a href="{{ url_for('trees') }}" class="pill">🌳 Trees</a>
+        </div>
+      </div>
+    {% endif %}
 
     {% if result %}
       <div class="two-col">
@@ -1077,87 +1093,43 @@ def index():
               {% endfor %}
             {% endfor %}
           {% else %}
-            <p class="subtle">No land plots found.</p>
+            <p class="subtle">No land plots found for this account.</p>
           {% endif %}
-        </div>
-
-        <div class="card">
-          <h2>Dynos</h2>
-          {% if result.dynos %}
-            <table>
-              <tr><th>Name</th><th>Rarity</th><th>Production</th></tr>
-              {% for d in result.dynos %}
-                <tr>
-                  <td>{{ d.meta.displayName }}</td>
-                  <td>{{ d.meta.rarity }}</td>
-                  <td>
-                    {% if d.production %}
-                      {% for p in d.production %}
-                        {{ p.amount }} {{ p.symbol }}{% if not loop.last %}, {% endif %}
-                      {% endfor %}
-                    {% else %}
-                      <span class="subtle">none</span>
-                    {% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </table>
-          {% else %}
-            <p class="subtle">No dynos found.</p>
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="two-col">
-        <div class="card">
-          <h2>Mines</h2>
-          <table>
-            <tr><th>Token</th><th>Level</th></tr>
-            {% for m in result.mines %}
-              {% if m.definition %}
-                <tr>
-                  <td>{{ m.definition.id }}</td>
-                  <td>L{{ m.level + 1 }}</td>
-                </tr>
-              {% endif %}
-            {% endfor %}
-          </table>
         </div>
 
         <div class="card">
           <h2>Resources</h2>
           {% if result.resources %}
             <table>
-              <tr><th>Symbol</th><th>Amount</th></tr>
+              <tr><th>Token</th><th>Amount</th></tr>
               {% for r in result.resources %}
                 <tr>
                   <td>{{ r.symbol }}</td>
-                  <td>{{ "{:,.2f}".format(r.amount) }}</td>
+                  <td>{{ "%.6f"|format(r.amount) }}</td>
                 </tr>
               {% endfor %}
             </table>
           {% else %}
-            <p class="subtle">No resources found.</p>
+            <p class="subtle">No resources found for this account.</p>
           {% endif %}
         </div>
       </div>
     {% endif %}
     """
 
-    content = render_template_string(
-        content,
-        uid=uid,
-        error=error,
-        result=result,
-    )
-
     html = render_template_string(
         BASE_TEMPLATE,
-        content=content,
+        content=render_template_string(
+            content,
+            uid=uid,
+            result=result,
+            error=error,
+        ),
         active_page="overview",
         has_uid=has_uid_flag(),
     )
     return html
+
     # ---------------- Authentication: register / login / logout ----------------
 
 @app.route("/register", methods=["GET", "POST"])
@@ -1806,7 +1778,7 @@ def resource_view(token: str):
     """
     Detail view for a single resource token:
     - current price (COIN + USD)
-    - how much you own (if UID set)
+    - how much you own (if UID set) and % of total bag
     - which factories produce it
     - which factories consume it
     """
@@ -1829,10 +1801,12 @@ def resource_view(token: str):
     price_coin = float(prices.get(sym, 0.0)) if prices else 0.0
     price_usd = price_coin * coin_usd if coin_usd else 0.0
 
-    # 2) How much you own (inventory)
+    # 2) Inventory snapshot: this token + total bag
     holding_amount = None
     holding_value_coin = 0.0
     holding_value_usd = 0.0
+    total_bag_coin = 0.0
+    percent_of_bag = None
 
     if uid:
         try:
@@ -1840,16 +1814,23 @@ def resource_view(token: str):
             resources = attr_or_key(cw, "resources", []) or []
             for r in resources:
                 rsym = str(attr_or_key(r, "symbol", "")).upper()
-                if rsym != sym:
-                    continue
                 try:
                     amt = float(attr_or_key(r, "amount", 0) or 0.0)
                 except Exception:
                     amt = 0.0
-                holding_amount = amt
-                holding_value_coin = amt * price_coin
-                holding_value_usd = holding_value_coin * coin_usd if coin_usd else 0.0
-                break
+
+                p_coin = float(prices.get(rsym, 0.0))
+                val_coin = amt * p_coin
+                total_bag_coin += val_coin
+
+                if rsym == sym:
+                    holding_amount = amt
+                    holding_value_coin = val_coin
+                    holding_value_usd = val_coin * coin_usd if coin_usd else 0.0
+
+            if holding_value_coin > 0 and total_bag_coin > 0:
+                percent_of_bag = 100.0 * holding_value_coin / total_bag_coin
+
         except Exception as e:
             if error:
                 error = f"{error}\nError fetching inventory: {e}"
@@ -1868,7 +1849,6 @@ def resource_view(token: str):
 
             # Producers = factories whose output_token == sym
             if out_token == sym:
-                # Baseline calc: 100% yield, 1x speed, 0 workers
                 prof_hour = 0.0
                 prof_craft = 0.0
                 crafts_per_hour = 0.0
@@ -1912,6 +1892,7 @@ def resource_view(token: str):
                 if str(in_tok).upper() == sym:
                     uses_it = True
                     total_per_craft += float(qty or 0.0)
+
             if uses_it:
                 crafts_per_hour = 0.0
                 amount_per_hour = 0.0
@@ -1939,7 +1920,8 @@ def resource_view(token: str):
     <div class="card">
       <h1>🔍 Resource: {{ sym }}</h1>
       <p class="subtle">
-        Price, holdings, and which factories produce or consume this resource (baseline: 100% yield, 1x speed).
+        Price, holdings, and which factories produce or consume this resource
+        (baseline: 100% yield, 1x speed, 0 workers).
       </p>
 
       <div style="display:flex; flex-wrap:wrap; gap:16px;">
@@ -1958,7 +1940,12 @@ def resource_view(token: str):
             {% if holding_amount is not none %}
               {{ '%.6f'|format(holding_amount) }} {{ sym }}<br>
               {{ '%.6f'|format(holding_value_coin) }} COIN<br>
-              {{ '%.6f'|format(holding_value_usd) }} USD
+              {{ '%.6f'|format(holding_value_usd) }} USD<br>
+              {% if percent_of_bag is not none %}
+                <span class="subtle">
+                  (~{{ '%.2f'|format(percent_of_bag) }}% of your total inventory value in COIN)
+                </span>
+              {% endif %}
             {% else %}
               <span class="subtle">No {{ sym }} found in inventory.</span>
             {% endif %}
@@ -1971,6 +1958,7 @@ def resource_view(token: str):
           <a href="{{ url_for('trees') }}" class="pill" style="margin-top:6px;">🌳 View Trees</a>
         </div>
       </div>
+    </div>
 
     {% if error %}
       <div class="card">
@@ -2047,6 +2035,7 @@ def resource_view(token: str):
             holding_amount=holding_amount,
             holding_value_coin=holding_value_coin,
             holding_value_usd=holding_value_usd,
+            percent_of_bag=percent_of_bag,
             error=error,
             producers=producers,
             consumers=consumers,
@@ -2055,6 +2044,7 @@ def resource_view(token: str):
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -3472,6 +3462,7 @@ def mastery_view():
     """
     Read your account proficiencies (mastery) + workshop levels via GraphQL
     and show a combined table, similar to craftworld.tips.
+    Handles unauthenticated / missing JWT with a friendly message.
     """
     error = None
     rows: List[dict] = []
@@ -3486,7 +3477,6 @@ def mastery_view():
             p = profs.get(sym, {})
             collected = float(p.get("collectedAmount") or 0.0)
             mastery = int(p.get("claimedLevel") or 0)
-
             workshop = int(ws_levels.get(sym, 0))
 
             rows.append(
@@ -3499,7 +3489,16 @@ def mastery_view():
             )
 
     except Exception as e:
-        error = f"Error fetching mastery/workshop data: {e}"
+        msg = str(e)
+        # Friendly handling for unauthenticated / no JWT cases
+        if "UNAUTHENTICATED" in msg.upper() or "JWT" in msg.upper():
+            error = (
+                "This page needs a valid Craft World login / JWT to load your "
+                "mastery and workshop levels.<br>"
+                "Go to the <strong>Login</strong> tab, log in, then come back here."
+            )
+        else:
+            error = f"Error fetching mastery/workshop data: {msg}"
 
     content = """
     <div class="card">
@@ -3511,7 +3510,10 @@ def mastery_view():
       </p>
 
       {% if error %}
-        <div class="error">{{ error }}</div>
+        <div class="error" style="white-space:normal;">{{ error|safe }}</div>
+        <p class="subtle" style="margin-top:8px;">
+          If you just logged in, try refreshing this page.
+        </p>
       {% else %}
         <div style="overflow-x:auto; margin-top: 10px;">
           <table>
@@ -8188,6 +8190,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
