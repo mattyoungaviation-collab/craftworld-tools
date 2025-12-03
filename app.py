@@ -612,15 +612,12 @@ BASE_TEMPLATE = """
       position: sticky;
       top: 0;
       z-index: 20;
-      backdrop-filter: blur(18px);
-      background: linear-gradient(
-          to right,
-          rgba(5, 7, 18, 0.96),
-          rgba(10, 15, 35, 0.96)
-      );
-      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-      box-shadow: 0 14px 30px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(16px);
+      background: rgba(5, 7, 18, 0.95);
+      border-bottom: 1px solid rgba(15, 23, 42, 0.9);
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
     }
+
 
     .nav-inner {
       max-width: 1180px;
@@ -682,12 +679,13 @@ BASE_TEMPLATE = """
     }
 
     .nav-links a.active {
-      background: linear-gradient(120deg, var(--accent), var(--accent-strong));
-      color: #020617;
-      border-color: transparent;
-      box-shadow: 0 0 18px rgba(92, 242, 255, 0.45);
+      background: rgba(37, 99, 235, 0.95);
+      color: #e5e7eb;
+      border-color: rgba(191, 219, 254, 0.55);
+      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.7);
       font-weight: 600;
     }
+
 
     .nav-disabled {
       opacity: 0.45;
@@ -714,31 +712,14 @@ BASE_TEMPLATE = """
     }
 
     .card {
-      background: var(--bg-elevated);
+      background: rgba(15, 23, 42, 0.96);
       border-radius: var(--radius-lg);
       padding: 18px 18px 16px;
-      border: 1px solid var(--border-subtle);
-      box-shadow: var(--shadow-soft);
-      margin-bottom: 14px;
-      position: relative;
-      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65);
+      margin-bottom: 18px;
     }
 
-    .card::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background:
-        radial-gradient(circle at top left, rgba(92, 242, 255, 0.12), transparent 60%),
-        radial-gradient(circle at bottom right, rgba(255, 122, 242, 0.10), transparent 60%);
-      opacity: 0.7;
-    }
-
-    .card > * {
-      position: relative;
-      z-index: 1;
-    }
 
     h1, h2, h3 {
       margin: 0 0 6px;
@@ -869,41 +850,23 @@ BASE_TEMPLATE = """
       margin-top: 6px;
       border-radius: 12px;
       overflow: hidden;
-      background: rgba(8, 12, 28, 0.92);
-      box-shadow: var(--shadow-subtle);
-    }
-
-    th, td {
-      padding: 6px 8px;
-      text-align: right;
-      white-space: nowrap;
-    }
-
-    th:first-child,
-    td:first-child {
-      text-align: left;
-    }
-
-    th {
-      background: rgba(15, 23, 42, 0.96);
-      color: var(--text-soft);
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(15, 23, 42, 0.98);
+      border: 1px solid rgba(51, 65, 85, 0.9);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
     }
 
     tr:nth-child(even) td {
-      background: rgba(15, 23, 42, 0.75);
+      background: rgba(15, 23, 42, 0.94);
     }
 
     tr:nth-child(odd) td {
-      background: rgba(15, 23, 42, 0.55);
+      background: rgba(15, 23, 42, 0.90);
     }
 
     tr:hover td {
-      background: rgba(30, 64, 175, 0.65);
+      background: rgba(30, 64, 175, 0.40);
     }
+
 
     .pill,
     .pill-bad {
@@ -974,17 +937,18 @@ BASE_TEMPLATE = """
     .flex-meta-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
-      margin-bottom: 6px;
+      gap: 8px;
+      margin-bottom: 8px;
       font-size: 12px;
     }
 
     .flex-meta-row > div {
-      padding: 6px 10px;
-      border-radius: 12px;
-      background: rgba(15, 23, 42, 0.92);
-      border: 1px solid rgba(148, 163, 184, 0.35);
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(75, 85, 99, 0.9);
     }
+
 
     .flex-layout-title {
       display: flex;
@@ -6993,6 +6957,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
