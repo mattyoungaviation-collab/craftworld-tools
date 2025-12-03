@@ -2632,21 +2632,29 @@ def masterpieces_view():
         highlight_query = session.get("mp_highlight", "") or ""
 
     # ---- Battle pass toggle (RawrPass) ----
-    has_battle_pass = False
-    bp_flag = (
-        (request.args.get("has_battle_pass") or request.form.get("has_battle_pass") or "")
-        .strip()
-        .lower()
-    )
+    # Start from whatever we remembered last time:
+    has_battle_pass = bool(session.get("mp_has_battle_pass", False))
 
-    if bp_flag:
-        # Treat typical checkbox values as "true"
-        has_battle_pass = bp_flag in ("1", "true", "on", "yes", "y", "checked")
+    # If this is a POST from the Rewards tab's RawrPass form,
+    # treat the checkbox as authoritative:
+    if request.method == "POST" and (request.form.get("tab") == "rewards"):
+        # In HTML, an unchecked checkbox is *not* sent at all.
+        # So:
+        #   - present => checked => True
+        #   - missing => unchecked => False
+        has_battle_pass = "has_battle_pass" in request.form
     else:
-        # Fall back to whatever was stored last time
-        has_battle_pass = bool(session.get("mp_has_battle_pass", False))
+        # Optional query-string override for shareable links:
+        #   ?has_battle_pass=1   or   ?has_battle_pass=0
+        bp_flag = (request.args.get("has_battle_pass") or "").strip().lower()
+        if bp_flag in ("1", "true", "on", "yes", "y", "checked"):
+            has_battle_pass = True
+        elif bp_flag in ("0", "false", "off", "no"):
+            has_battle_pass = False
 
+    # Persist per session so it sticks when you reload/switch tabs
     session["mp_has_battle_pass"] = has_battle_pass
+
 
     # Which sub-tab is active: "planner", "current", or "history"?
     tab = (request.args.get("tab") or request.form.get("tab") or "").strip() or "planner"
@@ -5984,6 +5992,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
