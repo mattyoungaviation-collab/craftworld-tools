@@ -1961,10 +1961,10 @@ def resource_view(token: str):
           {% endif %}
         </div>
         <div>
-          <a href="{{ url_for('dashboard') }}" class="pill">⬅ Back to Dashboard</a>
+          <a href="{{ url_for('dashboard') }}" class="pill">⬅ Back to Dashboard</a><br>
+          <a href="{{ url_for('trees') }}" class="pill" style="margin-top:6px;">🌳 View Trees</a>
         </div>
       </div>
-    </div>
 
     {% if error %}
       <div class="card">
@@ -7860,7 +7860,11 @@ def trees():
               {% for r in tree.rows %}
                 <tr>
                   <td>T{{ r.tier }}</td>
-                  <td>{{ r.label }}{% if r.token != r.label %} ({{ r.token }}){% endif %}</td>
+                <td>
+                  <a href="{{ url_for('resource_view', token=r.token) }}">
+                    {{ r.label }}{% if r.token != r.label %} ({{ r.token }}){% endif %}
+                  </a>
+                </td>
                   <td>{{ "%.6f"|format(r.price_coin or 0.0) }}</td>
                   <td>{{ "%.4f"|format(r.price_usd or 0.0) }}</td>
                   <td>
@@ -7911,6 +7915,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
