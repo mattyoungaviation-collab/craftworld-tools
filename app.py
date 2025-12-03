@@ -1938,17 +1938,26 @@ def flex_planner():
     saved_speed_factor = float(session.get("flex_speed_factor", 1.0))
     saved_workers = int(session.get("flex_workers", 0))
     saved_budget_coin = float(session.get("flex_upgrade_budget_coin", 0.0))
+    saved_sim_token = session.get("flex_sim_token", "")
+    saved_sim_amount = float(session.get("flex_sim_amount", 0.0))
 
     yield_pct = saved_yield_pct
     speed_factor = saved_speed_factor
     workers = saved_workers
     upgrade_budget_coin = saved_budget_coin
 
+    sim_token = saved_sim_token
+    sim_amount = saved_sim_amount
+
+
     if request.method == "POST":
         y_str = request.form.get("yield_pct", str(yield_pct)).strip() or str(yield_pct)
         s_str = request.form.get("speed_factor", str(speed_factor)).strip() or str(speed_factor)
         w_str = request.form.get("workers", str(workers)).strip() or str(workers)
         b_str = request.form.get("upgrade_budget_coin", str(upgrade_budget_coin)).strip() or str(upgrade_budget_coin)
+        sim_tok_str = (request.form.get("sim_token", sim_token) or "").strip().upper()
+        sim_amt_str = (request.form.get("sim_amount", str(sim_amount)).strip() or "0")
+
 
         try:
             yield_pct = float(y_str)
@@ -1970,10 +1979,20 @@ def flex_planner():
         except ValueError:
             upgrade_budget_coin = saved_budget_coin
 
+        try:
+            sim_amount = max(0.0, float(sim_amt_str))
+        except ValueError:
+            sim_amount = saved_sim_amount
+
+        sim_token = sim_tok_str if sim_tok_str else ""
+
         session["flex_yield_pct"] = yield_pct
         session["flex_speed_factor"] = speed_factor
         session["flex_workers"] = workers
         session["flex_upgrade_budget_coin"] = upgrade_budget_coin
+        session["flex_sim_token"] = sim_token
+        session["flex_sim_amount"] = sim_amount
+
 
     # 1) Load CraftWorld account data for inventory
     inventory: Dict[str, float] = {}
@@ -1988,6 +2007,12 @@ def flex_planner():
                 inventory[symbol] = inventory.get(symbol, 0.0) + amount
     except Exception as e:
         error = f"Error fetching inventory: {e}"
+
+    # Inventory used for affordability logic (includes simulation)
+    logic_inventory: Dict[str, float] = dict(inventory)
+    if sim_token and sim_amount > 0:
+        logic_inventory[sim_token] = logic_inventory.get(sim_token, 0.0) + sim_amount
+
 
     # Helper: full upgrade chain requirements for token + level, for `count` factories.
     def calc_upgrade_chain(token_u: str, level: int, count: int = 1) -> Dict[str, float]:
@@ -2014,6 +2039,16 @@ def flex_planner():
     total_coin_hour: float = 0.0
     total_usd_hour: float = 0.0
     total_shortfall_coin_layout: float = 0.0
+
+    # Tokens that can appear as upgrade resources (for simulation dropdown)
+    sim_tokens_set = set()
+    for _fac_name, _levels in FACTORIES_FROM_CSV.items():
+        for _lvl, _data in _levels.items():
+            up_tok = _data.get("upgrade_token")
+            if up_tok:
+                sim_tokens_set.add(str(up_tok).upper())
+    sim_tokens = sorted(sim_tokens_set)
+
 
     try:
         prices = fetch_live_prices_in_coin()
@@ -2044,7 +2079,7 @@ def flex_planner():
             indiv_shortfall_coin = 0.0
             impossible = False
             for res_tok, needed in chain_1.items():
-                have = inventory.get(res_tok, 0.0)
+                have = logic_inventory.get(res_tok, 0.0)
                 short = max(0.0, needed - have)
                 if short <= 0:
                     continue
@@ -2079,7 +2114,7 @@ def flex_planner():
         # 4) Build the flex layout bands with counts [3, 2, 2, 1]
         #    We simulate spending inventory + COIN budget as we pick each band.
         counts_pattern = [3, 2, 2, 1]
-        inv_left = dict(inventory)
+        inv_left = dict(logic_inventory)
         budget_left = upgrade_budget_coin
 
         for band_idx, slots in enumerate(counts_pattern, start=1):
@@ -2148,7 +2183,7 @@ def flex_planner():
             band_rows = []
             band_shortfall_coin = 0.0
             for res_tok, needed in sorted(b["upgrade_requirements"].items()):
-                have = inventory.get(res_tok, 0.0)
+                have = logic_inventory.get(res_tok, 0.0)
                 short = max(0.0, needed - have)
                 price_res = float(prices.get(res_tok, 0.0))
                 coin_cost = short * price_res if price_res > 0 else 0.0
@@ -2176,7 +2211,7 @@ def flex_planner():
         summary_rows = []
         total_shortfall_coin_layout = 0.0
         for res_tok, needed in sorted(agg_req.items()):
-            have = inventory.get(res_tok, 0.0)
+            have = logic_inventory.get(res_tok, 0.0)
             short = max(0.0, needed - have)
             price_res = float(prices.get(res_tok, 0.0))
             coin_cost = short * price_res if price_res > 0 else 0.0
@@ -2247,9 +2282,24 @@ def flex_planner():
             <label for="upgrade_budget_coin">Upgrade budget (COIN)</label>
             <input id="upgrade_budget_coin" name="upgrade_budget_coin"
                    type="number" step="0.000001" min="0"
-                   value="{{ upgrade_budget_coin }}" style="width:100%;">
-            <div class="hint">Amount of COIN you're willing to spend buying upgrade resources.</div>
+          <div style="flex:1;min-width:180px;">
+            <label for="sim_token">Simulate buying resource</label>
+            <select id="sim_token" name="sim_token" style="width:100%;">
+              <option value="">(none)</option>
+              {% for tok in sim_tokens %}
+                <option value="{{ tok }}" {% if tok == sim_token %}selected{% endif %}>{{ tok }}</option>
+              {% endfor %}
+            </select>
+            <div class="hint">Adds this resource on top of your inventory for planning only.</div>
           </div>
+
+          <div style="flex:1;min-width:160px;">
+            <label for="sim_amount">Simulated extra amount</label>
+            <input id="sim_amount" name="sim_amount" type="number" step="0.000001"
+                   value="{{ sim_amount }}" style="width:100%;">
+            <div class="hint">E.g. 10000 STEEL to see what unlocks.</div>
+          </div>
+
         </div>
 
         <button type="submit" style="margin-top:10px;">Recalculate Flex Layout</button>
@@ -2483,6 +2533,9 @@ def flex_planner():
             summary_rows=summary_rows,
             total_shortfall_coin_layout=total_shortfall_coin_layout,
             priority_rows=priority_rows,
+            sim_tokens=sim_tokens,
+            sim_token=sim_token,
+            sim_amount=sim_amount,
 
         ),
         active_page="flex",
@@ -6718,6 +6771,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
