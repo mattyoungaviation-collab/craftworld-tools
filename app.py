@@ -967,6 +967,13 @@ BASE_TEMPLATE = """
     <div class="nav-title">CraftWorld Tools</div>
     <div class="nav-links">
       <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
+      {% if has_uid %}
+  <a href="{{ url_for('dashboard') }}" class="{{ 'active' if active_page=='dashboard' else '' }}">Dashboard</a>
+{% else %}
+  <span class="nav-disabled">Dashboard</span>
+{% endif %}
+
+
 
       {% if has_uid %}
         <a href="{{ url_for('profitability') }}" class="{{ 'active' if active_page=='profit' else '' }}">Profitability</a>
@@ -1320,6 +1327,93 @@ def attr_or_key(obj, name, default=None):
     if isinstance(obj, dict):
         return obj.get(name, default)
     return getattr(obj, name, default)
+
+# -------- Dashboard (CraftWorld.tips mode) --------
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    error = None
+    prices = {}
+    coin_usd = 0.0
+    uid = session.get("voya_uid")
+
+    # Fetch prices (same logic as profitability tab)
+    try:
+        prices = fetch_live_prices_in_coin()
+        coin_usd = float(prices.get("_COIN_USD", 0.0))
+    except Exception as e:
+        error = f"Error fetching live prices: {e}"
+        prices = {}
+
+    # Sort token list alphabetically (tips-like behavior)
+    price_rows = []
+    for token, val in sorted(prices.items()):
+        if token.startswith("_"):
+            continue  # skip metadata like _COIN_USD
+        price_rows.append({
+            "token": token,
+            "price": float(val),
+            "usd": float(val) * coin_usd if coin_usd else 0.0,
+        })
+
+    content = """
+    <div class="card">
+      <h1>📊 CraftWorld Dashboard</h1>
+      <p class="subtle">
+        Live resource prices, COIN value, and your account overview.<br>
+        This is the foundation for building a full Craftworld.tips–style data hub.
+      </p>
+
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <div><strong>COIN → USD:</strong> {{ '%.6f'|format(coin_usd) }}</div>
+        <div><a href="{{ url_for('dashboard') }}" class="pill">🔄 Refresh</a></div>
+        {% if uid %}
+          <div><strong>UID Loaded:</strong> {{ uid }}</div>
+        {% else %}
+          <div class="subtle">No UID set (set it on Overview)</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if error %}
+      <div class="card error">{{ error }}</div>
+    {% endif %}
+
+    <div class="card">
+      <h2>📈 Live Resource Prices</h2>
+      <p class="subtle">Values shown in COIN and USD (updates every refresh)</p>
+
+      <table>
+        <tr>
+          <th>Resource</th>
+          <th>Price (COIN)</th>
+          <th>Price (USD)</th>
+        </tr>
+
+        {% for row in price_rows %}
+          <tr>
+            <td>{{ row.token }}</td>
+            <td>{{ '%.8f'|format(row.price) }}</td>
+            <td>{{ '%.6f'|format(row.usd) }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
+    """
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=render_template_string(
+            content,
+            uid=uid,
+            price_rows=price_rows,
+            coin_usd=coin_usd,
+            error=error,
+        ),
+        active_page="dashboard",
+        has_uid=has_uid_flag(),
+    )
+    return html
 
 
 # -------- Profitability tab (manual mastery + workshop) --------
@@ -6957,6 +7051,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
