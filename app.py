@@ -2191,6 +2191,14 @@ def flex_planner():
                 }
             )
 
+        # NEW: upgrade priority list – which resources are your biggest bottlenecks.
+        priority_rows = sorted(
+            [row for row in summary_rows if row["shortfall"] > 0],
+            key=lambda r: r["shortfall_coin"],
+            reverse=True,
+        )
+
+    
     except Exception as e:
         error = f"{error or ''}\nFlex Planner calculation failed: {e}"
 
@@ -2366,6 +2374,41 @@ def flex_planner():
         {% endif %}
       </div>
 
+      <!-- NEW: Upgrade priority – answers "what to upgrade / buy first" -->
+      <div class="card" style="margin-top:10px;">
+        <h2>What to upgrade / buy first</h2>
+        {% if priority_rows %}
+          <p class="subtle">
+            These resources are currently limiting this flex layout the most.
+            Buying / farming them first unlocks the full 3–2–2–1 setup.
+          </p>
+          <table>
+            <tr>
+              <th>Resource</th>
+              <th>Shortfall</th>
+              <th>Shortfall value (COIN)</th>
+            </tr>
+            {% for r in priority_rows[:10] %}
+              <tr>
+                <td>{{ r.token }}</td>
+                <td>{{ "%.6f"|format(r.shortfall) }}</td>
+                <td>{{ "%.6f"|format(r.shortfall_coin) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <p class="subtle">
+            You already have enough upgrade resources for this flex layout – nothing to buy 🎉
+          </p>
+        {% endif %}
+      </div>
+
+      <div class="card" style="margin-top:10px;">
+        <h2>Upgrade requirements for this flex layout</h2>
+        {% if summary_rows %}
+          <table>
+
+
       <div class="card" style="margin-top:10px;">
         <h2>Upgrade requirements for this flex layout</h2>
         {% if summary_rows %}
@@ -2448,6 +2491,11 @@ def flex_planner():
             coin_usd=coin_usd,
             summary_rows=summary_rows,
             total_shortfall_coin_layout=total_shortfall_coin_layout,
+            coin_usd=coin_usd,
+            summary_rows=summary_rows,
+            total_shortfall_coin_layout=total_shortfall_coin_layout,
+            priority_rows=priority_rows,
+
         ),
         active_page="flex",
         has_uid=has_uid_flag(),
@@ -6682,6 +6730,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
