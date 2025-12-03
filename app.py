@@ -1488,10 +1488,13 @@ def profitability():
     total_usd_hour = 0.0
     total_usd_day = 0.0
     coin_usd = 0.0
+    debug_earth_sell = 0.0
+    debug_earth_buy = 0.0
 
     try:
         # 1) Flat SELL-focused prices + COIN → USD
         prices_flat = fetch_live_prices_in_coin()
+
         coin_usd = float(prices_flat.get("_COIN_USD", 0.0))
 
         # 2) Full BUY / SELL matrix from Craft World
@@ -1522,9 +1525,14 @@ def profitability():
         prices_sell.setdefault("COIN", 1.0)
         prices_buy.setdefault("COIN", 1.0)
 
+        # Debug: capture one token's BUY vs SELL for display (EARTH)
+        debug_earth_sell = float(prices_sell.get("EARTH", 0.0))
+        debug_earth_buy = float(prices_buy.get("EARTH", 0.0))
+
         # Which map should input costs use?
         if input_price_mode == "buy":
             input_prices = prices_buy
+
         else:
             # SELL mode: value inputs the same way as outputs
             input_prices = None  # let factories fall back to SELL map
@@ -1712,7 +1720,12 @@ def profitability():
               </option>
             </select>
             <div class="hint">Outputs are always valued at SELL price.</div>
+            <div class="hint">
+              Debug EARTH: SELL {{ '%.8f'|format(debug_earth_sell) }},
+              BUY {{ '%.8f'|format(debug_earth_buy) }}
+            </div>
           </div>
+
 
 
           <div style="min-width:260px;">
@@ -1837,11 +1850,14 @@ def profitability():
             coin_usd=coin_usd,
             sort_mode=sort_mode,
             input_price_mode=input_price_mode,
+            debug_earth_sell=debug_earth_sell,
+            debug_earth_buy=debug_earth_buy,
         ),
         active_page="profit",
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -6070,6 +6086,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
