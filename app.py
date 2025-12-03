@@ -1614,7 +1614,7 @@ def profitability():
 
           <div style="min-width:180px;">
             <label for="sort_mode">Sort</label>
-            <select name="sort_mode" id="sort_mode">
+            <select name="sort_mode" id="sort_mode" onchange="this.form.submit()">
               <option value="standard" {% if sort_mode == 'standard' %}selected{% endif %}>
                 Standard (token order)
               </option>
@@ -5940,6 +5940,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
