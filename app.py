@@ -1501,9 +1501,10 @@ def profitability():
         coin_usd = float(prices_flat.get("_COIN_USD", 0.0))
 
         # 2) BUY / SELL matrix for relevant symbols using exactInputQuote
-        #    Build a symbol list from your CSV factories (all tokens you care about).
-        relevant_symbols = list(FACTORIES_FROM_CSV.keys())
+        #    Only refine prices for factories the player actually has rows for.
+        relevant_symbols = sorted({m["token"].upper() for m in rows_meta})
         per_symbol = fetch_buy_sell_for_profitability(relevant_symbols)
+
 
         prices_sell: Dict[str, float] = {}
         prices_buy: Dict[str, float] = {}
@@ -6092,6 +6093,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
