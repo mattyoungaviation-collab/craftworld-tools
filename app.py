@@ -2491,9 +2491,6 @@ def flex_planner():
             coin_usd=coin_usd,
             summary_rows=summary_rows,
             total_shortfall_coin_layout=total_shortfall_coin_layout,
-            coin_usd=coin_usd,
-            summary_rows=summary_rows,
-            total_shortfall_coin_layout=total_shortfall_coin_layout,
             priority_rows=priority_rows,
 
         ),
@@ -6730,6 +6727,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
