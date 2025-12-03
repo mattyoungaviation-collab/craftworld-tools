@@ -2039,6 +2039,8 @@ def flex_planner():
     total_coin_hour: float = 0.0
     total_usd_hour: float = 0.0
     total_shortfall_coin_layout: float = 0.0
+    flex_share_text: str = ""
+
 
     # Tokens that can appear as upgrade resources (for simulation dropdown)
     sim_tokens_set = set()
@@ -2232,6 +2234,61 @@ def flex_planner():
             key=lambda r: r["shortfall_coin"],
             reverse=True,
         )
+
+        # 7) Build shareable summary text for Discord / notes
+        lines: List[str] = []
+
+        lines.append("Flex Planner 3–2–2–1 layout")
+        lines.append(f"Upgrade budget: {upgrade_budget_coin:.6f} COIN")
+
+        if total_coin_hour:
+            if coin_usd:
+                lines.append(
+                    f"Layout profit: {total_coin_hour:.6f} COIN/hr "
+                    f"(~{total_usd_hour:.4f} USD/hr)"
+                )
+            else:
+                lines.append(f"Layout profit: {total_coin_hour:.6f} COIN/hr")
+
+        if total_shortfall_coin_layout > 0 and total_coin_hour:
+            roi = total_coin_hour / total_shortfall_coin_layout
+            payback = total_shortfall_coin_layout / total_coin_hour
+            lines.append(
+                f"Total upgrade shortfall: {total_shortfall_coin_layout:.6f} COIN"
+            )
+            lines.append(
+                f"ROI: {roi:.4f} COIN/hr per COIN; payback: {payback:.2f} hours"
+            )
+        elif total_shortfall_coin_layout <= 0:
+            lines.append(
+                "You already have enough upgrade resources for this layout "
+                "(no extra COIN needed)."
+            )
+
+        lines.append("")
+        lines.append("Rows:")
+        for b in bands:
+            row_profit = b["profit_coin_per_hour"] * b["count"]
+            lines.append(
+                f"Row {b['band_index']}: {b['count']}x {b['token']} L{b['level']} "
+                f"– profit {row_profit:.6f} COIN/hr, "
+                f"upgrade cost {b['upgrade_cost_coin']:.6f} COIN"
+            )
+
+        if summary_rows:
+            lines.append("")
+            lines.append("Upgrade resources needed (total):")
+            for r in summary_rows:
+                if r["shortfall"] > 0:
+                    lines.append(
+                        f"{r['token']}: need {r['needed']:.6f}, "
+                        f"have {r['have']:.6f}, "
+                        f"short {r['shortfall']:.6f} "
+                        f"(cost {r['shortfall_coin']:.6f} COIN)"
+                    )
+
+        flex_share_text = "\n".join(lines)
+
 
     
     except Exception as e:
@@ -2500,6 +2557,18 @@ def flex_planner():
           <p class="subtle">No upgrade requirements (empty layout).</p>
         {% endif %}
       </div>
+      <div class="card" style="margin-top:10px;">
+        <h2>Share / export summary</h2>
+        <p class="subtle">
+          Copy this text into Discord, notes, or wherever you want to share your flex setup.
+        </p>
+        <textarea
+          readonly
+          rows="10"
+          style="width:100%;font-family:monospace;font-size:12px;"
+        >{{ flex_share_text }}</textarea>
+      </div>
+
 
       <div class="card" style="margin-top:10px;">
         <h2>Other affordable candidates (per-factory)</h2>
@@ -2558,6 +2627,8 @@ def flex_planner():
             sim_tokens=sim_tokens,
             sim_token=sim_token,
             sim_amount=sim_amount,
+            flex_share_text=flex_share_text,
+
 
         ),
         active_page="flex",
@@ -6793,6 +6864,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
