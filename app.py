@@ -987,6 +987,8 @@ BASE_TEMPLATE = """
       <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
       <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
       <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
+      <a href="{{ url_for('trees') }}" class="{{ 'active' if active_page=='trees' else '' }}">Trees</a>
+
 
       {% if session.get('username') %}
         <span class="nav-user">👤 {{ session['username'] }}</span>
@@ -7682,9 +7684,234 @@ def calculate():
     )
     return html
 
+# -------- Trees tab (Earth / Water / Fire / Special) --------
+
+@app.route("/trees", methods=["GET"])
+def trees():
+    """
+    Tree-style overview similar to Craftworld.tips:
+    - Earth / Water / Fire / Special
+    - Each row uses a single level 1 factory
+      with 100% yield, 1x speed, 0 workers.
+    """
+    error = None
+    trees_data = []
+    prices = {}
+    coin_usd = 0.0
+
+    try:
+        prices = fetch_live_prices_in_coin()
+        coin_usd = float(prices.get("_COIN_USD", 0.0))
+    except Exception as e:
+        error = f"Error fetching prices: {e}"
+
+    # You can tweak this mapping any time – tiers, order, tokens, labels.
+    TREE_LAYOUT = {
+        "Earth": [
+            {"tier": 1, "token": "EARTH",      "label": "Earth Mine"},
+            {"tier": 2, "token": "MUD",        "label": "Mud"},
+            {"tier": 3, "token": "CLAY",       "label": "Clay"},
+            {"tier": 4, "token": "SAND",       "label": "Sand"},
+            {"tier": 5, "token": "COPPER",     "label": "Copper"},
+            {"tier": 6, "token": "STEEL",      "label": "Steel"},
+            {"tier": 7, "token": "SCREWS",     "label": "Screws"},
+        ],
+        "Water": [
+            {"tier": 1, "token": "WATER",      "label": "Water Mine"},
+            {"tier": 2, "token": "SEAWATER",   "label": "Seawater"},
+            {"tier": 3, "token": "ALGAE",      "label": "Algae"},
+            {"tier": 4, "token": "OXYGEN",     "label": "Oxygen"},
+            {"tier": 5, "token": "GAS",        "label": "Gas"},
+        ],
+        "Fire": [
+            {"tier": 1, "token": "FIRE",       "label": "Fire Mine"},
+            {"tier": 2, "token": "HEAT",       "label": "Heat"},
+            {"tier": 3, "token": "LAVA",       "label": "Lava"},
+            {"tier": 4, "token": "FUEL",       "label": "Fuel"},
+            {"tier": 5, "token": "OIL",        "label": "Oil"},
+            {"tier": 6, "token": "SULFUR",     "label": "Sulfur"},
+            {"tier": 7, "token": "ACID",       "label": "Acid"},
+        ],
+        "Special": [
+            {"tier": 1, "token": "PLASTICS",   "label": "Plastics"},
+            {"tier": 2, "token": "FIBERGLASS", "label": "Fiberglass"},
+            {"tier": 3, "token": "ENERGY",     "label": "Energy"},
+            {"tier": 4, "token": "HYDROGEN",   "label": "Hydrogen"},
+            {"tier": 5, "token": "DYNAMITE",   "label": "Dynamite"},
+        ],
+    }
+
+    # Build data for each tree
+    for tree_name, tiers in TREE_LAYOUT.items():
+        rows = []
+        total_volume_hour = 0.0
+        total_profit_hour = 0.0
+        best = None
+        worst = None
+
+        for node in tiers:
+            token = node["token"]
+            tier = node["tier"]
+            label = node["label"]
+
+            price_coin = float(prices.get(token, 0.0)) if prices else 0.0
+            price_usd = price_coin * coin_usd if coin_usd else 0.0
+
+            duration_min = None
+            volume_hour = None
+            profit_hour = None
+
+            try:
+                # Only calculate if this token exists as a factory in the CSV at L1
+                if FACTORIES_FROM_CSV.get(token) and 1 in FACTORIES_FROM_CSV[token]:
+                    res = compute_factory_result_csv(
+                        FACTORIES_FROM_CSV,
+                        prices or {},
+                        token,
+                        level=1,
+                        target_level=None,
+                        count=1,
+                        yield_pct=100.0,
+                        speed_factor=1.0,
+                        workers=0,
+                    )
+                    duration_min = float(res.get("duration_min", 0.0))
+                    crafts_per_hour = float(res.get("crafts_per_hour", 0.0))
+                    out_amount = float(res.get("out_amount", 0.0))
+                    volume_hour = crafts_per_hour * out_amount
+                    profit_hour = float(res.get("profit_coin_per_hour", 0.0))
+            except Exception as ex:
+                # Don't explode the whole page if one token is weird
+                if not error:
+                    error = f"Some tree rows could not be calculated: {ex}"
+
+            if profit_hour is not None:
+                total_profit_hour += profit_hour
+                if best is None or profit_hour > best["profit_hour"]:
+                    best = {"token": token, "profit_hour": profit_hour}
+                if worst is None or profit_hour < worst["profit_hour"]:
+                    worst = {"token": token, "profit_hour": profit_hour}
+
+            if volume_hour is not None:
+                total_volume_hour += volume_hour
+
+            rows.append(
+                {
+                    "tier": tier,
+                    "label": label,
+                    "token": token,
+                    "price_coin": price_coin,
+                    "price_usd": price_usd,
+                    "duration_min": duration_min,
+                    "volume_hour": volume_hour,
+                    "profit_hour": profit_hour,
+                }
+            )
+
+        trees_data.append(
+            {
+                "name": tree_name,
+                "rows": rows,
+                "total_volume_hour": total_volume_hour,
+                "total_profit_hour": total_profit_hour,
+                "best": best,
+                "worst": worst,
+            }
+        )
+
+    content = """
+    <div class="card">
+      <h1>Production Trees</h1>
+      <p class="subtle">
+        Tree view similar to <strong>Craftworld.tips</strong>.<br>
+        Each row uses a single <strong>level 1 factory</strong>, 100% yield, 1x speed, 0 workers.
+      </p>
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+    </div>
+
+    <div class="two-col">
+      {% for tree in trees %}
+        <div class="card">
+          <h2>{{ tree.name }} Tree</h2>
+          <p class="subtle">
+            Total output/hr (L1, 1 each): {{ "%.4f"|format(tree.total_volume_hour or 0.0) }}<br>
+            Total profit/hr: {{ "%+.6f"|format(tree.total_profit_hour or 0.0) }} COIN
+            {% if tree.best %}
+              <br>Best: {{ tree.best.token }} ({{ "%+.6f"|format(tree.best.profit_hour) }} COIN/hr)
+            {% endif %}
+            {% if tree.worst %}
+              <br>Worst: {{ tree.worst.token }} ({{ "%+.6f"|format(tree.worst.profit_hour) }} COIN/hr)
+            {% endif %}
+          </p>
+
+          <div style="overflow-x:auto;">
+            <table>
+              <tr>
+                <th>Tier</th>
+                <th>Resource</th>
+                <th>Price (COIN)</th>
+                <th>Price (USD)</th>
+                <th>Duration (min)</th>
+                <th>Output/hr</th>
+                <th>Profit/hr (COIN)</th>
+              </tr>
+              {% for r in tree.rows %}
+                <tr>
+                  <td>T{{ r.tier }}</td>
+                  <td>{{ r.label }}{% if r.token != r.label %} ({{ r.token }}){% endif %}</td>
+                  <td>{{ "%.6f"|format(r.price_coin or 0.0) }}</td>
+                  <td>{{ "%.4f"|format(r.price_usd or 0.0) }}</td>
+                  <td>
+                    {% if r.duration_min is not none %}
+                      {{ "%.2f"|format(r.duration_min) }}
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if r.volume_hour is not none %}
+                      {{ "%.4f"|format(r.volume_hour) }}
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if r.profit_hour is not none %}
+                      <span class="{{ 'pill' if r.profit_hour >= 0 else 'pill-bad' }}">
+                        {{ "%+.6f"|format(r.profit_hour) }}
+                      </span>
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </table>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+    """
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=render_template_string(
+            content,
+            trees=trees_data,
+            error=error,
+        ),
+        active_page="trees",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
