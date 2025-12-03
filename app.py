@@ -1980,7 +1980,38 @@ def flex_planner():
     except Exception as e:
         error = f"Error fetching inventory: {e}"
 
-    # 2) Get prices and best setups (ignoring inventory), then filter by what your bag can actually feed.
+    # 2) Compute max affordable level per factory based on upgrade costs vs inventory
+    #    We walk levels in order and keep summing upgrade_amount per upgrade_token.
+    #    As soon as the cumulative requirement exceeds your bag for ANY token, we stop.
+    affordable_max_level: Dict[str, int] = {}
+    for token, levels in FACTORIES_FROM_CSV.items():
+        token_u = str(token).upper()
+        cumulative: Dict[str, float] = {}
+        max_lvl = 0
+        for lvl in sorted(levels.keys()):
+            data = levels[lvl]
+            up_tok = data.get("upgrade_token")
+            up_amt = data.get("upgrade_amount")
+
+            if up_tok and up_amt and up_amt > 0:
+                up_tok_u = str(up_tok).upper()
+                cumulative[up_tok_u] = cumulative.get(up_tok_u, 0.0) + float(up_amt)
+
+            # Check if all cumulative upgrade requirements can be paid from inventory
+            ok = True
+            for t, required in cumulative.items():
+                if inventory.get(t, 0.0) < required - 1e-9:
+                    ok = False
+                    break
+            if not ok:
+                break
+
+            max_lvl = lvl
+
+        if max_lvl > 0:
+            affordable_max_level[token_u] = max_lvl
+
+    # 3) Get prices and best setups, then filter by affordability AND inputs
     candidates: List[Dict[str, Any]] = []
     recommended: List[Dict[str, Any]] = []
     combined_speed = None
@@ -2002,20 +2033,29 @@ def flex_planner():
             top_n=300,   # plenty of headroom to filter down
         )
 
-        # Filter to factories where you own ALL input resources (at least some amount)
+        # First pass: must be upgrade-affordable AND you own all input tokens (some amount)
         for r in best_rows:
             token = str(r["token"]).upper()
             lvl = int(r["level"])
+
+            max_aff = affordable_max_level.get(token)
+            if not max_aff or lvl > max_aff:
+                # Can't afford to build this level of this factory
+                continue
+
             data = FACTORIES_FROM_CSV.get(token, {}).get(lvl)
             if not data:
                 continue
 
             inputs = data.get("inputs") or {}
-            if not inputs:
-                # Pure-output factories are always allowed.
-                can_run = True
-            else:
-                can_run = all(inventory.get(str(t).upper(), 0.0) > 0 for t in inputs.keys())
+
+            # Require you to own at least some of every input token
+            can_run = True
+            for t in inputs.keys():
+                t_u = str(t).upper()
+                if inventory.get(t_u, 0.0) <= 0:
+                    can_run = False
+                    break
 
             if not can_run:
                 continue
@@ -2033,17 +2073,25 @@ def flex_planner():
         candidates.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
 
         if not candidates:
-            # Fallback: if nothing passes the inventory filter, just show the global best 8.
-            candidates = [
-                {
-                    "token": str(r["token"]).upper(),
-                    "level": int(r["level"]),
+            # Fallback: still obey upgrade affordability, but ignore input-ownership filter.
+            for r in best_rows:
+                token = str(r["token"]).upper()
+                lvl = int(r["level"])
+
+                max_aff = affordable_max_level.get(token)
+                if not max_aff or lvl > max_aff:
+                    continue
+
+                row = {
+                    "token": token,
+                    "level": lvl,
                     "profit_coin_per_hour": float(r["profit_coin_per_hour"]),
                     "profit_coin_per_craft": float(r["profit_coin_per_craft"]),
                     "inputs": {},
                 }
-                for r in best_rows[:50]
-            ]
+                candidates.append(row)
+                if len(candidates) >= 50:
+                    break
 
         recommended = candidates[:8]
 
@@ -2065,11 +2113,16 @@ def flex_planner():
       <p class="subtle">
         This tab tries to act like a mini AI for your <strong>Flex Plot</strong>:
         it looks at your <strong>current inventory</strong> and live prices, then
-        suggests the <strong>8 most profitable factories</strong> you can reasonably run.
+        suggests the <strong>8 most profitable factories</strong> you can reasonably build
+        and run with your current upgrade materials.
         <br><br>
-        <em>v1 is simple:</em> it assumes a single global yield/speed/workers setting
-        and filters out factories whose inputs you don't own at all. You still get
-        back all upgrade resources when swapping factories in-game.
+        <em>v1 logic:</em> it
+        <ul>
+          <li>Walks each factory's upgrade chain and stops at the highest level your bag can afford.</li>
+          <li>Filters out any factory level above that cap.</li>
+          <li>Also (in the main list) requires you to own at least some of each input token.</li>
+        </ul>
+        You still receive back all upgrade resources when swapping factory types in-game.
       </p>
 
       <form method="post" style="margin-bottom:12px;">
@@ -2161,7 +2214,7 @@ def flex_planner():
       </div>
 
       <div class="card" style="margin-top:10px;">
-        <h2>Other strong candidates (inventory-compatible)</h2>
+        <h2>Other strong candidates (upgrade-affordable)</h2>
         {% if candidates %}
           <table>
             <tr>
@@ -2185,7 +2238,7 @@ def flex_planner():
             {% endfor %}
           </table>
         {% else %}
-          <p class="subtle">Nothing else passed the inventory filter.</p>
+          <p class="subtle">Nothing else passed the affordability filter.</p>
         {% endif %}
       </div>
     </div>
@@ -2211,6 +2264,7 @@ def flex_planner():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 # -------- Boosts tab (per-token mastery / workshop levels) --------
@@ -6438,6 +6492,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
