@@ -306,7 +306,9 @@ def compute_factory_result_csv(
     yield_pct: float,
     speed_factor: float,
     workers: int,
+    input_prices_coin: Optional[Dict[str, float]] = None,
 ):
+
     if token not in factories:
         raise RuntimeError(f"No CSV data for factory token {token}.")
     if level not in factories[token]:
@@ -351,13 +353,25 @@ def compute_factory_result_csv(
     effective_duration = duration_min / combined_speed if combined_speed > 0 else duration_min
     crafts_per_hour = 60.0 / effective_duration if effective_duration > 0 else 0.0
 
-    def p(tok: str) -> float:
+    # Pricing helpers
+    def p_out(tok: str) -> float:
+        """Price used for outputs (always SELL map)."""
+        return float(prices_coin.get(tok, 0.0))
+
+    def p_in(tok: str) -> float:
+        """
+        Price used for inputs / upgrade costs.
+        If a separate input_prices_coin dict is provided, use that first;
+        otherwise fall back to the main prices_coin.
+        """
+        if input_prices_coin is not None:
+            return float(input_prices_coin.get(tok, prices_coin.get(tok, 0.0)))
         return float(prices_coin.get(tok, 0.0))
 
     # Costs & values
-    inputs_value_coin = {t: q * p(t) for t, q in inputs_adj.items()}
+    inputs_value_coin = {t: q * p_in(t) for t, q in inputs_adj.items()}
     cost_coin_per_craft = sum(inputs_value_coin.values())
-    value_coin_per_craft = out_amount * p(out_token)
+    value_coin_per_craft = out_amount * p_out(out_token)
 
     profit_coin_per_craft = value_coin_per_craft - cost_coin_per_craft
     profit_coin_per_hour = profit_coin_per_craft * crafts_per_hour * count
@@ -365,7 +379,7 @@ def compute_factory_result_csv(
     # Upgrade cost (single step)
     upgrade_single = None
     if up_token and up_amount and up_amount > 0:
-        up_coin_one = up_amount * p(up_token)
+        up_coin_one = up_amount * p_in(up_token)
         up_coin_total = up_coin_one * count
         upgrade_single = {
             "token": up_token,
@@ -378,12 +392,17 @@ def compute_factory_result_csv(
     upgrade_chain = []
     if multi_upgrade_tokens and target_level and target_level > level:
         for tok, amt in multi_upgrade_tokens.items():
-            coin_per_factory = amt * p(tok)
+            coin_per_factory = amt * p_in(tok)
             coin_all = coin_per_factory * count
             upgrade_chain.append(
                 {
                     "token": tok,
                     "amount_per_factory": amt,
+                    "coin_per_factory": coin_per_factory,
+                    "coin_total": coin_all,
+                }
+            )
+
                     "coin_per_factory": coin_per_factory,
                     "coin_total": coin_all,
                 }
@@ -457,3 +476,4 @@ def compute_best_setups_csv(
 
     results.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
     return results[:top_n], combined_speed, worker_factor
+
