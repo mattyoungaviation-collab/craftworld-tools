@@ -924,15 +924,21 @@ BASE_TEMPLATE = """
     <div class="nav-title">CraftWorld Tools</div>
     <div class="nav-links">
       <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
+
       {% if has_uid %}
         <a href="{{ url_for('profitability') }}" class="{{ 'active' if active_page=='profit' else '' }}">Profitability</a>
+        <a href="{{ url_for('flex_planner') }}" class="{{ 'active' if active_page=='flex' else '' }}">Flex Planner</a>
       {% else %}
         <span class="nav-disabled">Profitability</span>
+        <span class="nav-disabled">Flex Planner</span>
       {% endif %}
+
       <a href="{{ url_for('boosts') }}" class="{{ 'active' if active_page=='boosts' else '' }}">Boosts</a>
       <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
       <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
+      <a href="{{ url_for('flex_planner') }}" class="{{ 'active' if active_page=='flex' else '' }}">Flex Planner</a>
       <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
+
       {% if session.get('username') %}
         <span class="nav-user">👤 {{ session['username'] }}</span>
         <a href="{{ url_for('logout') }}">Logout</a>
@@ -1901,6 +1907,310 @@ def profitability():
     return html
 
 
+# -------- Flex Planner tab (smart flex-plot suggestions) --------
+
+@app.route("/flex", methods=["GET", "POST"])
+def flex_planner():
+    # Require UID so we can pull your inventory.
+    if not has_uid_flag():
+        content = """
+        <div class="card">
+          <h1>Flex Planner (Locked)</h1>
+          <p class="subtle">
+            Enter your Voya UID on the <strong>Overview</strong> tab to unlock
+            automatic inventory loading for the Flex Planner.
+          </p>
+        </div>
+        """
+        html = render_template_string(
+            BASE_TEMPLATE,
+            content=content,
+            active_page="flex",
+            has_uid=has_uid_flag(),
+        )
+        return html
+
+    error = None
+    uid = session.get("voya_uid")
+
+    # Defaults / saved state
+    saved_yield_pct = float(session.get("flex_yield_pct", 100.0))
+    saved_speed_factor = float(session.get("flex_speed_factor", 1.0))
+    saved_workers = int(session.get("flex_workers", 0))
+
+    yield_pct = saved_yield_pct
+    speed_factor = saved_speed_factor
+    workers = saved_workers
+
+    if request.method == "POST":
+        y_str = request.form.get("yield_pct", str(yield_pct)).strip() or str(yield_pct)
+        s_str = request.form.get("speed_factor", str(speed_factor)).strip() or str(speed_factor)
+        w_str = request.form.get("workers", str(workers)).strip() or str(workers)
+
+        try:
+            yield_pct = float(y_str)
+        except ValueError:
+            yield_pct = saved_yield_pct
+
+        try:
+            speed_factor = float(s_str)
+        except ValueError:
+            speed_factor = saved_speed_factor
+
+        try:
+            workers = max(0, min(int(w_str), 4))
+        except ValueError:
+            workers = saved_workers
+
+        session["flex_yield_pct"] = yield_pct
+        session["flex_speed_factor"] = speed_factor
+        session["flex_workers"] = workers
+
+    # 1) Load CraftWorld account data for inventory
+    inventory: Dict[str, float] = {}
+    try:
+        cw = fetch_craftworld(uid)
+        resources = attr_or_key(cw, "resources", []) or []
+        for r in resources:
+            symbol = attr_or_key(r, "symbol", None)
+            amount = float(attr_or_key(r, "amount", 0) or 0)
+            if symbol:
+                symbol = str(symbol).upper()
+                inventory[symbol] = inventory.get(symbol, 0.0) + amount
+    except Exception as e:
+        error = f"Error fetching inventory: {e}"
+
+    # 2) Get prices and best setups (ignoring inventory), then filter by what your bag can actually feed.
+    candidates: List[Dict[str, Any]] = []
+    recommended: List[Dict[str, Any]] = []
+    combined_speed = None
+    coin_usd = 0.0
+    total_coin_hour = 0.0
+    total_usd_hour = 0.0
+
+    try:
+        prices = fetch_live_prices_in_coin()
+        coin_usd = float(prices.get("_COIN_USD", 0.0))
+
+        # Get a big list of best setups (1 factory each)
+        best_rows, combined_speed, _worker_factor = compute_best_setups_csv(
+            FACTORIES_FROM_CSV,
+            prices,
+            speed_factor=speed_factor,
+            workers=workers,
+            yield_pct=yield_pct,
+            top_n=300,   # plenty of headroom to filter down
+        )
+
+        # Filter to factories where you own ALL input resources (at least some amount)
+        for r in best_rows:
+            token = str(r["token"]).upper()
+            lvl = int(r["level"])
+            data = FACTORIES_FROM_CSV.get(token, {}).get(lvl)
+            if not data:
+                continue
+
+            inputs = data.get("inputs") or {}
+            if not inputs:
+                # Pure-output factories are always allowed.
+                can_run = True
+            else:
+                can_run = all(inventory.get(str(t).upper(), 0.0) > 0 for t in inputs.keys())
+
+            if not can_run:
+                continue
+
+            row = {
+                "token": token,
+                "level": lvl,
+                "profit_coin_per_hour": float(r["profit_coin_per_hour"]),
+                "profit_coin_per_craft": float(r["profit_coin_per_craft"]),
+                "inputs": {str(t).upper(): float(q) for t, q in inputs.items()},
+            }
+            candidates.append(row)
+
+        # Sort again just in case, then pick the top 8 for the flex plot.
+        candidates.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
+
+        if not candidates:
+            # Fallback: if nothing passes the inventory filter, just show the global best 8.
+            candidates = [
+                {
+                    "token": str(r["token"]).upper(),
+                    "level": int(r["level"]),
+                    "profit_coin_per_hour": float(r["profit_coin_per_hour"]),
+                    "profit_coin_per_craft": float(r["profit_coin_per_craft"]),
+                    "inputs": {},
+                }
+                for r in best_rows[:50]
+            ]
+
+        recommended = candidates[:8]
+
+        total_coin_hour = sum(r["profit_coin_per_hour"] for r in recommended)
+        total_usd_hour = total_coin_hour * coin_usd
+
+    except Exception as e:
+        error = f"{error or ''}\nFlex Planner calculation failed: {e}"
+
+    # Sort inventory for display
+    inventory_rows = sorted(
+        [{"token": t, "amount": amt} for t, amt in inventory.items()],
+        key=lambda row: row["token"],
+    )
+
+    content = """
+    <div class="card">
+      <h1>Flex Planner (8-slot smart layout)</h1>
+      <p class="subtle">
+        This tab tries to act like a mini AI for your <strong>Flex Plot</strong>:
+        it looks at your <strong>current inventory</strong> and live prices, then
+        suggests the <strong>8 most profitable factories</strong> you can reasonably run.
+        <br><br>
+        <em>v1 is simple:</em> it assumes a single global yield/speed/workers setting
+        and filters out factories whose inputs you don't own at all. You still get
+        back all upgrade resources when swapping factories in-game.
+      </p>
+
+      <form method="post" style="margin-bottom:12px;">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;">
+          <div style="flex:1;min-width:140px;">
+            <label for="yield_pct">Yield / Mastery (%)</label>
+            <input id="yield_pct" name="yield_pct" type="number" step="0.1"
+                   value="{{ yield_pct }}" style="width:100%;">
+          </div>
+
+          <div style="flex:1;min-width:140px;">
+            <label for="speed_factor">Speed (1x or 2x)</label>
+            <input id="speed_factor" name="speed_factor" type="number" step="0.5"
+                   value="{{ speed_factor }}" style="width:100%;">
+          </div>
+
+          <div style="flex:1;min-width:140px;">
+            <label for="workers">Workers (0–4 per factory)</label>
+            <input id="workers" name="workers" type="number" min="0" max="4"
+                   value="{{ workers }}" style="width:100%;">
+          </div>
+        </div>
+
+        <button type="submit" style="margin-top:10px;">Recalculate Flex Layout</button>
+      </form>
+
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+
+      <div class="two-col">
+        <div class="card">
+          <h2>Your inventory snapshot</h2>
+          {% if inventory_rows %}
+            <table>
+              <tr><th>Token</th><th>Amount</th></tr>
+              {% for r in inventory_rows %}
+                <tr>
+                  <td>{{ r.token }}</td>
+                  <td>{{ "%.3f"|format(r.amount) }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <p class="subtle">No resources detected – is your UID correct?</p>
+          {% endif %}
+        </div>
+
+        <div class="card">
+          <h2>Suggested Flex layout (8 slots)</h2>
+          <p class="subtle">
+            Total profit (8 factories): {{ "%+.6f"|format(total_coin_hour) }} COIN / hr
+            {% if coin_usd and total_coin_hour %}
+              (≈ {{ "%+.4f"|format(total_usd_hour) }} USD / hr)
+            {% endif %}
+            {% if combined_speed %}
+              <br>Effective speed: {{ "%.2f"|format(combined_speed) }}x
+            {% endif %}
+          </p>
+
+          {% if recommended %}
+            <table>
+              <tr>
+                <th>Slot</th>
+                <th>Factory</th>
+                <th>Level</th>
+                <th>Profit / hr (COIN)</th>
+                <th>Profit / craft (COIN)</th>
+              </tr>
+              {% for r in recommended %}
+                {% set good = r.profit_coin_per_hour >= 0 %}
+                <tr>
+                  <td>{{ loop.index }}</td>
+                  <td>{{ r.token }}</td>
+                  <td>L{{ r.level }}</td>
+                  <td>
+                    <span class="{{ 'pill' if good else 'pill-bad' }}">
+                      {{ "%+.6f"|format(r.profit_coin_per_hour) }}
+                    </span>
+                  </td>
+                  <td>{{ "%+.6f"|format(r.profit_coin_per_craft) }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <p class="subtle">No suitable factories found; try adjusting yield/speed.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:10px;">
+        <h2>Other strong candidates (inventory-compatible)</h2>
+        {% if candidates %}
+          <table>
+            <tr>
+              <th>Factory</th>
+              <th>Level</th>
+              <th>Profit / hr (COIN)</th>
+              <th>Profit / craft (COIN)</th>
+            </tr>
+            {% for r in candidates[:40] %}
+              {% set good = r.profit_coin_per_hour >= 0 %}
+              <tr>
+                <td>{{ r.token }}</td>
+                <td>L{{ r.level }}</td>
+                <td>
+                  <span class="{{ 'pill' if good else 'pill-bad' }}">
+                    {{ "%+.6f"|format(r.profit_coin_per_hour) }}
+                  </span>
+                </td>
+                <td>{{ "%+.6f"|format(r.profit_coin_per_craft) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <p class="subtle">Nothing else passed the inventory filter.</p>
+        {% endif %}
+      </div>
+    </div>
+    """
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=render_template_string(
+            content,
+            error=error,
+            inventory_rows=inventory_rows,
+            recommended=recommended,
+            candidates=candidates,
+            yield_pct=yield_pct,
+            speed_factor=speed_factor,
+            workers=workers,
+            total_coin_hour=total_coin_hour,
+            total_usd_hour=total_usd_hour,
+            combined_speed=combined_speed,
+            coin_usd=coin_usd,
+        ),
+        active_page="flex",
+        has_uid=has_uid_flag(),
+    )
+    return html
 
 
 # -------- Boosts tab (per-token mastery / workshop levels) --------
@@ -6128,6 +6438,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
