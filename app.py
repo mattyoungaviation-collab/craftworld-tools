@@ -1330,6 +1330,8 @@ def attr_or_key(obj, name, default=None):
 
 # -------- Dashboard (CraftWorld.tips mode) --------
 
+# -------- Dashboard (CraftWorld.tips mode) --------
+
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     error = None
@@ -1337,7 +1339,7 @@ def dashboard():
     coin_usd = 0.0
     uid = session.get("voya_uid")
 
-    # Fetch prices (same logic as profitability tab)
+    # --- 1) Live prices (COIN + USD) ---
     try:
         prices = fetch_live_prices_in_coin()
         coin_usd = float(prices.get("_COIN_USD", 0.0))
@@ -1345,23 +1347,108 @@ def dashboard():
         error = f"Error fetching live prices: {e}"
         prices = {}
 
-    # Sort token list alphabetically (tips-like behavior)
     price_rows = []
     for token, val in sorted(prices.items()):
         if token.startswith("_"):
             continue  # skip metadata like _COIN_USD
-        price_rows.append({
-            "token": token,
-            "price": float(val),
-            "usd": float(val) * coin_usd if coin_usd else 0.0,
-        })
+        v = float(val)
+        price_rows.append(
+            {
+                "token": token,
+                "price": v,
+                "usd": v * coin_usd if coin_usd else 0.0,
+            }
+        )
+
+    # --- 2) Account snapshot (inventory + factories) ---
+    inventory_rows = []
+    factory_rows = []
+
+    if uid:
+        try:
+            cw = fetch_craftworld(uid)
+
+            # 2a) Inventory / resources
+            resources = attr_or_key(cw, "resources", []) or []
+            for r in resources:
+                sym = attr_or_key(r, "symbol", None)
+                if not sym:
+                    continue
+                try:
+                    amt = float(attr_or_key(r, "amount", 0) or 0.0)
+                except Exception:
+                    amt = 0.0
+
+                price_coin = float(prices.get(sym, 0.0))
+                value_coin = amt * price_coin
+                value_usd = value_coin * coin_usd if coin_usd else 0.0
+
+                inventory_rows.append(
+                    {
+                        "token": str(sym),
+                        "amount": amt,
+                        "price_coin": price_coin,
+                        "value_coin": value_coin,
+                        "value_usd": value_usd,
+                    }
+                )
+
+            # Sort inventory by token name
+            inventory_rows.sort(key=lambda row: row["token"])
+
+            # 2b) Factories from landPlots
+            land_plots = attr_or_key(cw, "landPlots", []) or []
+            for plot in land_plots:
+                plot_name = attr_or_key(plot, "symbol", "") or str(
+                    attr_or_key(plot, "id", "")
+                )
+                areas = attr_or_key(plot, "areas", []) or []
+                for area in areas:
+                    area_symbol = attr_or_key(area, "symbol", "") or ""
+                    factories = attr_or_key(area, "factories", []) or []
+                    for facwrap in factories:
+                        fac = attr_or_key(facwrap, "factory", None)
+                        if not fac:
+                            continue
+
+                        definition = attr_or_key(fac, "definition", {}) or {}
+                        token = attr_or_key(definition, "id", None)
+                        if not token:
+                            continue
+
+                        try:
+                            api_level = int(attr_or_key(fac, "level", 0) or 0)
+                        except Exception:
+                            api_level = 0
+                        csv_level = api_level + 1  # API is 0-based
+
+                        factory_rows.append(
+                            {
+                                "plot": plot_name,
+                                "area": area_symbol,
+                                "token": str(token),
+                                "level": csv_level,
+                            }
+                        )
+
+            # Sort factories by token then level
+            factory_rows.sort(
+                key=lambda row: (row["token"], int(row["level"]))
+            )
+
+        except Exception as e:
+            # Append account-data error to any existing price error
+            if error:
+                error = f"{error}\nError fetching account data: {e}"
+            else:
+                error = f"Error fetching account data: {e}"
 
     content = """
     <div class="card">
       <h1>📊 CraftWorld Dashboard</h1>
       <p class="subtle">
-        Live resource prices, COIN value, and your account overview.<br>
-        This is the foundation for building a full Craftworld.tips–style data hub.
+        Live prices plus a quick snapshot of your account.<br>
+        This is the base for a full Craftworld.tips-style data hub.
       </p>
 
       <div style="display:flex; gap:12px; flex-wrap:wrap;">
@@ -1370,18 +1457,20 @@ def dashboard():
         {% if uid %}
           <div><strong>UID Loaded:</strong> {{ uid }}</div>
         {% else %}
-          <div class="subtle">No UID set (set it on Overview)</div>
+          <div class="subtle">No UID set (set it on the Overview tab)</div>
         {% endif %}
       </div>
     </div>
 
     {% if error %}
-      <div class="card error">{{ error }}</div>
+      <div class="card">
+        <div class="error" style="margin:0;">{{ error }}</div>
+      </div>
     {% endif %}
 
     <div class="card">
       <h2>📈 Live Resource Prices</h2>
-      <p class="subtle">Values shown in COIN and USD (updates every refresh)</p>
+      <p class="subtle">Values shown in COIN and USD (updates on refresh).</p>
 
       <table>
         <tr>
@@ -1399,6 +1488,66 @@ def dashboard():
         {% endfor %}
       </table>
     </div>
+
+    {% if uid %}
+      <div class="card">
+        <h2>📦 Inventory Snapshot</h2>
+        {% if inventory_rows %}
+          <table>
+            <tr>
+              <th>Token</th>
+              <th>Amount</th>
+              <th>Price (COIN)</th>
+              <th>Value (COIN)</th>
+              <th>Value (USD)</th>
+            </tr>
+            {% for r in inventory_rows %}
+              <tr>
+                <td>{{ r.token }}</td>
+                <td>{{ '%.6f'|format(r.amount) }}</td>
+                <td>{{ '%.8f'|format(r.price_coin) }}</td>
+                <td>{{ '%.6f'|format(r.value_coin) }}</td>
+                <td>{{ '%.6f'|format(r.value_usd) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <p class="subtle">No resources found from the API.</p>
+        {% endif %}
+      </div>
+
+      <div class="card">
+        <h2>🏭 Factory Snapshot</h2>
+        {% if factory_rows %}
+          <table>
+            <tr>
+              <th>Plot</th>
+              <th>Area</th>
+              <th>Factory</th>
+              <th>Level</th>
+            </tr>
+            {% for f in factory_rows %}
+              <tr>
+                <td>{{ f.plot }}</td>
+                <td>{{ f.area }}</td>
+                <td>{{ f.token }}</td>
+                <td>L{{ f.level }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <p class="subtle">No factories found for this account.</p>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="card">
+        <h2>Account Snapshot</h2>
+        <p class="subtle">
+          Enter your Voya UID on the <strong>Overview</strong> tab, then come back here
+          to see your inventory and factories alongside live prices.
+        </p>
+      </div>
+    {% endif %}
     """
 
     html = render_template_string(
@@ -1409,11 +1558,14 @@ def dashboard():
             price_rows=price_rows,
             coin_usd=coin_usd,
             error=error,
+            inventory_rows=inventory_rows,
+            factory_rows=factory_rows,
         ),
         active_page="dashboard",
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 # -------- Profitability tab (manual mastery + workshop) --------
@@ -7051,6 +7203,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
