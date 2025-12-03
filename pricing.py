@@ -182,7 +182,7 @@ def _fetch_exact_input_quote(
 
 def fetch_buy_sell_for_profitability(
     symbols: List[str],
-    sample_amount: float = 10_000.0,
+    sample_amount: float = 10,
 ) -> Dict[str, Dict[str, float]]:
     """
     For a list of resource symbols, build a BUY/SELL map using exactInputQuote:
@@ -288,5 +288,6 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
     prices_coin["_COIN_USD"] = float(coin_usd) if coin_usd else 0.0
 
     return prices_coin
+
 
 
