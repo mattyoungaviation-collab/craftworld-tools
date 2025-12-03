@@ -2142,6 +2142,30 @@ def flex_planner():
         )
         total_usd_hour = total_coin_hour * coin_usd
 
+        # NEW: per-row (band) breakdown against your ORIGINAL inventory.
+        # This annotates each band with `breakdown_rows` and `band_shortfall_coin`.
+        for b in bands:
+            band_rows = []
+            band_shortfall_coin = 0.0
+            for res_tok, needed in sorted(b["upgrade_requirements"].items()):
+                have = inventory.get(res_tok, 0.0)
+                short = max(0.0, needed - have)
+                price_res = float(prices.get(res_tok, 0.0))
+                coin_cost = short * price_res if price_res > 0 else 0.0
+                band_shortfall_coin += coin_cost
+                band_rows.append(
+                    {
+                        "token": res_tok,
+                        "needed": needed,
+                        "have": have,
+                        "shortfall": short,
+                        "shortfall_coin": coin_cost,
+                    }
+                )
+            b["breakdown_rows"] = band_rows
+            b["band_shortfall_coin"] = band_shortfall_coin
+
+
         # 6) Aggregate upgrade requirements for the whole layout (3+2+2+1),
         #    and compute shortfall vs ORIGINAL inventory + cost in COIN.
         agg_req: Dict[str, float] = {}
@@ -2300,8 +2324,53 @@ def flex_planner():
         </div>
       </div>
 
+      <!-- NEW: per-row upgrade breakdown card -->
+      <div class="card" style="margin-top:10px;">
+        <h2>Per-row upgrade breakdown</h2>
+        {% if bands %}
+          {% for b in bands %}
+            <h3>
+              Row {{ b.band_index }} – {{ b.count }}× {{ b.token }} L{{ b.level }}
+            </h3>
+            {% if b.breakdown_rows %}
+              <table>
+                <tr>
+                  <th>Resource</th>
+                  <th>Needed</th>
+                  <th>You have</th>
+                  <th>Shortfall</th>
+                  <th>Shortfall value (COIN)</th>
+                </tr>
+                {% for r in b.breakdown_rows %}
+                  <tr>
+                    <td>{{ r.token }}</td>
+                    <td>{{ "%.6f"|format(r.needed) }}</td>
+                    <td>{{ "%.6f"|format(r.have) }}</td>
+                    <td>{{ "%.6f"|format(r.shortfall) }}</td>
+                    <td>{{ "%.6f"|format(r.shortfall_coin) }}</td>
+                  </tr>
+                {% endfor %}
+              </table>
+              <p class="subtle">
+                Shortfall for this row:
+                {{ "%.6f"|format(b.band_shortfall_coin) }} COIN
+              </p>
+            {% else %}
+              <p class="subtle">
+                No upgrade requirements for this row.
+              </p>
+            {% endif %}
+          {% endfor %}
+        {% else %}
+          <p class="subtle">No flex layout calculated yet.</p>
+        {% endif %}
+      </div>
+
       <div class="card" style="margin-top:10px;">
         <h2>Upgrade requirements for this flex layout</h2>
+        {% if summary_rows %}
+          <table>
+
         {% if summary_rows %}
           <table>
             <tr>
@@ -6613,6 +6682,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
