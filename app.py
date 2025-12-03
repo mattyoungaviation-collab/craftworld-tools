@@ -1330,8 +1330,6 @@ def attr_or_key(obj, name, default=None):
 
 # -------- Dashboard (CraftWorld.tips mode) --------
 
-# -------- Dashboard (CraftWorld.tips mode) --------
-
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     error = None
@@ -1420,7 +1418,7 @@ def dashboard():
                             api_level = int(attr_or_key(fac, "level", 0) or 0)
                         except Exception:
                             api_level = 0
-                        csv_level = api_level + 1  # API is 0-based
+                        csv_level = api_level + 1  # API is 0-based → CSV 1-based
 
                         factory_rows.append(
                             {
@@ -1443,12 +1441,106 @@ def dashboard():
             else:
                 error = f"Error fetching account data: {e}"
 
+    # --- 3) Global profit summary (COIN/hr, USD/hr, best & worst) ---
+
+    global_coin_hour = 0.0
+    global_coin_day = 0.0
+    global_usd_hour = 0.0
+    global_usd_day = 0.0
+    best_factory = None
+    worst_factory = None
+
+    if prices and factory_rows:
+        boost_levels = get_boost_levels()
+        for row in factory_rows:
+            token = str(row["token"]).upper()
+            level = int(row["level"])
+
+            # Make sure we have CSV data for this factory+level
+            if token not in FACTORIES_FROM_CSV:
+                continue
+            if level not in FACTORIES_FROM_CSV[token]:
+                continue
+
+            # Defaults from Boosts tab
+            defaults = boost_levels.get(
+                token, {"mastery_level": 0, "workshop_level": 0}
+            )
+
+            # Mastery → yield multiplier
+            try:
+                mastery_level = int(defaults.get("mastery_level", 0))
+            except Exception:
+                mastery_level = 0
+            mastery_level = max(0, min(10, mastery_level))
+            mastery_factor = float(MASTERY_BONUSES.get(mastery_level, 1.0))
+            yield_pct = 100.0 * mastery_factor
+
+            # Workshop → speed multiplier
+            try:
+                workshop_level = int(defaults.get("workshop_level", 0))
+            except Exception:
+                workshop_level = 0
+            workshop_level = max(0, min(10, workshop_level))
+            ws_table = WORKSHOP_MODIFIERS.get(token)
+            workshop_pct = 0.0
+            if ws_table and 0 <= workshop_level < len(ws_table):
+                workshop_pct = float(ws_table[workshop_level])
+            speed_factor_eff = 1.0 + workshop_pct / 100.0
+
+            try:
+                res = compute_factory_result_csv(
+                    FACTORIES_FROM_CSV,
+                    prices,
+                    token,
+                    level,
+                    target_level=None,
+                    count=1,
+                    yield_pct=yield_pct,           # mastery → yield
+                    speed_factor=speed_factor_eff, # workshop → speed
+                    workers=0,                     # assume 0 workers for summary
+                )
+            except Exception:
+                continue
+
+            prof_hour = float(res.get("profit_coin_per_hour", 0.0))
+            prof_day = prof_hour * 24.0
+            usd_hour = prof_hour * coin_usd
+            usd_day = prof_day * coin_usd
+
+            # Attach per-factory profit to row for the table
+            row["profit_coin_hour"] = prof_hour
+            row["profit_coin_day"] = prof_day
+            row["profit_usd_hour"] = usd_hour
+            row["profit_usd_day"] = usd_day
+
+            # Add to global totals
+            global_coin_hour += prof_hour
+            global_coin_day += prof_day
+            global_usd_hour += usd_hour
+            global_usd_day += usd_day
+
+            # Track best / worst single-factory COIN/hr
+            if best_factory is None or prof_hour > best_factory["profit_coin_hour"]:
+                best_factory = {
+                    "token": row["token"],
+                    "level": level,
+                    "profit_coin_hour": prof_hour,
+                    "profit_usd_hour": usd_hour,
+                }
+            if worst_factory is None or prof_hour < worst_factory["profit_coin_hour"]:
+                worst_factory = {
+                    "token": row["token"],
+                    "level": level,
+                    "profit_coin_hour": prof_hour,
+                    "profit_usd_hour": usd_hour,
+                }
+
     content = """
     <div class="card">
       <h1>📊 CraftWorld Dashboard</h1>
       <p class="subtle">
-        Live prices plus a quick snapshot of your account.<br>
-        This is the base for a full Craftworld.tips-style data hub.
+        Live prices plus a quick snapshot of your account and estimated global profit.
       </p>
 
       <div style="display:flex; gap:12px; flex-wrap:wrap;">
@@ -1460,11 +1552,30 @@ def dashboard():
           <div class="subtle">No UID set (set it on the Overview tab)</div>
         {% endif %}
       </div>
+
+      {% if factory_rows %}
+        <div style="margin-top:10px; font-size:13px;">
+          <strong>Global Production (est.):</strong>
+          COIN/hr: {{ '%.6f'|format(global_coin_hour) }},
+          COIN/day: {{ '%.6f'|format(global_coin_day) }},
+          USD/day: {{ '%.4f'|format(global_usd_day) }}
+        </div>
+        {% if best_factory %}
+          <div class="subtle" style="margin-top:4px;">
+            Best: {{ best_factory.token }} L{{ best_factory.level }}
+            ({{ '%+.6f'|format(best_factory.profit_coin_hour) }} COIN/hr)
+            {% if worst_factory %}
+              · Worst: {{ worst_factory.token }} L{{ worst_factory.level }}
+              ({{ '%+.6f'|format(worst_factory.profit_coin_hour) }} COIN/hr)
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
     </div>
 
     {% if error %}
       <div class="card">
-        <div class="error" style="margin:0;">{{ error }}</div>
+        <div class="error" style="margin:0; white-space:pre-wrap;">{{ error }}</div>
       </div>
     {% endif %}
 
@@ -1525,6 +1636,8 @@ def dashboard():
               <th>Area</th>
               <th>Factory</th>
               <th>Level</th>
+              <th>COIN/hr (est.)</th>
+              <th>USD/hr (est.)</th>
             </tr>
             {% for f in factory_rows %}
               <tr>
@@ -1532,6 +1645,20 @@ def dashboard():
                 <td>{{ f.area }}</td>
                 <td>{{ f.token }}</td>
                 <td>L{{ f.level }}</td>
+                <td>
+                  {% if f.profit_coin_hour is defined %}
+                    {{ '%+.6f'|format(f.profit_coin_hour) }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>
+                  {% if f.profit_usd_hour is defined %}
+                    {{ '%+.6f'|format(f.profit_usd_hour) }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
               </tr>
             {% endfor %}
           </table>
@@ -1544,7 +1671,7 @@ def dashboard():
         <h2>Account Snapshot</h2>
         <p class="subtle">
           Enter your Voya UID on the <strong>Overview</strong> tab, then come back here
-          to see your inventory and factories alongside live prices.
+          to see your inventory and factories alongside live prices and profit estimates.
         </p>
       </div>
     {% endif %}
@@ -1560,6 +1687,12 @@ def dashboard():
             error=error,
             inventory_rows=inventory_rows,
             factory_rows=factory_rows,
+            global_coin_hour=global_coin_hour,
+            global_coin_day=global_coin_day,
+            global_usd_hour=global_usd_hour,
+            global_usd_day=global_usd_day,
+            best_factory=best_factory,
+            worst_factory=worst_factory,
         ),
         active_page="dashboard",
         has_uid=has_uid_flag(),
@@ -7203,6 +7336,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
