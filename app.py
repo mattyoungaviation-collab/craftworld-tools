@@ -1937,15 +1937,18 @@ def flex_planner():
     saved_yield_pct = float(session.get("flex_yield_pct", 100.0))
     saved_speed_factor = float(session.get("flex_speed_factor", 1.0))
     saved_workers = int(session.get("flex_workers", 0))
+    saved_budget_coin = float(session.get("flex_upgrade_budget_coin", 0.0))
 
     yield_pct = saved_yield_pct
     speed_factor = saved_speed_factor
     workers = saved_workers
+    upgrade_budget_coin = saved_budget_coin
 
     if request.method == "POST":
         y_str = request.form.get("yield_pct", str(yield_pct)).strip() or str(yield_pct)
         s_str = request.form.get("speed_factor", str(speed_factor)).strip() or str(speed_factor)
         w_str = request.form.get("workers", str(workers)).strip() or str(workers)
+        b_str = request.form.get("upgrade_budget_coin", str(upgrade_budget_coin)).strip() or str(upgrade_budget_coin)
 
         try:
             yield_pct = float(y_str)
@@ -1962,9 +1965,15 @@ def flex_planner():
         except ValueError:
             workers = saved_workers
 
+        try:
+            upgrade_budget_coin = max(0.0, float(b_str))
+        except ValueError:
+            upgrade_budget_coin = saved_budget_coin
+
         session["flex_yield_pct"] = yield_pct
         session["flex_speed_factor"] = speed_factor
         session["flex_workers"] = workers
+        session["flex_upgrade_budget_coin"] = upgrade_budget_coin
 
     # 1) Load CraftWorld account data for inventory
     inventory: Dict[str, float] = {}
@@ -1980,50 +1989,37 @@ def flex_planner():
     except Exception as e:
         error = f"Error fetching inventory: {e}"
 
-    # 2) Compute max affordable level per factory based on upgrade costs vs inventory
-    #    We walk levels in order and keep summing upgrade_amount per upgrade_token.
-    #    As soon as the cumulative requirement exceeds your bag for ANY token, we stop.
-    affordable_max_level: Dict[str, int] = {}
-    for token, levels in FACTORIES_FROM_CSV.items():
-        token_u = str(token).upper()
-        cumulative: Dict[str, float] = {}
-        max_lvl = 0
-        for lvl in sorted(levels.keys()):
-            data = levels[lvl]
+    # Helper: full upgrade chain requirements for token + level, for `count` factories.
+    def calc_upgrade_chain(token_u: str, level: int, count: int = 1) -> Dict[str, float]:
+        token_u = str(token_u).upper()
+        chain: Dict[str, float] = {}
+        levels = FACTORIES_FROM_CSV.get(token_u, {})
+        # Levels in CSV are 1..N, each row's upgrade_x is cost from previous → this level
+        for lvl in range(1, level + 1):
+            data = levels.get(lvl)
+            if not data:
+                continue
             up_tok = data.get("upgrade_token")
             up_amt = data.get("upgrade_amount")
-
             if up_tok and up_amt and up_amt > 0:
-                up_tok_u = str(up_tok).upper()
-                cumulative[up_tok_u] = cumulative.get(up_tok_u, 0.0) + float(up_amt)
+                u = str(up_tok).upper()
+                chain[u] = chain.get(u, 0.0) + float(up_amt) * count
+        return chain
 
-            # Check if all cumulative upgrade requirements can be paid from inventory
-            ok = True
-            for t, required in cumulative.items():
-                if inventory.get(t, 0.0) < required - 1e-9:
-                    ok = False
-                    break
-            if not ok:
-                break
-
-            max_lvl = lvl
-
-        if max_lvl > 0:
-            affordable_max_level[token_u] = max_lvl
-
-    # 3) Get prices and best setups, then filter by affordability AND inputs
     candidates: List[Dict[str, Any]] = []
-    recommended: List[Dict[str, Any]] = []
-    combined_speed = None
-    coin_usd = 0.0
-    total_coin_hour = 0.0
-    total_usd_hour = 0.0
+    bands: List[Dict[str, Any]] = []
+    summary_rows: List[Dict[str, Any]] = []
+    combined_speed: Optional[float] = None
+    coin_usd: float = 0.0
+    total_coin_hour: float = 0.0
+    total_usd_hour: float = 0.0
+    total_shortfall_coin_layout: float = 0.0
 
     try:
         prices = fetch_live_prices_in_coin()
         coin_usd = float(prices.get("_COIN_USD", 0.0))
 
-        # Get a big list of best setups (1 factory each)
+        # 2) Get a big list of best setups (1 factory each, no flex shape yet)
         best_rows, combined_speed, _worker_factor = compute_best_setups_csv(
             FACTORIES_FROM_CSV,
             prices,
@@ -2033,70 +2029,143 @@ def flex_planner():
             top_n=300,   # plenty of headroom to filter down
         )
 
-        # First pass: must be upgrade-affordable AND you own all input tokens (some amount)
+        # 3) Build per-factory candidates that are individually affordable
+        #    (upgrade shortfall for ONE factory <= budget).
         for r in best_rows:
             token = str(r["token"]).upper()
             lvl = int(r["level"])
+            profit_h = float(r["profit_coin_per_hour"])
+            profit_craft = float(r["profit_coin_per_craft"])
 
-            max_aff = affordable_max_level.get(token)
-            if not max_aff or lvl > max_aff:
-                # Can't afford to build this level of this factory
-                continue
+            # Upgrade chain for ONE factory
+            chain_1 = calc_upgrade_chain(token, lvl, count=1)
 
-            data = FACTORIES_FROM_CSV.get(token, {}).get(lvl)
-            if not data:
-                continue
-
-            inputs = data.get("inputs") or {}
-
-            # Require you to own at least some of every input token
-            can_run = True
-            for t in inputs.keys():
-                t_u = str(t).upper()
-                if inventory.get(t_u, 0.0) <= 0:
-                    can_run = False
-                    break
-
-            if not can_run:
-                continue
-
-            row = {
-                "token": token,
-                "level": lvl,
-                "profit_coin_per_hour": float(r["profit_coin_per_hour"]),
-                "profit_coin_per_craft": float(r["profit_coin_per_craft"]),
-                "inputs": {str(t).upper(): float(q) for t, q in inputs.items()},
-            }
-            candidates.append(row)
-
-        # Sort again just in case, then pick the top 8 for the flex plot.
-        candidates.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
-
-        if not candidates:
-            # Fallback: still obey upgrade affordability, but ignore input-ownership filter.
-            for r in best_rows:
-                token = str(r["token"]).upper()
-                lvl = int(r["level"])
-
-                max_aff = affordable_max_level.get(token)
-                if not max_aff or lvl > max_aff:
+            # Compute shortfall vs inventory and cost of that shortfall in COIN.
+            indiv_shortfall_coin = 0.0
+            impossible = False
+            for res_tok, needed in chain_1.items():
+                have = inventory.get(res_tok, 0.0)
+                short = max(0.0, needed - have)
+                if short <= 0:
                     continue
+                price_res = float(prices.get(res_tok, 0.0))
+                if price_res <= 0.0:
+                    # Can't price or buy this resource; if we don't have enough, it's impossible.
+                    impossible = True
+                    break
+                indiv_shortfall_coin += short * price_res
 
-                row = {
+            if impossible:
+                continue
+
+            # If one factory is already way beyond budget, skip.
+            if indiv_shortfall_coin > upgrade_budget_coin + 1e-9:
+                continue
+
+            candidates.append(
+                {
                     "token": token,
                     "level": lvl,
-                    "profit_coin_per_hour": float(r["profit_coin_per_hour"]),
-                    "profit_coin_per_craft": float(r["profit_coin_per_craft"]),
-                    "inputs": {},
+                    "profit_coin_per_hour": profit_h,
+                    "profit_coin_per_craft": profit_craft,
+                    "upgrade_chain_one": chain_1,
+                    "upgrade_shortfall_coin_one": indiv_shortfall_coin,
                 }
-                candidates.append(row)
-                if len(candidates) >= 50:
-                    break
+            )
 
-        recommended = candidates[:8]
+        # Sort candidates by profit/hr (single factory)
+        candidates.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
 
-        total_coin_hour = sum(r["profit_coin_per_hour"] for r in recommended)
+        # 4) Build the flex layout bands with counts [3, 2, 2, 1]
+        #    We simulate spending inventory + COIN budget as we pick each band.
+        counts_pattern = [3, 2, 2, 1]
+        inv_left = dict(inventory)
+        budget_left = upgrade_budget_coin
+
+        for band_idx, slots in enumerate(counts_pattern, start=1):
+            chosen = None
+
+            for cand in candidates:
+                token = cand["token"]
+                lvl = cand["level"]
+
+                # Upgrade requirements for THIS band (slots copies).
+                req_band = calc_upgrade_chain(token, lvl, count=slots)
+
+                band_coin_needed = 0.0
+                impossible = False
+                for res_tok, needed in req_band.items():
+                    have = inv_left.get(res_tok, 0.0)
+                    short = max(0.0, needed - have)
+                    if short <= 0:
+                        continue
+                    price_res = float(prices.get(res_tok, 0.0))
+                    if price_res <= 0.0:
+                        impossible = True
+                        break
+                    band_coin_needed += short * price_res
+
+                if impossible:
+                    continue
+                if band_coin_needed > budget_left + 1e-9:
+                    # Too expensive given remaining budget.
+                    continue
+
+                # We can afford this band; commit it.
+                chosen = {
+                    "band_index": band_idx,
+                    "count": slots,
+                    "token": token,
+                    "level": lvl,
+                    "profit_coin_per_hour": cand["profit_coin_per_hour"],
+                    "profit_coin_per_craft": cand["profit_coin_per_craft"],
+                    "upgrade_requirements": req_band,
+                    "upgrade_cost_coin": band_coin_needed,
+                }
+
+                # Deduct resources and budget
+                for res_tok, needed in req_band.items():
+                    have = inv_left.get(res_tok, 0.0)
+                    inv_left[res_tok] = max(0.0, have - needed)
+                budget_left -= band_coin_needed
+                break  # stop scanning candidates for this band
+
+            if chosen:
+                bands.append(chosen)
+            else:
+                # Can't fill this band under current budget/inventory; stop.
+                break
+
+        # 5) Totals for layout profitability
+        total_coin_hour = sum(
+            b["profit_coin_per_hour"] * b["count"] for b in bands
+        )
         total_usd_hour = total_coin_hour * coin_usd
+
+        # 6) Aggregate upgrade requirements for the whole layout (3+2+2+1),
+        #    and compute shortfall vs ORIGINAL inventory + cost in COIN.
+        agg_req: Dict[str, float] = {}
+        for b in bands:
+            for res_tok, amt in b["upgrade_requirements"].items():
+                agg_req[res_tok] = agg_req.get(res_tok, 0.0) + float(amt)
+
+        summary_rows = []
+        total_shortfall_coin_layout = 0.0
+        for res_tok, needed in sorted(agg_req.items()):
+            have = inventory.get(res_tok, 0.0)
+            short = max(0.0, needed - have)
+            price_res = float(prices.get(res_tok, 0.0))
+            coin_cost = short * price_res if price_res > 0 else 0.0
+            total_shortfall_coin_layout += coin_cost
+            summary_rows.append(
+                {
+                    "token": res_tok,
+                    "needed": needed,
+                    "have": have,
+                    "shortfall": short,
+                    "shortfall_coin": coin_cost,
+                }
+            )
 
     except Exception as e:
         error = f"{error or ''}\nFlex Planner calculation failed: {e}"
@@ -2112,17 +2181,14 @@ def flex_planner():
       <h1>Flex Planner (8-slot smart layout)</h1>
       <p class="subtle">
         This tab tries to act like a mini AI for your <strong>Flex Plot</strong>:
-        it looks at your <strong>current inventory</strong> and live prices, then
-        suggests the <strong>8 most profitable factories</strong> you can reasonably build
-        and run with your current upgrade materials.
+        it looks at your <strong>current inventory</strong>, your
+        <strong>DINO COIN upgrade budget</strong> and live prices, then
+        builds a 3–2–2–1 layout:
+        <br>
+        Row 1: 3× same factory, Row 2: 2× same, Row 3: 2× same, Row 4: 1×.
         <br><br>
-        <em>v1 logic:</em> it
-        <ul>
-          <li>Walks each factory's upgrade chain and stops at the highest level your bag can afford.</li>
-          <li>Filters out any factory level above that cap.</li>
-          <li>Also (in the main list) requires you to own at least some of each input token.</li>
-        </ul>
-        You still receive back all upgrade resources when swapping factory types in-game.
+        It only considers factories and levels that you can afford to
+        upgrade to using your current resources plus the COIN budget.
       </p>
 
       <form method="post" style="margin-bottom:12px;">
@@ -2143,6 +2209,14 @@ def flex_planner():
             <label for="workers">Workers (0–4 per factory)</label>
             <input id="workers" name="workers" type="number" min="0" max="4"
                    value="{{ workers }}" style="width:100%;">
+          </div>
+
+          <div style="flex:1;min-width:160px;">
+            <label for="upgrade_budget_coin">Upgrade budget (COIN)</label>
+            <input id="upgrade_budget_coin" name="upgrade_budget_coin"
+                   type="number" step="0.000001" min="0"
+                   value="{{ upgrade_budget_coin }}" style="width:100%;">
+            <div class="hint">Amount of COIN you're willing to spend buying upgrade resources.</div>
           </div>
         </div>
 
@@ -2172,49 +2246,88 @@ def flex_planner():
         </div>
 
         <div class="card">
-          <h2>Suggested Flex layout (8 slots)</h2>
+          <h2>Suggested Flex layout (3–2–2–1)</h2>
           <p class="subtle">
-            Total profit (8 factories): {{ "%+.6f"|format(total_coin_hour) }} COIN / hr
+            Total profit: {{ "%+.6f"|format(total_coin_hour) }} COIN / hr
             {% if coin_usd and total_coin_hour %}
               (≈ {{ "%+.4f"|format(total_usd_hour) }} USD / hr)
             {% endif %}
             {% if combined_speed %}
               <br>Effective speed: {{ "%.2f"|format(combined_speed) }}x
             {% endif %}
+            <br>
+            Upgrade shortfall (after inventory) for this layout:
+            {{ "%+.6f"|format(total_shortfall_coin_layout) }} COIN
+            (Budget: {{ "%+.6f"|format(upgrade_budget_coin) }} COIN)
           </p>
 
-          {% if recommended %}
+          {% if bands %}
             <table>
               <tr>
-                <th>Slot</th>
+                <th>Flex row</th>
+                <th>Slots</th>
                 <th>Factory</th>
                 <th>Level</th>
-                <th>Profit / hr (COIN)</th>
-                <th>Profit / craft (COIN)</th>
+                <th>Profit / hr (per)</th>
+                <th>Profit / hr (row)</th>
               </tr>
-              {% for r in recommended %}
-                {% set good = r.profit_coin_per_hour >= 0 %}
+              {% for b in bands %}
+                {% set good = b.profit_coin_per_hour >= 0 %}
                 <tr>
-                  <td>{{ loop.index }}</td>
-                  <td>{{ r.token }}</td>
-                  <td>L{{ r.level }}</td>
+                  <td>{{ b.band_index }}</td>
+                  <td>{{ b.count }}</td>
+                  <td>{{ b.token }}</td>
+                  <td>L{{ b.level }}</td>
                   <td>
                     <span class="{{ 'pill' if good else 'pill-bad' }}">
-                      {{ "%+.6f"|format(r.profit_coin_per_hour) }}
+                      {{ "%+.6f"|format(b.profit_coin_per_hour) }}
                     </span>
                   </td>
-                  <td>{{ "%+.6f"|format(r.profit_coin_per_craft) }}</td>
+                  <td>
+                    <span class="{{ 'pill' if good else 'pill-bad' }}">
+                      {{ "%+.6f"|format(b.profit_coin_per_hour * b.count) }}
+                    </span>
+                  </td>
                 </tr>
               {% endfor %}
             </table>
           {% else %}
-            <p class="subtle">No suitable factories found; try adjusting yield/speed.</p>
+            <p class="subtle">
+              No flex layout could be built with the current budget and inventory.
+              Try increasing the COIN budget or adjusting yield/speed.
+            </p>
           {% endif %}
         </div>
       </div>
 
       <div class="card" style="margin-top:10px;">
-        <h2>Other strong candidates (upgrade-affordable)</h2>
+        <h2>Upgrade requirements for this flex layout</h2>
+        {% if summary_rows %}
+          <table>
+            <tr>
+              <th>Resource</th>
+              <th>Needed</th>
+              <th>You have</th>
+              <th>Shortfall</th>
+              <th>Shortfall value (COIN)</th>
+            </tr>
+            {% for r in summary_rows %}
+              <tr>
+                <td>{{ r.token }}</td>
+                <td>{{ "%.6f"|format(r.needed) }}</td>
+                <td>{{ "%.6f"|format(r.have) }}</td>
+                <td>{{ "%.6f"|format(r.shortfall) }}</td>
+                <td>{{ "%.6f"|format(r.shortfall_coin) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <p class="subtle">No upgrade requirements (empty layout).</p>
+        {% endif %}
+      </div>
+
+      <div class="card" style="margin-top:10px;">
+        <h2>Other affordable candidates (per-factory)</h2>
         {% if candidates %}
           <table>
             <tr>
@@ -2222,6 +2335,7 @@ def flex_planner():
               <th>Level</th>
               <th>Profit / hr (COIN)</th>
               <th>Profit / craft (COIN)</th>
+              <th>Upgrade shortfall for 1 factory (COIN)</th>
             </tr>
             {% for r in candidates[:40] %}
               {% set good = r.profit_coin_per_hour >= 0 %}
@@ -2234,11 +2348,14 @@ def flex_planner():
                   </span>
                 </td>
                 <td>{{ "%+.6f"|format(r.profit_coin_per_craft) }}</td>
+                <td>{{ "%.6f"|format(r.upgrade_shortfall_coin_one) }}</td>
               </tr>
             {% endfor %}
           </table>
         {% else %}
-          <p class="subtle">Nothing else passed the affordability filter.</p>
+          <p class="subtle">
+            No other factories are individually affordable given your upgrade budget.
+          </p>
         {% endif %}
       </div>
     </div>
@@ -2250,20 +2367,24 @@ def flex_planner():
             content,
             error=error,
             inventory_rows=inventory_rows,
-            recommended=recommended,
+            bands=bands,
             candidates=candidates,
             yield_pct=yield_pct,
             speed_factor=speed_factor,
             workers=workers,
+            upgrade_budget_coin=upgrade_budget_coin,
             total_coin_hour=total_coin_hour,
             total_usd_hour=total_usd_hour,
             combined_speed=combined_speed,
             coin_usd=coin_usd,
+            summary_rows=summary_rows,
+            total_shortfall_coin_layout=total_shortfall_coin_layout,
         ),
         active_page="flex",
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -6492,6 +6613,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
