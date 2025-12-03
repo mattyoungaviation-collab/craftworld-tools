@@ -1592,25 +1592,38 @@ def profitability():
     content = """
     <div class="card">
       <h1>Factory Profitability (Manual Mastery + Workshop)</h1>
-      <p class="subtle">
+        <p class="subtle">
         Factory list is loaded from your UID via <code>fetchCraftWorld</code>.<br>
         <strong>Mastery</strong> and <strong>Workshop</strong> levels are set manually per factory (0–10),
         and applied using the official tables.
       </p>
 
-            <form method="post" style="margin-bottom:12px;">
+      <form method="post" style="margin-bottom:12px;" id="profit_form">
         <div style="display:flex;flex-wrap:wrap;gap:16px;">
           <div style="min-width:160px;">
             <label for="speed_factor">Global Speed (AD / boosts)</label>
-            <input type="number" step="0.1" name="speed_factor" value="{{global_speed}}" />
+            <input
+              type="number"
+              step="0.1"
+              name="speed_factor"
+              value="{{global_speed}}"
+              class="auto-calc"
+            />
             <div class="hint">Multiplies base time before workshop &amp; workers.</div>
           </div>
 
           <div style="min-width:160px;">
             <label for="yield_pct">Base Yield % (fallback)</label>
-            <input type="number" step="0.1" name="yield_pct" value="{{global_yield}}" />
+            <input
+              type="number"
+              step="0.1"
+              name="yield_pct"
+              value="{{global_yield}}"
+              class="auto-calc"
+            />
             <div class="hint">Used only if mastery level not in table.</div>
           </div>
+
 
           <div style="min-width:180px;">
             <label for="sort_mode">Sort</label>
@@ -1644,70 +1657,38 @@ def profitability():
 
         <div style="margin-top:14px;overflow-x:auto;">
           <table>
-            <tr>
-              <th>Run</th>
-              <th>Token</th>
-              <th>Lvl</th>
-              <th>Count</th>
-              <th>Mastery Lvl</th>
-              <th>Yield %</th>
-              <th>Workshop Lvl</th>
-              <th>WS Speed %</th>
-              <th>Workers</th>
-              <th>P/hr (1)</th>
-              <th>P/hr (All)</th>
-              <th>P/day</th>
-              <th>USD/hr</th>
-            </tr>
-
-            {% for r in rows %}
-            <tr>
-              <td>
-                <input type="checkbox" name="run_{{r.key}}" {% if r.selected %}checked{% endif %}>
-              </td>
-              <td>{{r.token}}</td>
-              <td>{{r.level}}</td>
-              <td>{{r.count}}</td>
-
-              <td>
-                <input type="number"
-                       min="0" max="10"
-                       name="mastery_{{r.key}}"
-                       value="{{r.mastery_level}}"
-                       style="width:60px;">
-              </td>
-              <td>{{ '%.2f'|format(r.yield_pct) }}</td>
-
-              <td>
-                <input type="number"
-                       min="0" max="10"
-                       name="workshop_{{r.key}}"
-                       value="{{r.workshop_level}}"
-                       style="width:60px;">
-              </td>
-              <td>{{ '%.2f'|format(r.workshop_pct) }}</td>
-
-              <td>
-                <input type="number"
-                       min="0" max="4"
-                       name="workers_{{r.key}}"
-                       value="{{r.workers}}"
-                       style="width:60px;">
-              </td>
-
-              <td>{{ '%.6f'|format(r.profit_hour_per) }}</td>
-              <td>{{ '%.6f'|format(r.profit_hour_total) }}</td>
-              <td>{{ '%.6f'|format(r.profit_day_total) }}</td>
-              <td>{{ '%.4f'|format(r.usd_hour_total) }}</td>
-            </tr>
+            ...
             {% endfor %}
           </table>
         </div>
 
         <button type="submit" style="margin-top:12px;">Update</button>
       </form>
+
+      <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        // Any input with class "auto-calc" will auto-submit its form on change
+        const inputs = document.querySelectorAll('.auto-calc');
+        let timer = null;
+
+        inputs.forEach(function (input) {
+          input.addEventListener('input', function () {
+            if (timer) {
+              clearTimeout(timer);
+            }
+            const form = input.form;
+            if (!form) return;
+
+            timer = setTimeout(function () {
+              form.submit();
+            }, 400); // debounce a bit so holding the arrow doesn't spam
+          });
+        });
+      });
+      </script>
     </div>
     """
+
 
     html = render_template_string(
         BASE_TEMPLATE,
@@ -5940,6 +5921,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
