@@ -162,7 +162,7 @@ def load_masterpiece_metadata_cache() -> Dict[int, Dict[str, Any]]:
 
 
 
-from pricing import fetch_live_prices_in_coin
+from pricing import fetch_live_prices_in_coin, fetch_exchange_prices_buy_sell
 
 from factories import (
     my_factories,
@@ -1350,9 +1350,14 @@ def profitability():
     # NEW: per-row mastery & workshop levels (manual)
     saved_mastery: Dict[str, int] = session.get("profit_mastery_csv", {})
     saved_workshop: Dict[str, int] = session.get("profit_workshop_csv", {})
+    
     # Sort mode: "standard", "gain_loss", "loss_gain"
     saved_sort_mode: str = session.get("profit_sort_mode", "gain_loss")
     sort_mode: str = saved_sort_mode
+        # Input price mode: "sell" (default) or "buy"
+    saved_input_price_mode: str = session.get("profit_input_price_mode", "sell")
+    input_price_mode: str = saved_input_price_mode
+
 
     # On a fresh GET, ignore any old per-row overrides so we start
     # from the per-token Boosts defaults for the logged-in user.
@@ -1457,10 +1462,13 @@ def profitability():
             # if nothing selected explicitly, assume all on
             saved_selected = {m["key"]: True for m in rows_meta}
             session["profit_selected_csv"] = saved_selected
+            session["profit_input_price_mode"] = input_price_mode
 
         saved_workers = new_workers
         saved_mastery = new_mastery
         saved_workshop = new_workshop
+
+
 
     # 4) Compute profitability with MANUAL mastery & workshop
     rows: List[dict] = []
@@ -1471,8 +1479,47 @@ def profitability():
     coin_usd = 0.0
 
     try:
-        prices = fetch_live_prices_in_coin()
-        coin_usd = float(prices.get("_COIN_USD", 0.0))
+        # 1) Flat SELL-focused prices + COIN → USD
+        prices_flat = fetch_live_prices_in_coin()
+        coin_usd = float(prices_flat.get("_COIN_USD", 0.0))
+
+        # 2) Full BUY / SELL matrix from Craft World
+        per_symbol = fetch_exchange_prices_buy_sell()
+
+        prices_sell: Dict[str, float] = {}
+        prices_buy: Dict[str, float] = {}
+
+        for sym_u, rec_map in per_symbol.items():
+            sym_u = sym_u.upper()
+            # SELL map: prefer SELL, then BUY, then any
+            if "SELL" in rec_map:
+                prices_sell[sym_u] = float(rec_map["SELL"])
+            elif "BUY" in rec_map:
+                prices_sell[sym_u] = float(rec_map["BUY"])
+            elif rec_map:
+                prices_sell[sym_u] = float(next(iter(rec_map.values())))
+
+            # BUY map: prefer BUY, then SELL, then any
+            if "BUY" in rec_map:
+                prices_buy[sym_u] = float(rec_map["BUY"])
+            elif "SELL" in rec_map:
+                prices_buy[sym_u] = float(rec_map["SELL"])
+            elif rec_map:
+                prices_buy[sym_u] = float(next(iter(rec_map.values())))
+
+        # Ensure COIN present as 1.0 in both maps
+        prices_sell.setdefault("COIN", 1.0)
+        prices_buy.setdefault("COIN", 1.0)
+
+        # Which map should input costs use?
+        if input_price_mode == "buy":
+            input_prices = prices_buy
+        else:
+            # SELL mode: value inputs the same way as outputs
+            input_prices = None  # let factories fall back to SELL map
+
+        # Main output price map is always SELL-focused
+        prices = prices_sell
 
         for meta in rows_meta:
             key = meta["key"]
@@ -1641,6 +1688,20 @@ def profitability():
             <div class="hint">Changes row ordering below.</div>
           </div>
 
+          <div style="min-width:220px;">
+            <label for="input_price_mode">Value inputs using</label>
+            <select name="input_price_mode" id="input_price_mode" onchange="this.form.submit()">
+              <option value="sell" {% if input_price_mode == 'sell' %}selected{% endif %}>
+                Sell price (what you'd get selling them)
+              </option>
+              <option value="buy" {% if input_price_mode == 'buy' %}selected{% endif %}>
+                Buy price (what you'd pay to buy them)
+              </option>
+            </select>
+            <div class="hint">Outputs are always valued at SELL price.</div>
+          </div>
+
+
           <div style="min-width:260px;">
             <label>Totals (Selected)</label>
             <div class="hint">COIN/hr: {{ '%.6f'|format(total_coin_hour) }}</div>
@@ -1762,9 +1823,14 @@ def profitability():
             total_usd_day=total_usd_day,
             coin_usd=coin_usd,
             sort_mode=sort_mode,
+            active_page="profit",
+            has_uid=has_uid_flag(),
+            coin_usd=coin_usd,
+            sort_mode=sort_mode,
+            input_price_mode=input_price_mode,
+
         ),
-        active_page="profit",
-        has_uid=has_uid_flag(),
+
     )
     return html
 
@@ -4706,7 +4772,7 @@ def masterpieces_view():
 
     # Wrap in the global base template (same pattern as other tabs)
     html = render_template_string(
-        BASE_TEMPLATE,
+        BASE_TEMPLATE
         content=inner,
         active_page="masterpieces",
         has_uid=has_uid_flag(),
@@ -5992,6 +6058,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
