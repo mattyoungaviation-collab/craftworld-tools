@@ -76,10 +76,18 @@ def _get_usd_price(token_address: Optional[str]) -> Optional[float]:
         return float(price_str)
     except Exception:
         return None
+        
+def fetch_exchange_prices_buy_sell() -> Dict[str, Dict[str, float]]:
+    """
+    Call Craft World's exchangePriceList and return:
 
+      {
+        "EARTH": {"SELL": 0.00123, "BUY": 0.00110, ...},
+        ...
+      }
 
-def fetch_exchange_prices_coin() -> Dict[str, float]:
-    """Call Craft World's exchangePriceList and return token -> price in COIN."""
+    We group all quotes per symbol by their `recommendation` field.
+    """
     query = """\
     query ExchangePriceList {
       exchangePriceList {
@@ -96,22 +104,65 @@ def fetch_exchange_prices_coin() -> Dict[str, float]:
     data = call_graphql(query, None)
     root = data["exchangePriceList"]
     base_symbol = root.get("baseSymbol", "COIN")
-    prices_coin: Dict[str, float] = {}
+
+    per_symbol: Dict[str, Dict[str, float]] = {}
 
     for item in root.get("prices", []):
         sym = item.get("referenceSymbol")
         amt = item.get("amount")
+        rec = (item.get("recommendation") or "").upper()
+
+        if not sym:
+            continue
+
         try:
             amt_f = float(amt)
         except Exception:
             amt_f = 0.0
 
-        if sym:
-            prices_coin[sym.upper()] = amt_f
+        sym_u = sym.upper()
+        if sym_u not in per_symbol:
+            per_symbol[sym_u] = {}
 
-    # base symbol (COIN) is 1.0 in its own units
-    prices_coin[base_symbol.upper()] = 1.0
+        key = rec if rec else "UNKNOWN"
+        per_symbol[sym_u][key] = amt_f
+
+    # Ensure base symbol (COIN) is present with a sane default
+    base_u = base_symbol.upper()
+    if base_u not in per_symbol:
+        per_symbol[base_u] = {}
+    per_symbol[base_u].setdefault("SELL", 1.0)
+    per_symbol[base_u].setdefault("BUY", 1.0)
+
+    return per_symbol
+
+
+def fetch_exchange_prices_coin() -> Dict[str, float]:
+    """
+    Call Craft World's exchangePriceList and return a flat
+    token -> price_in_COIN map.
+
+    This is a SELL-focused view:
+      - Prefer SELL quotes
+      - Fall back to BUY if SELL missing
+      - Else use any available quote
+    """
+    per_symbol = fetch_exchange_prices_buy_sell()
+
+    prices_coin: Dict[str, float] = {}
+    for sym_u, rec_map in per_symbol.items():
+        sym_u = sym_u.upper()
+        if "SELL" in rec_map:
+            prices_coin[sym_u] = float(rec_map["SELL"])
+        elif "BUY" in rec_map:
+            prices_coin[sym_u] = float(rec_map["BUY"])
+        elif rec_map:
+            prices_coin[sym_u] = float(next(iter(rec_map.values())))
+
+    # Ensure base COIN is 1.0 in its own units
+    prices_coin.setdefault("COIN", 1.0)
     return prices_coin
+
 
 
 def fetch_live_prices_in_coin() -> Dict[str, float]:
@@ -128,3 +179,4 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
     prices_coin["_COIN_USD"] = float(coin_usd) if coin_usd else 0.0
 
     return prices_coin
+
