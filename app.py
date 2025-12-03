@@ -1620,19 +1620,18 @@ def profitability():
                 }
             )
 
-                # sort by your fixed factory display order, then by level
+        # sort by your fixed factory display order, then by level
         def _row_sort_key(r: dict) -> tuple[int, int]:
             token = str(r["token"]).upper()
             level = int(r["level"])
             idx = FACTORY_DISPLAY_INDEX.get(token, len(FACTORY_DISPLAY_INDEX))
             return (idx, level)
 
-                # Apply selected sort mode
+
+        # Apply selected sort mode
         if sort_mode == "gain_loss":
-            # Highest profit/hr first (current behavior)
             rows.sort(key=lambda r: r["profit_hour_total"], reverse=True)
         elif sort_mode == "loss_gain":
-            # Most negative first
             rows.sort(key=lambda r: r["profit_hour_total"])
         else:
             # "standard" → your factory order, then level
@@ -1641,8 +1640,8 @@ def profitability():
                 lvl = int(r["level"])
                 idx = STANDARD_ORDER_INDEX.get(token_u, len(STANDARD_ORDER_INDEX))
                 return (idx, lvl)
-
             rows.sort(key=_std_key)
+
 
 
 
@@ -1843,6 +1842,7 @@ def profitability():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 # -------- Boosts tab (per-token mastery / workshop levels) --------
@@ -6070,6 +6070,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
