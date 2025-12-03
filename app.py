@@ -2328,7 +2328,6 @@ def flex_planner():
         </div>
 
         <div class="card">
-          <h2>Suggested Flex layout (3–2–2–1)</h2>
           <p class="subtle">
             Total profit: {{ "%+.6f"|format(total_coin_hour) }} COIN / hr
             {% if coin_usd and total_coin_hour %}
@@ -2341,6 +2340,12 @@ def flex_planner():
             Upgrade shortfall (after inventory) for this layout:
             {{ "%+.6f"|format(total_shortfall_coin_layout) }} COIN
             (Budget: {{ "%+.6f"|format(upgrade_budget_coin) }} COIN)
+            {% if total_shortfall_coin_layout > 0 and total_coin_hour %}
+              <br>
+              ROI: {{ "%.4f"|format(total_coin_hour / total_shortfall_coin_layout) }} COIN/hr per COIN spent
+              <br>
+              Payback time: {{ "%.2f"|format(total_shortfall_coin_layout / total_coin_hour) }} hours
+            {% endif %}
           </p>
 
           {% if bands %}
@@ -2352,9 +2357,12 @@ def flex_planner():
                 <th>Level</th>
                 <th>Profit / hr (per)</th>
                 <th>Profit / hr (row)</th>
+                <th>Upgrade cost (COIN)</th>
+                <th>ROI (hr⁻¹)</th>
               </tr>
               {% for b in bands %}
                 {% set good = b.profit_coin_per_hour >= 0 %}
+                {% set row_profit = b.profit_coin_per_hour * b.count %}
                 <tr>
                   <td>{{ b.band_index }}</td>
                   <td>{{ b.count }}</td>
@@ -2367,13 +2375,27 @@ def flex_planner():
                   </td>
                   <td>
                     <span class="{{ 'pill' if good else 'pill-bad' }}">
-                      {{ "%+.6f"|format(b.profit_coin_per_hour * b.count) }}
+                      {{ "%+.6f"|format(row_profit) }}
                     </span>
+                  </td>
+                  <td>{{ "%.6f"|format(b.upgrade_cost_coin) }}</td>
+                  <td>
+                    {% if b.upgrade_cost_coin > 0 and row_profit %}
+                      {{ "%.6f"|format(row_profit / b.upgrade_cost_coin) }}
+                    {% else %}
+                      —
+                    {% endif %}
                   </td>
                 </tr>
               {% endfor %}
             </table>
           {% else %}
+            <p class="subtle">
+              No flex layout could be built with the current budget and inventory.
+              Try increasing the COIN budget or adjusting yield/speed.
+            </p>
+          {% endif %}
+
             <p class="subtle">
               No flex layout could be built with the current budget and inventory.
               Try increasing the COIN budget or adjusting yield/speed.
@@ -6771,6 +6793,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
