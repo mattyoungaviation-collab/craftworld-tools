@@ -1600,6 +1600,15 @@ def profitability():
                 input_prices_coin=input_prices,       # NEW: BUY vs SELL input costs
             )
 
+            cost_coin_per_craft = float(res.get("cost_coin_per_craft", 0.0))
+            value_coin_per_craft = float(res.get("value_coin_per_craft", 0.0))
+            profit_coin_per_craft = float(res.get("profit_coin_per_craft", 0.0))
+
+            margin_pct = 0.0
+            if value_coin_per_craft > 0:
+                margin_pct = (profit_coin_per_craft / value_coin_per_craft) * 100.0
+
+
 
             prof_hour_per = float(res["profit_coin_per_hour"])
             prof_hour_total = prof_hour_per * count
@@ -1627,6 +1636,13 @@ def profitability():
                     "yield_pct": yield_pct,
                     "workshop_level": workshop_level,
                     "workshop_pct": workshop_pct,
+
+                    # exact quote per craft for this factory at this level
+                    "cost_coin_per_craft": cost_coin_per_craft,
+                    "value_coin_per_craft": value_coin_per_craft,
+                    "profit_coin_per_craft": profit_coin_per_craft,
+                    "margin_pct": margin_pct,
+
                     "profit_hour_per": prof_hour_per,
                     "profit_hour_total": prof_hour_total,
                     "profit_day_total": prof_day_total,
@@ -1634,6 +1650,7 @@ def profitability():
                     "usd_day_total": usd_day_total,
                 }
             )
+
 
         # sort by your fixed factory display order, then by level
         def _row_sort_key(r: dict) -> tuple[int, int]:
@@ -1750,67 +1767,85 @@ def profitability():
         {% endif %}
 
         <div style="margin-top:14px;overflow-x:auto;">
-          <table>
-            <tr>
-              <th>Run</th>
-              <th>Token</th>
-              <th>Lvl</th>
-              <th>Count</th>
-              <th>Mastery Lvl</th>
-              <th>Yield %</th>
-              <th>Workshop Lvl</th>
-              <th>WS Speed %</th>
-              <th>Workers</th>
-              <th>P/hr (1)</th>
-              <th>P/hr (All)</th>
-              <th>P/day</th>
-              <th>USD/hr</th>
-            </tr>
+<table>
+  <tr>
+    <th>Run</th>
+    <th>Token</th>
+    <th>Lvl</th>
+    <th>Count</th>
+    <th>Mastery Lvl</th>
+    <th>Yield %</th>
+    <th>Workshop Lvl</th>
+    <th>WS Speed %</th>
+    <th>Workers</th>
 
-            {% for r in rows %}
-            <tr>
-              <td>
-                <input type="checkbox"
-                       name="run_{{r.key}}"
-                       {% if r.selected %}checked{% endif %}>
-              </td>
-              <td>{{ r.token }}</td>
-              <td>{{ r.level }}</td>
-              <td>{{ r.count }}</td>
+    <!-- NEW QUOTE COLUMNS -->
+    <th>Cost/craft (COIN)</th>
+    <th>Value/craft (COIN)</th>
+    <th>Profit/craft (COIN)</th>
+    <th>Margin %</th>
 
-              <td>
-                <input type="number"
-                       min="0" max="10"
-                       name="mastery_{{ r.key }}"
-                       value="{{ r.mastery_level }}"
-                       style="width:60px;">
-              </td>
-              <td>{{ '%.2f'|format(r.yield_pct) }}</td>
+    <th>P/hr (1)</th>
+    <th>P/hr (All)</th>
+    <th>P/day</th>
+    <th>USD/hr</th>
+  </tr>
 
-              <td>
-                <input type="number"
-                       min="0" max="10"
-                       name="workshop_{{ r.key }}"
-                       value="{{ r.workshop_level }}"
-                       style="width:60px;">
-              </td>
-              <td>{{ '%.2f'|format(r.workshop_pct) }}</td>
+  {% for r in rows %}
+  <tr>
+    <td>
+      <input type="checkbox"
+          name="run_{{r.key}}"
+          {% if r.selected %}checked{% endif %}>
+    </td>
 
-              <td>
-                <input type="number"
-                       min="0" max="4"
-                       name="workers_{{ r.key }}"
-                       value="{{ r.workers }}"
-                       style="width:60px;">
-              </td>
+    <td>{{ r.token }}</td>
+    <td>{{ r.level }}</td>
+    <td>{{ r.count }}</td>
 
-              <td>{{ '%.6f'|format(r.profit_hour_per) }}</td>
-              <td>{{ '%.6f'|format(r.profit_hour_total) }}</td>
-              <td>{{ '%.6f'|format(r.profit_day_total) }}</td>
-              <td>{{ '%.4f'|format(r.usd_hour_total) }}</td>
-            </tr>
-            {% endfor %}
-          </table>
+    <td>
+      <input type="number"
+        min="0" max="10"
+        name="mastery_{{ r.key }}"
+        value="{{ r.mastery_level }}"
+        style="width:60px;">
+    </td>
+
+    <td>{{ '%.2f'|format(r.yield_pct) }}</td>
+
+    <td>
+      <input type="number"
+        min="0" max="10"
+        name="workshop_{{ r.key }}"
+        value="{{ r.workshop_level }}"
+        style="width:60px;">
+    </td>
+
+    <td>{{ '%.2f'|format(r.workshop_pct) }}</td>
+
+    <td>
+      <input type="number"
+        min="0" max="4"
+        name="workers_{{ r.key }}"
+        value="{{ r.workers }}"
+        style="width:60px;">
+    </td>
+
+    <!-- NEW QUOTE VALUES -->
+    <td>{{ '%.6f'|format(r.cost_coin_per_craft) }}</td>
+    <td>{{ '%.6f'|format(r.value_coin_per_craft) }}</td>
+    <td>{{ '%.6f'|format(r.profit_coin_per_craft) }}</td>
+    <td>{{ '%.2f'|format(r.margin_pct) }}</td>
+
+    <td>{{ '%.6f'|format(r.profit_hour_per) }}</td>
+    <td>{{ '%.6f'|format(r.profit_hour_total) }}</td>
+    <td>{{ '%.6f'|format(r.profit_day_total) }}</td>
+    <td>{{ '%.4f'|format(r.usd_hour_total) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+
         </div>
 
 
@@ -6093,6 +6128,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
