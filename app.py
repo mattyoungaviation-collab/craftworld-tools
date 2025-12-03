@@ -2407,15 +2407,6 @@ def flex_planner():
         <h2>Upgrade requirements for this flex layout</h2>
         {% if summary_rows %}
           <table>
-
-
-      <div class="card" style="margin-top:10px;">
-        <h2>Upgrade requirements for this flex layout</h2>
-        {% if summary_rows %}
-          <table>
-
-        {% if summary_rows %}
-          <table>
             <tr>
               <th>Resource</th>
               <th>Needed</th>
@@ -6727,6 +6718,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
