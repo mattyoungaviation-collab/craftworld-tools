@@ -1651,7 +1651,11 @@ def dashboard():
 
         {% for row in price_rows %}
           <tr>
-            <td>{{ row.token }}</td>
+            <td>
+              <a href="{{ url_for('resource_view', token=row.token) }}">
+                {{ row.token }}
+              </a>
+            </td>
             <td>{{ '%.8f'|format(row.price) }}</td>
             <td>{{ '%.6f'|format(row.usd) }}</td>
           </tr>
@@ -1789,6 +1793,260 @@ def dashboard():
     )
     return html
 
+@app.route("/resource/<token>", methods=["GET"])
+def resource_view(token: str):
+    """
+    Detail view for a single resource token:
+    - current price (COIN + USD)
+    - how much you own (if UID set)
+    - which factories produce it
+    - which factories consume it
+    """
+    error = None
+    sym_raw = token or ""
+    sym = sym_raw.upper()
+
+    prices = {}
+    coin_usd = 0.0
+    uid = session.get("voya_uid")
+
+    # 1) Prices
+    try:
+        prices = fetch_live_prices_in_coin()
+        coin_usd = float(prices.get("_COIN_USD", 0.0))
+    except Exception as e:
+        error = f"Error fetching live prices: {e}"
+        prices = {}
+
+    price_coin = float(prices.get(sym, 0.0)) if prices else 0.0
+    price_usd = price_coin * coin_usd if coin_usd else 0.0
+
+    # 2) How much you own (inventory)
+    holding_amount = None
+    holding_value_coin = 0.0
+    holding_value_usd = 0.0
+
+    if uid:
+        try:
+            cw = fetch_craftworld(uid)
+            resources = attr_or_key(cw, "resources", []) or []
+            for r in resources:
+                rsym = str(attr_or_key(r, "symbol", "")).upper()
+                if rsym != sym:
+                    continue
+                try:
+                    amt = float(attr_or_key(r, "amount", 0) or 0.0)
+                except Exception:
+                    amt = 0.0
+                holding_amount = amt
+                holding_value_coin = amt * price_coin
+                holding_value_usd = holding_value_coin * coin_usd if coin_usd else 0.0
+                break
+        except Exception as e:
+            if error:
+                error = f"{error}\nError fetching inventory: {e}"
+            else:
+                error = f"Error fetching inventory: {e}"
+
+    # 3) Find producers & consumers from FACTORIES_FROM_CSV
+    producers: List[dict] = []
+    consumers: List[dict] = []
+
+    for fac_name, levels in FACTORIES_FROM_CSV.items():
+        for lvl, data in levels.items():
+            out_token = str(data.get("output_token", "")).upper()
+            duration_min = float(data.get("duration_min", 0.0) or 0.0)
+            inputs = data.get("inputs") or {}
+
+            # Producers = factories whose output_token == sym
+            if out_token == sym:
+                # Baseline calc: 100% yield, 1x speed, 0 workers
+                prof_hour = 0.0
+                prof_craft = 0.0
+                crafts_per_hour = 0.0
+                try:
+                    res = compute_factory_result_csv(
+                        FACTORIES_FROM_CSV,
+                        prices,
+                        fac_name,
+                        int(lvl),
+                        target_level=None,
+                        count=1,
+                        yield_pct=100.0,
+                        speed_factor=1.0,
+                        workers=0,
+                    )
+                    prof_hour = float(res.get("profit_coin_per_hour", 0.0))
+                    prof_craft = float(res.get("profit_coin_per_craft", 0.0))
+                    eff_dur = float(res.get("effective_duration", duration_min))
+                    if eff_dur > 0:
+                        crafts_per_hour = 60.0 / eff_dur
+                except Exception:
+                    pass
+
+                out_amount = float(data.get("output_amount", 0.0) or 0.0)
+                producers.append(
+                    {
+                        "factory": fac_name,
+                        "level": int(lvl),
+                        "duration_min": duration_min,
+                        "out_amount": out_amount,
+                        "profit_hour": prof_hour,
+                        "profit_craft": prof_craft,
+                        "crafts_per_hour": crafts_per_hour,
+                    }
+                )
+
+            # Consumers = factories that list sym in their inputs
+            uses_it = False
+            total_per_craft = 0.0
+            for in_tok, qty in inputs.items():
+                if str(in_tok).upper() == sym:
+                    uses_it = True
+                    total_per_craft += float(qty or 0.0)
+            if uses_it:
+                crafts_per_hour = 0.0
+                amount_per_hour = 0.0
+                cost_coin_per_craft = 0.0
+                if duration_min > 0:
+                    crafts_per_hour = 60.0 / duration_min
+                    amount_per_hour = crafts_per_hour * total_per_craft
+                cost_coin_per_craft = total_per_craft * price_coin
+                consumers.append(
+                    {
+                        "factory": fac_name,
+                        "level": int(lvl),
+                        "duration_min": duration_min,
+                        "amount_per_craft": total_per_craft,
+                        "amount_per_hour": amount_per_hour,
+                        "cost_coin_per_craft": cost_coin_per_craft,
+                    }
+                )
+
+    # Sort producers by profit/hr desc; consumers by amount/hr desc
+    producers.sort(key=lambda r: r["profit_hour"], reverse=True)
+    consumers.sort(key=lambda r: r["amount_per_hour"], reverse=True)
+
+    content = """
+    <div class="card">
+      <h1>🔍 Resource: {{ sym }}</h1>
+      <p class="subtle">
+        Price, holdings, and which factories produce or consume this resource (baseline: 100% yield, 1x speed).
+      </p>
+
+      <div style="display:flex; flex-wrap:wrap; gap:16px;">
+        <div>
+          <strong>Price:</strong><br>
+          {{ '%.8f'|format(price_coin) }} COIN<br>
+          {{ '%.6f'|format(price_usd) }} USD
+        </div>
+        <div>
+          <strong>COIN → USD:</strong><br>
+          {{ '%.6f'|format(coin_usd) }} USD / COIN
+        </div>
+        <div>
+          {% if uid %}
+            <strong>Your holdings:</strong><br>
+            {% if holding_amount is not none %}
+              {{ '%.6f'|format(holding_amount) }} {{ sym }}<br>
+              {{ '%.6f'|format(holding_value_coin) }} COIN<br>
+              {{ '%.6f'|format(holding_value_usd) }} USD
+            {% else %}
+              <span class="subtle">No {{ sym }} found in inventory.</span>
+            {% endif %}
+          {% else %}
+            <span class="subtle">Set your UID on Overview to see your holdings.</span>
+          {% endif %}
+        </div>
+        <div>
+          <a href="{{ url_for('dashboard') }}" class="pill">⬅ Back to Dashboard</a>
+        </div>
+      </div>
+    </div>
+
+    {% if error %}
+      <div class="card">
+        <div class="error" style="margin:0; white-space:pre-wrap;">{{ error }}</div>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <h2>🏭 Factories that PRODUCE {{ sym }}</h2>
+      {% if producers %}
+        <table>
+          <tr>
+            <th>Factory</th>
+            <th>Level</th>
+            <th>Output / craft</th>
+            <th>Duration (min)</th>
+            <th>Crafts / hour</th>
+            <th>Profit / craft (COIN)</th>
+            <th>Profit / hour (COIN)</th>
+          </tr>
+          {% for p in producers %}
+            <tr>
+              <td>{{ p.factory }}</td>
+              <td>L{{ p.level }}</td>
+              <td>{{ '%.4f'|format(p.out_amount) }}</td>
+              <td>{{ '%.2f'|format(p.duration_min) }}</td>
+              <td>{{ '%.4f'|format(p.crafts_per_hour) }}</td>
+              <td>{{ '%+.6f'|format(p.profit_craft) }}</td>
+              <td>{{ '%+.6f'|format(p.profit_hour) }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      {% else %}
+        <p class="subtle">No factories found that output {{ sym }} directly.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>⚙️ Factories that CONSUME {{ sym }}</h2>
+      {% if consumers %}
+        <table>
+          <tr>
+            <th>Factory</th>
+            <th>Level</th>
+            <th>Uses / craft</th>
+            <th>Uses / hour</th>
+            <th>Cost / craft (COIN)</th>
+          </tr>
+          {% for c in consumers %}
+            <tr>
+              <td>{{ c.factory }}</td>
+              <td>L{{ c.level }}</td>
+              <td>{{ '%.4f'|format(c.amount_per_craft) }}</td>
+              <td>{{ '%.4f'|format(c.amount_per_hour) }}</td>
+              <td>{{ '%.6f'|format(c.cost_coin_per_craft) }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      {% else %}
+        <p class="subtle">No factories found that use {{ sym }} as an input.</p>
+      {% endif %}
+    </div>
+    """
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=render_template_string(
+            content,
+            sym=sym,
+            uid=uid,
+            price_coin=price_coin,
+            price_usd=price_usd,
+            coin_usd=coin_usd,
+            holding_amount=holding_amount,
+            holding_value_coin=holding_value_coin,
+            holding_value_usd=holding_value_usd,
+            error=error,
+            producers=producers,
+            consumers=consumers,
+        ),
+        active_page="dashboard",  # keep Dashboard highlighted
+        has_uid=has_uid_flag(),
+    )
+    return html
 
 
 
@@ -7427,6 +7685,7 @@ def calculate():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
