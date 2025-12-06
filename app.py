@@ -572,25 +572,24 @@ app.secret_key = "craftworld-tools-demo-secret"  # for session
 
 @app.context_processor
 def inject_nav_user():
+    """
+    Provide `nav_profile` and `nav_avatar_url` to all templates.
+    Uses profileByUID, which does not require the authenticated account scope.
+    """
     uid = session.get("voya_uid")
     prof = None
+    avatar_url = None
+
     if uid:
         try:
             prof = fetch_profile_by_uid(uid)
+            raw = (prof.get("avatarUrl") or "").strip()
+            if raw:
+                avatar_url = normalize_avatar_url(raw)
         except Exception as e:
             print("[inject_nav_user] profile error:", e, flush=True)
-
-    avatar_url = None
-    try:
-        avatars = fetch_available_avatars()
-        for av in avatars:
-            raw = (av.get("avatarUrl") or "").strip()
-            if not raw:
-                continue
-            avatar_url = normalize_avatar_url(raw)
-            break
-    except Exception as e:
-        print("[inject_nav_user] avatar error:", e, flush=True)
+            prof = None
+            avatar_url = None
 
     print("[inject_nav_user] nav_avatar_url:", avatar_url, flush=True)
 
@@ -598,6 +597,7 @@ def inject_nav_user():
         "nav_profile": prof,
         "nav_avatar_url": avatar_url,
     }
+
 
 
 
@@ -1190,12 +1190,23 @@ BASE_TEMPLATE = """
 
 {% if session.get('username') %}
   {% set uname = session['username'] %}
-  {% set label = uname %}
+  {# Prefer Craft World displayName if we have a profile #}
+  {% if nav_profile and nav_profile.displayName %}
+    {% set label = nav_profile.displayName %}
+  {% else %}
+    {% set label = uname %}
+  {% endif %}
   {% set initial = (label or '?')[:1] %}
 
   <span class="nav-user">
     <span class="mp-avatar" style="width:22px;height:22px;">
-      <img src="https://craft-world.gg/avatars/ducky-dyno.png" alt="TEST AVATAR" />
+      {% if nav_avatar_url %}
+        <img src="{{ nav_avatar_url }}" alt="Avatar for {{ label }}">
+      {% else %}
+        <span class="mp-avatar-fallback">
+          {{ initial|upper }}
+        </span>
+      {% endif %}
     </span>
     {{ label }}
   </span>
@@ -8554,6 +8565,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
