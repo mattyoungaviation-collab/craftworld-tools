@@ -1940,7 +1940,7 @@ def dashboard():
       <div class="card">
         <h2>Account Snapshot</h2>
         <p class="subtle">
-          Enter your Voya UID on the <strong>Overview</strong> tab, then come back here
+          Enter your Account UID on the <strong>Overview</strong> tab, then come back here
           to see your inventory, factories, profit estimates, and suggested upgrades.
         </p>
       </div>
@@ -2255,7 +2255,7 @@ def profitability():
         <div class="card">
           <h1>Profitability (Locked)</h1>
           <p class="subtle">
-            Enter your Voya UID on the <strong>Overview</strong> tab to unlock
+            Enter your Account UID on the <strong>Overview</strong> tab to unlock
             automatic factory list. Mastery & Workshop are set manually here.
           </p>
         </div>
@@ -2882,7 +2882,7 @@ def flex_planner():
         <div class="card">
           <h1>Flex Planner (Locked)</h1>
           <p class="subtle">
-            Enter your Voya UID on the <strong>Overview</strong> tab to unlock
+            Enter your Account UID on the <strong>Overview</strong> tab to unlock
             automatic inventory loading for the Flex Planner.
           </p>
         </div>
@@ -3770,7 +3770,7 @@ def inventory_view():
         <div class="card">
           <h1>Inventory</h1>
           <p class="subtle">
-            Enter your Voya UID on the <strong>Overview</strong> tab to unlock
+            Enter your Account UID on the <strong>Overview</strong> tab to unlock
             the Inventory view.
           </p>
         </div>
@@ -8488,6 +8488,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
