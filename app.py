@@ -571,52 +571,35 @@ app = Flask(__name__)
 app.secret_key = "craftworld-tools-demo-secret"  # for session
 
 @app.context_processor
-def inject_nav_avatar():
-    """
-    Provide `nav_avatar_url` to all templates.
-    Chooses a 'best' avatar from account.availableAvatars.
-    """
-    avatar_url: Optional[str] = None
-    try:
-        avatars = fetch_available_avatars()
-        # Prefer https URLs first
-        for av in avatars:
-            raw = (av.get("avatarUrl") or "").strip()
-            if not raw:
-                continue
-            if raw.startswith("http://") or raw.startswith("https://"):
-                avatar_url = normalize_avatar_url(raw)
-                break
-
-        # If still none, fall back to an ipfs:// avatar if present
-        if avatar_url is None:
-            for av in avatars:
-                raw = (av.get("avatarUrl") or "").strip()
-                if not raw:
-                    continue
-                if raw.startswith("ipfs://"):
-                    avatar_url = normalize_avatar_url(raw)
-                    break
-    except Exception:
-        avatar_url = None
-
-    return {"nav_avatar_url": avatar_url}
-
-
-@app.context_processor
-def inject_nav_profile():
-    """
-    Make the Craft World profile (avatar, displayName, etc.) available
-    to all templates as `nav_profile`.
-    """
+def inject_nav_user():
     uid = session.get("voya_uid")
     prof = None
     if uid:
         try:
             prof = fetch_profile_by_uid(uid)
-        except Exception:
-            prof = None
-    return {"nav_profile": prof}
+        except Exception as e:
+            print("[inject_nav_user] profile error:", e, flush=True)
+
+    avatar_url = None
+    try:
+        avatars = fetch_available_avatars()
+        for av in avatars:
+            raw = (av.get("avatarUrl") or "").strip()
+            if not raw:
+                continue
+            avatar_url = normalize_avatar_url(raw)
+            break
+    except Exception as e:
+        print("[inject_nav_user] avatar error:", e, flush=True)
+
+    print("[inject_nav_user] nav_avatar_url:", avatar_url, flush=True)
+
+    return {
+        "nav_profile": prof,
+        "nav_avatar_url": avatar_url,
+    }
+
+
 
 
 # -------- Helper: do we have a UID stored? --------
@@ -769,49 +752,44 @@ BASE_TEMPLATE = """
       background: rgba(15, 23, 42, 0.9) !important;
     }
 
-    .nav-user {
-      padding-left: 8px;
-      font-size: 13px;
-      color: var(--text-soft);
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
+.nav-user {
+  padding-left: 8px;
+  font-size: 13px;
+  color: var(--text-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 
-    .nav-avatar {
-      width: 22px;
-      height: 22px;
-      border-radius: 999px;
-      overflow: hidden;
-      border: 1px solid rgba(148, 163, 184, 0.75);
-      box-shadow: 0 0 12px rgba(15, 23, 42, 0.9);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      background: radial-gradient(circle at 30% 30%, #020617, #1e293b);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: #e5e7eb;
-    }
+.mp-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.75);
+  box-shadow: 0 0 12px rgba(15, 23, 42, 0.9);
+  flex-shrink: 0;
+  background: radial-gradient(circle at 30% 30%, #020617, #1e293b);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
-    .nav-avatar img {
-      width: 100%;
-      height: 100%;
-      display: block;
-      object-fit: cover;
-    }
+.mp-avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
 
+.mp-avatar-fallback {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #e5e7eb;
+}
 
-    .mp-avatar-fallback {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: #e5e7eb;
-    }
 
 
     /* Main page layout */
@@ -1210,37 +1188,24 @@ BASE_TEMPLATE = """
       <a href="{{ url_for('trees') }}" class="{{ 'active' if active_page=='trees' else '' }}">Trees</a>
 
 
-      {% if session.get('username') %}
-        {% set uname = session['username'] %}
-        {# Prefer Craft World displayName if we have a profile #}
-        {% if nav_profile and nav_profile.displayName %}
-          {% set label = nav_profile.displayName %}
-        {% else %}
-          {% set label = uname %}
-        {% endif %}
-        {% set initial = (label or '?')[:1] %}
+{% if session.get('username') %}
+  {% set uname = session['username'] %}
+  {% set label = uname %}
+  {% set initial = (label or '?')[:1] %}
 
-        <span class="nav-user">
-          <span class="mp-avatar" style="width:22px;height:22px;">
-            {# Prefer normalized account avatar (availableAvatars); fall back to profile avatar; then initials #}
-            {% if nav_avatar_url %}
-              <img src="{{ nav_avatar_url }}" alt="Avatar for {{ label }}">
-            {% elif nav_profile and nav_profile.avatarUrl %}
-              <img src="{{ nav_profile.avatarUrl }}" alt="Avatar for {{ label }}">
-            {% else %}
-              <span class="mp-avatar-fallback">
-                {{ initial|upper }}
-              </span>
-            {% endif %}
-          </span>
-          {{ label }}
-        </span>
-        <a href="{{ url_for('logout') }}">Logout</a>
-      {% else %}
-        <a href="{{ url_for('login') }}" class="{{ 'active' if active_page=='login' else '' }}">Login</a>
-      {% endif %}
+  <span class="nav-user">
+    <span class="mp-avatar" style="width:22px;height:22px;">
+      <img src="https://craft-world.gg/avatars/ducky-dyno.png" alt="TEST AVATAR" />
+    </span>
+    {{ label }}
+  </span>
+  <a href="{{ url_for('logout') }}">Logout</a>
+{% else %}
+  <a href="{{ url_for('login') }}" class="{{ 'active' if active_page=='login' else '' }}">Login</a>
+{% endif %}
     </div>
   </div>
+
 
 
   <!-- Donate popup for server support -->
@@ -8589,6 +8554,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
