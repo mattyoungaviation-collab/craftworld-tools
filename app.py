@@ -7010,6 +7010,14 @@ def snipe():
     target_result: Optional[Dict[str, Any]] = None
     combo_result: Optional[Dict[str, Any]] = None
 
+    # ----- Load masterpieces for dropdowns -----
+    masterpieces_data: List[Dict[str, Any]] = []
+    try:
+        masterpieces_data = fetch_masterpieces()
+    except Exception as e:
+        error = f"Error fetching masterpieces: {e}"
+        masterpieces_data = []
+
     # Build a lookup by ID and compute the highest MP ID we know about,
     # just like the Masterpiece Hub does.
     mp_by_id: Dict[int, Dict[str, Any]] = {}
@@ -7065,14 +7073,16 @@ def snipe():
             mp_choices.append({"id": mid, "label": f"{name} (ID {mid})"})
     else:
         # Fallback: if for some reason we have no max_mp_id, use raw list.
-        mp_choices = [
-            {
-                "id": mp.get("id"),
-                "label": f"{mp.get('name') or (mp.get('type') or f'MP {mp.get('id')}')} (ID {mp.get('id')})",
-            }
-            for mp in masterpieces_data
-            if mp.get("id")
-        ]
+        for mp in masterpieces_data:
+            mid = mp.get("id")
+            if not mid:
+                continue
+            name = mp.get("name") or mp.get("type") or f"MP {mid}"
+            mp_choices.append({
+                "id": mid,
+                "label": f"{name} (ID {mid})",
+            })
+
 
 
     selected_mp_id: Optional[int] = None
@@ -8439,6 +8449,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
