@@ -7081,7 +7081,18 @@ def snipe():
                     target_points = float(target_entry.get("masterpiecePoints") or 0.0)
                     points_needed = max(0.0, target_points + 1.0 - my_points)
 
+                    # Base resources from the masterpiece
                     resources = mp.get("resources") or []
+
+                    # NEW: if this masterpiece doesn’t expose resources (e.g. event MP),
+                    # build a synthetic list from ALL_FACTORY_TOKENS so we still
+                    # get names + per-unit battery/points via predictReward.
+                    if not resources:
+                        resources = [
+                            {"symbol": sym, "amount": 0.0, "target": float("inf")}
+                            for sym in ALL_FACTORY_TOKENS
+                        ]
+
                     options: List[Dict[str, Any]] = []
 
                     for r in resources:
@@ -7091,6 +7102,7 @@ def snipe():
                         remaining = max(0.0, target_amt - current_amt)
                         if remaining <= 0:
                             continue
+
 
                         pr = predict_reward(
                             selected_mp_id,
@@ -7233,7 +7245,16 @@ def snipe():
 
                     points_needed = max(0.0, target_points_input)
 
+                    # Base resources from the masterpiece
                     resources = mp.get("resources") or []
+
+                    # NEW: fallback for event MPs with no explicit resources list
+                    if not resources:
+                        resources = [
+                            {"symbol": sym, "amount": 0.0, "target": float("inf")}
+                            for sym in ALL_FACTORY_TOKENS
+                        ]
+
                     options: List[Dict[str, Any]] = []
 
                     for r in resources:
@@ -8365,6 +8386,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
