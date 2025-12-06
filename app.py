@@ -1065,8 +1065,6 @@ BASE_TEMPLATE = """
     }
   </style>
 
-  </style>
-
 </head>
 <body>
   <div class="nav">
@@ -1137,11 +1135,6 @@ BASE_TEMPLATE = """
       </button>
     </div>
   </div>
-
-  <div class="container">
-    {{ content|safe }}
-  </div>
-
 
   <div class="container">
     {{ content|safe }}
@@ -8372,6 +8365,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
