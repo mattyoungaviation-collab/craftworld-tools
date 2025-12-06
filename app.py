@@ -1159,62 +1159,64 @@ BASE_TEMPLATE = """
 </head>
 <body>
   <div class="nav">
-    <div class="nav-title">CraftWorld Tools</div>
-  <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
+    <div class="nav-inner">
+      <div class="nav-title">
+        <span class="logo-dot"></span>
+        CraftWorld Tools
+      </div>
 
-  {% if has_uid %}
-    <a href="{{ url_for('dashboard') }}" class="{{ 'active' if active_page=='dashboard' else '' }}">Dashboard</a>
-    <a href="{{ url_for('inventory_view') }}" class="{{ 'active' if active_page=='inventory' else '' }}">Inventory</a>
-  {% else %}
-    <span class="nav-disabled">Dashboard</span>
-    <span class="nav-disabled">Inventory</span>
-  {% endif %}
+      <div class="nav-links">
+        <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
 
+        {% if has_uid %}
+          <a href="{{ url_for('dashboard') }}" class="{{ 'active' if active_page=='dashboard' else '' }}">Dashboard</a>
+          <a href="{{ url_for('inventory_view') }}" class="{{ 'active' if active_page=='inventory' else '' }}">Inventory</a>
+        {% else %}
+          <span class="nav-disabled">Dashboard</span>
+          <span class="nav-disabled">Inventory</span>
+        {% endif %}
 
+        {% if has_uid %}
+          <a href="{{ url_for('profitability') }}" class="{{ 'active' if active_page=='profit' else '' }}">Profitability</a>
+          <a href="{{ url_for('flex_planner') }}" class="{{ 'active' if active_page=='flex' else '' }}">Flex Planner</a>
+        {% else %}
+          <span class="nav-disabled">Profitability</span>
+          <span class="nav-disabled">Flex Planner</span>
+        {% endif %}
 
+        <a href="{{ url_for('boosts') }}" class="{{ 'active' if active_page=='boosts' else '' }}">Boosts</a>
+        <a href="{{ url_for('mastery_view') }}" class="{{ 'active' if active_page=='mastery' else '' }}">Mastery</a>
+        <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
+        <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
+        <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
+        <a href="{{ url_for('trees') }}" class="{{ 'active' if active_page=='trees' else '' }}">Trees</a>
 
-      {% if has_uid %}
-        <a href="{{ url_for('profitability') }}" class="{{ 'active' if active_page=='profit' else '' }}">Profitability</a>
-        <a href="{{ url_for('flex_planner') }}" class="{{ 'active' if active_page=='flex' else '' }}">Flex Planner</a>
-      {% else %}
-        <span class="nav-disabled">Profitability</span>
-        <span class="nav-disabled">Flex Planner</span>
-      {% endif %}
+        {% if session.get('username') %}
+          {% set uname = session['username'] %}
+          {% if nav_profile and nav_profile.displayName %}
+            {% set label = nav_profile.displayName %}
+          {% else %}
+            {% set label = uname %}
+          {% endif %}
+          {% set initial = (label or '?')[:1] %}
 
-      <a href="{{ url_for('boosts') }}" class="{{ 'active' if active_page=='boosts' else '' }}">Boosts</a>
-      <a href="{{ url_for('mastery_view') }}" class="{{ 'active' if active_page=='mastery' else '' }}">Mastery</a>
-      <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
-      <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
-      <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
-      <a href="{{ url_for('trees') }}" class="{{ 'active' if active_page=='trees' else '' }}">Trees</a>
-
-
-{% if session.get('username') %}
-  {% set uname = session['username'] %}
-  {# Prefer Craft World displayName if we have a profile #}
-  {% if nav_profile and nav_profile.displayName %}
-    {% set label = nav_profile.displayName %}
-  {% else %}
-    {% set label = uname %}
-  {% endif %}
-  {% set initial = (label or '?')[:1] %}
-
-  <span class="nav-user">
-    <span class="mp-avatar">
-      {% if nav_avatar_url %}
-        <img src="{{ nav_avatar_url }}" alt="Avatar for {{ label }}">
-      {% else %}
-        <span class="mp-avatar-fallback">
-          {{ initial|upper }}
-        </span>
-      {% endif %}
-    </span>
-    {{ label }}
-  </span>
-  <a href="{{ url_for('logout') }}">Logout</a>
-{% else %}
-  <a href="{{ url_for('login') }}" class="{{ 'active' if active_page=='login' else '' }}">Login</a>
-{% endif %}
+          <span class="nav-user">
+            <span class="mp-avatar">
+              {% if nav_avatar_url %}
+                <img src="{{ nav_avatar_url }}" alt="Avatar for {{ label }}">
+              {% else %}
+                <span class="mp-avatar-fallback">
+                  {{ initial|upper }}
+                </span>
+              {% endif %}
+            </span>
+            <span class="nav-username">{{ label }}</span>
+          </span>
+          <a href="{{ url_for('logout') }}">Logout</a>
+        {% else %}
+          <a href="{{ url_for('login') }}" class="{{ 'active' if active_page=='login' else '' }}">Login</a>
+        {% endif %}
+      </div>
     </div>
   </div>
 
@@ -8566,6 +8568,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
