@@ -758,12 +758,12 @@ BASE_TEMPLATE = """
   color: var(--text-soft);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 
 .mp-avatar {
-  width: 24px;
-  height: 24px;
+  width: 66px;  
+  height: 66px; 
   border-radius: 999px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.75);
@@ -774,6 +774,7 @@ BASE_TEMPLATE = """
   align-items: center;
   justify-content: center;
 }
+
 
 .mp-avatar img {
   width: 100%;
@@ -1199,7 +1200,7 @@ BASE_TEMPLATE = """
   {% set initial = (label or '?')[:1] %}
 
   <span class="nav-user">
-    <span class="mp-avatar" style="width:22px;height:22px;">
+    <span class="mp-avatar">
       {% if nav_avatar_url %}
         <img src="{{ nav_avatar_url }}" alt="Avatar for {{ label }}">
       {% else %}
@@ -8565,6 +8566,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
