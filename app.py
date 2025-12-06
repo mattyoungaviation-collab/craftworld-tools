@@ -7010,17 +7010,70 @@ def snipe():
     target_result: Optional[Dict[str, Any]] = None
     combo_result: Optional[Dict[str, Any]] = None
 
-    # Load all masterpieces once for dropdowns
-    masterpieces_data: List[Dict[str, Any]] = []
-    try:
-        masterpieces_data = fetch_masterpieces()
-    except Exception as e:
-        error = f"Error fetching masterpieces: {e}"
+    # Build a lookup by ID and compute the highest MP ID we know about,
+    # just like the Masterpiece Hub does.
+    mp_by_id: Dict[int, Dict[str, Any]] = {}
+    max_mp_id = 0
+    for mp in masterpieces_data:
+        try:
+            mid = int(mp.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if mid > 0:
+            mp_by_id[mid] = mp
+            if mid > max_mp_id:
+                max_mp_id = mid
 
-    mp_choices = [
-        {"id": mp["id"], "label": f"{mp['name']} (ID {mp['id']})"}
-        for mp in masterpieces_data
-    ]
+    # Seed the metadata cache with the list we just fetched.
+    for mp in masterpieces_data:
+        try:
+            cache_masterpiece_metadata(mp)
+        except Exception:
+            pass
+
+    # Merge cached metadata back into mp_by_id and extend max_mp_id if needed.
+    try:
+        mp_cache = load_masterpiece_metadata_cache()
+    except Exception:
+        mp_cache = {}
+
+    for mid, meta in mp_cache.items():
+        if mid in mp_by_id:
+            base = dict(mp_by_id[mid])
+            # Overlay stored fields without blowing away other keys.
+            for key, val in meta.items():
+                if val not in (None, ""):
+                    base[key] = val
+            mp_by_id[mid] = base
+        else:
+            mp_by_id[mid] = dict(meta)
+        if mid > max_mp_id:
+            max_mp_id = mid
+
+    # Finally, build MP choices as MP 1..max_mp_id so Snipe sees *all* MPs.
+    mp_choices: List[Dict[str, Any]] = []
+    if max_mp_id > 0:
+        for mid in range(1, max_mp_id + 1):
+            mp = mp_by_id.get(mid, {"id": mid})
+            name = (
+                mp.get("name")
+                or mp.get("addressable_label")
+                or mp.get("addressableLabel")
+                or mp.get("type")
+                or f"MP {mid}"
+            )
+            mp_choices.append({"id": mid, "label": f"{name} (ID {mid})"})
+    else:
+        # Fallback: if for some reason we have no max_mp_id, use raw list.
+        mp_choices = [
+            {
+                "id": mp.get("id"),
+                "label": f"{mp.get('name') or (mp.get('type') or f'MP {mp.get('id')}')} (ID {mp.get('id')})",
+            }
+            for mp in masterpieces_data
+            if mp.get("id")
+        ]
+
 
     selected_mp_id: Optional[int] = None
     target_rank: int = 25
@@ -8386,6 +8439,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
