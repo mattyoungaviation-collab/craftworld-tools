@@ -546,6 +546,21 @@ def save_boost_levels(levels: dict[str, dict[str, int]]) -> None:
 app = Flask(__name__)
 app.secret_key = "craftworld-tools-demo-secret"  # for session
 
+@app.context_processor
+def inject_nav_profile():
+    """
+    Make the Craft World profile (avatar, displayName, etc.) available
+    to all templates as `nav_profile`.
+    """
+    uid = session.get("voya_uid")
+    prof = None
+    if uid:
+        try:
+            prof = fetch_profile_by_uid(uid)
+        except Exception:
+            prof = None
+    return {"nav_profile": prof}
+
 
 # -------- Helper: do we have a UID stored? --------
 def has_uid_flag() -> bool:
@@ -701,7 +716,41 @@ BASE_TEMPLATE = """
       padding-left: 8px;
       font-size: 13px;
       color: var(--text-soft);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
+
+    /* Tiny round avatar used in nav + tables */
+    .mp-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.75);
+      box-shadow: 0 0 12px rgba(15, 23, 42, 0.9);
+      flex-shrink: 0;
+      background: radial-gradient(circle at 30% 30%, #020617, #1e293b);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .mp-avatar img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    .mp-avatar-fallback {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #e5e7eb;
+    }
+
 
     /* Main page layout */
     .page {
@@ -1100,8 +1149,27 @@ BASE_TEMPLATE = """
 
 
       {% if session.get('username') %}
-        <span class="nav-user">👤 {{ session['username'] }}</span>
-  <a href="{{ url_for('logout') }}">Logout</a>
+        {% set uname = session['username'] %}
+        {% if nav_profile and nav_profile.displayName %}
+          {% set label = nav_profile.displayName %}
+        {% else %}
+          {% set label = uname %}
+        {% endif %}
+        {% set initial = (label or '?')[:1] %}
+
+        <span class="nav-user">
+          <span class="mp-avatar" style="width:22px;height:22px;">
+            {% if nav_profile and nav_profile.avatarUrl %}
+              <img src="{{ nav_profile.avatarUrl }}" alt="Avatar for {{ label }}">
+            {% else %}
+              <span class="mp-avatar-fallback">
+                {{ initial|upper }}
+              </span>
+            {% endif %}
+          </span>
+          {{ label }}
+        </span>
+        <a href="{{ url_for('logout') }}">Logout</a>
       {% else %}
         <a href="{{ url_for('login') }}" class="{{ 'active' if active_page=='login' else '' }}">Login</a>
       {% endif %}
@@ -8454,6 +8522,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
