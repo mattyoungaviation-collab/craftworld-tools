@@ -961,6 +961,110 @@ BASE_TEMPLATE = """
     .flex-layout-title span.emoji {
       font-size: 18px;
     }
+
+    /* --- Donate popup styles --- */
+    .donate-toast {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      z-index: 9999;
+      max-width: 360px;
+      background: radial-gradient(circle at top left, rgba(92,242,255,0.18), transparent 55%),
+                  rgba(15, 23, 42, 0.98);
+      border-radius: 16px;
+      border: 1px solid rgba(92, 242, 255, 0.35);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.75);
+      padding: 10px 12px;
+      display: none; /* hidden until JS shows it after 30s */
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-soft);
+    }
+
+    .donate-toast-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .donate-toast-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      color: var(--text-main);
+      font-size: 13px;
+    }
+
+    .donate-toast-title span.icon {
+      font-size: 16px;
+    }
+
+    .donate-toast-body {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .donate-toast-code {
+      font-family: monospace;
+      font-size: 11px;
+      padding: 4px 6px;
+      border-radius: 10px;
+      background: rgba(15,23,42,0.95);
+      border: 1px solid rgba(148,163,184,0.45);
+      word-break: break-all;
+    }
+
+    .donate-toast-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-top: 2px;
+      flex-wrap: wrap;
+    }
+
+    .donate-toast-small {
+      font-size: 11px;
+      opacity: 0.9;
+    }
+
+    .donate-toast button.donate-copy-btn {
+      border-radius: var(--radius-pill);
+      border: 1px solid transparent;
+      padding: 5px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+      background: linear-gradient(120deg, var(--accent), var(--accent-strong));
+      color: #020617;
+      box-shadow: 0 10px 26px rgba(92, 242, 255, 0.55);
+      transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, filter 0.12s ease-out;
+      white-space: nowrap;
+    }
+
+    .donate-toast button.donate-copy-btn:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.04);
+      box-shadow: 0 16px 38px rgba(92, 242, 255, 0.65);
+    }
+
+    .donate-toast button.donate-close-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-soft);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 4px;
+      line-height: 1;
+    }
+  </style>
+
   </style>
 
 </head>
@@ -998,19 +1102,97 @@ BASE_TEMPLATE = """
 
       {% if session.get('username') %}
         <span class="nav-user">👤 {{ session['username'] }}</span>
-        <a href="{{ url_for('logout') }}">Logout</a>
+  <a href="{{ url_for('logout') }}">Logout</a>
       {% else %}
         <a href="{{ url_for('login') }}" class="{{ 'active' if active_page=='login' else '' }}">Login</a>
       {% endif %}
     </div>
   </div>
 
+  <!-- Donate popup for server support -->
+  <div id="donate-toast" class="donate-toast">
+    <div class="donate-toast-header">
+      <div class="donate-toast-title">
+        <span class="icon">💾</span>
+        <span>Help keep the server online</span>
+      </div>
+      <button class="donate-close-btn" id="donate-close-btn" title="Hide">
+        ✕
+      </button>
+    </div>
+    <div class="donate-toast-body">
+      <div class="donate-toast-small">
+        If this app helps you with Craft World and you want to chip in for hosting:
+      </div>
+      <div class="donate-toast-code">
+        0xeED0491B506C78EA7fD10988B1E98A3C88e1C630
+      </div>
+    </div>
+    <div class="donate-toast-actions">
+      <div class="donate-toast-small">
+        Ronin / EVM-compatible wallet – any support is appreciated. 🦖
+      </div>
+      <button type="button" class="donate-copy-btn" id="donate-copy-btn">
+        Copy address
+      </button>
+    </div>
+  </div>
+
   <div class="container">
     {{ content|safe }}
   </div>
+
+
+  <div class="container">
+    {{ content|safe }}
+  </div>
+
+  <script>
+    (function () {
+      const WALLET_ADDR = '0xeED0491B506C78EA7fD10988B1E98A3C88e1C630';
+
+      window.addEventListener('DOMContentLoaded', function () {
+        const toast = document.getElementById('donate-toast');
+        const closeBtn = document.getElementById('donate-close-btn');
+        const copyBtn = document.getElementById('donate-copy-btn');
+
+        if (!toast) return;
+
+        // Wait 30 seconds before showing
+        setTimeout(function () {
+          toast.style.display = 'flex'; // appears at bottom of every page
+        }, 30000); // 30,000 ms = 30 sec
+
+        if (closeBtn) {
+          closeBtn.addEventListener('click', function () {
+            toast.style.display = 'none';
+          });
+        }
+
+        if (copyBtn) {
+          copyBtn.addEventListener('click', function () {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(WALLET_ADDR).then(function () {
+                const original = copyBtn.textContent;
+                copyBtn.textContent = 'Copied!';
+                setTimeout(function () {
+                  copyBtn.textContent = original;
+                }, 1500);
+              }).catch(function () {
+                alert('Wallet address: ' + WALLET_ADDR);
+              });
+            } else {
+              alert('Wallet address: ' + WALLET_ADDR);
+            }
+          });
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
 """
+
 
 
 
@@ -8190,6 +8372,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
