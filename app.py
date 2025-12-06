@@ -7166,7 +7166,6 @@ def snipe():
                         if remaining <= 0:
                             continue
 
-
                         pr = predict_reward(
                             selected_mp_id,
                             [{"symbol": symbol, "amount": 1}],
@@ -7175,7 +7174,9 @@ def snipe():
                         battery_per_unit = float(pr.get("requiredPower") or 0.0)
                         price_coin = float(prices.get(symbol, 0.0))
 
-                        if pts_per_unit <= 0 or price_coin <= 0:
+                        # Require the resource to give MP points,
+                        # but allow price_coin == 0 (no price data).
+                        if pts_per_unit <= 0:
                             continue
 
                         units_needed = math.ceil(points_needed / pts_per_unit) if points_needed > 0 else 0
@@ -7204,6 +7205,7 @@ def snipe():
                             "enough": enough,
                             "max_points": max_points,
                         })
+
 
                     options.sort(key=lambda o: o["coin_cost"] if o["coin_cost"] > 0 else 1e18)
 
@@ -7319,7 +7321,7 @@ def snipe():
                         ]
 
                     options: List[Dict[str, Any]] = []
-
+                    
                     for r in resources:
                         symbol = (r.get("symbol") or "").upper()
                         current_amt = float(r.get("amount") or 0.0)
@@ -7336,7 +7338,8 @@ def snipe():
                         battery_per_unit = float(pr.get("requiredPower") or 0.0)
                         price_coin = float(prices.get(symbol, 0.0))
 
-                        if pts_per_unit <= 0 or price_coin <= 0:
+                        # ALLOW price_coin == 0 (event resources without price data)
+                        if pts_per_unit <= 0:
                             continue
 
                         units_needed = math.ceil(points_needed / pts_per_unit) if points_needed > 0 else 0
@@ -7365,6 +7368,7 @@ def snipe():
                             "enough": enough,
                             "max_points": max_points,
                         })
+
 
                     options.sort(key=lambda o: o["coin_cost"] if o["coin_cost"] > 0 else 1e18)
 
@@ -8449,6 +8453,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
