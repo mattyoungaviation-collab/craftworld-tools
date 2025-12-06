@@ -114,6 +114,7 @@ def fetch_proficiencies() -> dict[str, dict]:
         }
     return result
 
+
 def fetch_profile_by_uid(uid: str) -> Dict[str, Any]:
     """
     Fetch Craft World profile for a given UID (avatar, display name, badges, etc).
@@ -139,6 +140,32 @@ def fetch_profile_by_uid(uid: str) -> Dict[str, Any]:
     return data.get("profileByUID") or {}
 
 
+# 👇👇 ADD THIS BLOCK *RIGHT HERE* 👇👇
+def fetch_available_avatars() -> List[Dict[str, Any]]:
+    """
+    Fetch the list of avatars available for the current account.
+
+    Returns a list like:
+      [
+        { "avatarUrl": "...", "isEns": False },
+        ...
+      ]
+    """
+    query = """
+    query AccountAvailableAvatars {
+      account {
+        availableAvatars {
+          avatarUrl
+          isEns
+        }
+      }
+    }
+    """
+    data = call_graphql(query, None)
+    account = data.get("account") or {}
+    return account.get("availableAvatars") or []
+# 👆👆 END NEW BLOCK 👆👆
+
 
 def fetch_workshop_levels() -> dict[str, int]:
     """
@@ -162,6 +189,20 @@ def fetch_workshop_levels() -> dict[str, int]:
       }
     }
     """
+
+    data = call_graphql(query, None)
+    account = data.get("account") or {}
+    ws_list = account.get("workshop") or []
+
+    result: dict[str, int] = {}
+    for w in ws_list:
+        symbol = (w.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        level = int(w.get("level") or 0)
+        result[symbol] = level
+    return result
+
 
     data = call_graphql(query, None)
     account = data.get("account") or {}
@@ -463,6 +504,7 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
 
