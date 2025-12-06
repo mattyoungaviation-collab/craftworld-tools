@@ -20,10 +20,33 @@ from craftworld_api import (
     fetch_available_avatars,
 )
 
+
+def normalize_avatar_url(raw: Optional[str]) -> Optional[str]:
+    """
+    Normalize Craft World avatar URLs so the browser can display them.
+
+    - If it's already http(s), return as-is.
+    - If it's ipfs://CID/path, convert to https://ipfs.io/ipfs/CID/path
+    """
+    if not raw:
+        return None
+    url = raw.strip()
+    if not url:
+        return None
+
+    if url.startswith("ipfs://"):
+        cid_path = url[len("ipfs://"):]
+        return f"https://ipfs.io/ipfs/{cid_path}"
+
+    # already a normal URL like https://craft-world.gg/avatars/...
+    return url
+
+
 # ---------------- Database setup (users + saved boosts) ----------------
 
 import os
 DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
+
 
 
 
@@ -548,6 +571,39 @@ app = Flask(__name__)
 app.secret_key = "craftworld-tools-demo-secret"  # for session
 
 @app.context_processor
+def inject_nav_avatar():
+    """
+    Provide `nav_avatar_url` to all templates.
+    Chooses a 'best' avatar from account.availableAvatars.
+    """
+    avatar_url: Optional[str] = None
+    try:
+        avatars = fetch_available_avatars()
+        # Prefer https URLs first
+        for av in avatars:
+            raw = (av.get("avatarUrl") or "").strip()
+            if not raw:
+                continue
+            if raw.startswith("http://") or raw.startswith("https://"):
+                avatar_url = normalize_avatar_url(raw)
+                break
+
+        # If still none, fall back to an ipfs:// avatar if present
+        if avatar_url is None:
+            for av in avatars:
+                raw = (av.get("avatarUrl") or "").strip()
+                if not raw:
+                    continue
+                if raw.startswith("ipfs://"):
+                    avatar_url = normalize_avatar_url(raw)
+                    break
+    except Exception:
+        avatar_url = None
+
+    return {"nav_avatar_url": avatar_url}
+
+
+@app.context_processor
 def inject_nav_profile():
     """
     Make the Craft World profile (avatar, displayName, etc.) available
@@ -722,27 +778,32 @@ BASE_TEMPLATE = """
       gap: 6px;
     }
 
-    /* Tiny round avatar used in nav + tables */
-    .mp-avatar {
-      width: 24px;
-      height: 24px;
+    .nav-avatar {
+      width: 22px;
+      height: 22px;
       border-radius: 999px;
       overflow: hidden;
       border: 1px solid rgba(148, 163, 184, 0.75);
       box-shadow: 0 0 12px rgba(15, 23, 42, 0.9);
-      flex-shrink: 0;
-      background: radial-gradient(circle at 30% 30%, #020617, #1e293b);
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      flex-shrink: 0;
+      background: radial-gradient(circle at 30% 30%, #020617, #1e293b);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #e5e7eb;
     }
 
-    .mp-avatar img {
+    .nav-avatar img {
       width: 100%;
       height: 100%;
       display: block;
       object-fit: cover;
     }
+
 
     .mp-avatar-fallback {
       font-size: 11px;
@@ -1151,6 +1212,7 @@ BASE_TEMPLATE = """
 
       {% if session.get('username') %}
         {% set uname = session['username'] %}
+        {# Prefer Craft World displayName if we have a profile #}
         {% if nav_profile and nav_profile.displayName %}
           {% set label = nav_profile.displayName %}
         {% else %}
@@ -1160,7 +1222,10 @@ BASE_TEMPLATE = """
 
         <span class="nav-user">
           <span class="mp-avatar" style="width:22px;height:22px;">
-            {% if nav_profile and nav_profile.avatarUrl %}
+            {# Prefer normalized account avatar (availableAvatars); fall back to profile avatar; then initials #}
+            {% if nav_avatar_url %}
+              <img src="{{ nav_avatar_url }}" alt="Avatar for {{ label }}">
+            {% elif nav_profile and nav_profile.avatarUrl %}
               <img src="{{ nav_profile.avatarUrl }}" alt="Avatar for {{ label }}">
             {% else %}
               <span class="mp-avatar-fallback">
@@ -1176,6 +1241,7 @@ BASE_TEMPLATE = """
       {% endif %}
     </div>
   </div>
+
 
   <!-- Donate popup for server support -->
   <div id="donate-toast" class="donate-toast">
@@ -8523,6 +8589,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
