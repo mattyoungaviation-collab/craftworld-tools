@@ -114,6 +114,31 @@ def fetch_proficiencies() -> dict[str, dict]:
         }
     return result
 
+def fetch_profile_by_uid(uid: str) -> Dict[str, Any]:
+    """
+    Fetch Craft World profile for a given UID (avatar, display name, badges, etc).
+    """
+    query = """
+    query ProfileByUID($uid: ID!) {
+      profileByUID(uid: $uid) {
+        uid
+        walletAddress
+        avatarUrl
+        displayName
+        level
+        badges {
+          url
+          description
+          displayName
+          infoUrl
+        }
+      }
+    }
+    """
+    data = call_graphql(query, {"uid": uid})
+    return data.get("profileByUID") or {}
+
+
 
 def fetch_workshop_levels() -> dict[str, int]:
     """
@@ -438,6 +463,7 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
 
