@@ -613,7 +613,7 @@ BASE_TEMPLATE = """
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>CraftWorld Tools</title>
+  <title>CraftWorld Tools.Live</title>
   <!-- Make it mobile friendly -->
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
@@ -1162,7 +1162,7 @@ BASE_TEMPLATE = """
     <div class="nav-inner">
       <div class="nav-title">
         <span class="logo-dot"></span>
-        CraftWorld Tools
+        CraftWorld Tools.Live
       </div>
 
       <div class="nav-links">
@@ -8488,6 +8488,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
