@@ -409,8 +409,8 @@ def _default_boost_levels() -> dict[str, dict[str, int]]:
 
 def _current_uid() -> str:
     """
-    Get the current Voya UID for this session.
-    Used so each UID has its own boost settings.
+    Get the current Account ID (Craft World UID) for this session.
+    Used so each account has its own boost settings.
     """
     uid = session.get("voya_uid")
     if not uid:
@@ -1323,18 +1323,16 @@ def index():
             except Exception as e:
                 error = f"Error fetching CraftWorld data: {e}"
 
-    content = """
-    <div class="card">
-      <h1>Account Overview</h1>
       <p class="subtle">
-        Enter your <strong>Voya UID</strong> and this page will fetch your land plots, factories,
+        Enter your <strong>Account ID</strong> and this page will fetch your land plots, factories,
         mines, dynos and resources from Craft World.
       </p>
       <form method="post">
-        <label for="uid">Voya UID</label>
+        <label for="uid">Account ID</label>
         <input type="text" id="uid" name="uid" value="{{ uid }}" placeholder="e.g. GfUeRBCZv8OwuUKq7Tu9JVpA70l1">
         <button type="submit">Fetch Craft World</button>
       </form>
+
       {% if error %}
         <div class="error">{{ error }}</div>
       {% endif %}
@@ -4185,9 +4183,10 @@ content = """
         {% elif current_mp and not current_mp.eventId %}
           <p>
             <strong>{{ current_mp.name }}</strong> (ID {{ current_mp.id }})<br>
-            <span class=\"hint\">
-              Enter your name or Voya ID in the History tab to see your personal snapshot.
-            </span>
+        <span class="hint">
+          Enter your name or Account ID in the History tab to see your personal snapshot.
+        </span>
+
           </p>
         {% else %}
           <p>No active general masterpiece found.</p>
@@ -4252,8 +4251,8 @@ content = """
           {% endif %}
         </div>
       {% else %}
-        <p class=\"hint\">
-          To see your personal gap, enter your in-game name or Voya ID
+        <p class="hint">
+          To see your personal gap, enter your in-game name or Account ID
           in the History tab and reload.
         </p>
       {% endif %}
@@ -8580,6 +8579,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
