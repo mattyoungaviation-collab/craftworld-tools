@@ -16,6 +16,7 @@ from craftworld_api import (
     get_jwt,
     fetch_proficiencies,
     fetch_workshop_levels,
+    fetch_profile_by_uid,
 )
 
 # ---------------- Database setup (users + saved boosts) ----------------
@@ -8453,6 +8454,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
