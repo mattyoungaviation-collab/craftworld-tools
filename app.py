@@ -1312,9 +1312,9 @@ def index():
     uid = session.get("voya_uid", "")
 
     if request.method == "POST":
-        uid = request.form.get("uid", "").strip()
+        uid = (request.form.get("uid") or "").strip()
         if not uid:
-             error = "Please enter your Account ID."
+            error = "Please enter your Account ID."
         else:
             session["voya_uid"] = uid
             try:
@@ -1323,6 +1323,9 @@ def index():
             except Exception as e:
                 error = f"Error fetching CraftWorld data: {e}"
 
+    content = """
+    <div class="card">
+      <h1>Account Overview</h1>
       <p class="subtle">
         Enter your <strong>Account ID</strong> and this page will fetch your land plots, factories,
         mines, dynos and resources from Craft World.
@@ -1342,7 +1345,7 @@ def index():
       <div class="card">
         <h2>Next steps</h2>
         <p class="subtle">
-          Your UID is set and your account data is loaded. Where do you want to go next?
+          Your Account ID is set and your account data is loaded. Where do you want to go next?
         </p>
         <div style="display:flex; flex-wrap:wrap; gap:8px;">
           <a href="{{ url_for('dashboard') }}" class="pill">📊 Dashboard</a>
@@ -1353,12 +1356,10 @@ def index():
           <a href="{{ url_for('trees') }}" class="pill">🌳 Trees</a>
         </div>
       </div>
-    {% endif %}
 
-    {% if result %}
       <div class="two-col">
         <div class="card">
-          <h2>Land Plots & Factories</h2>
+          <h2>Land Plots &amp; Factories</h2>
           {% if result.landPlots %}
             {% for plot in result.landPlots %}
               {% for area in plot.areas %}
@@ -1418,93 +1419,6 @@ def index():
     )
     return html
 
-    # ---------------- Authentication: register / login / logout ----------------
-
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    error: Optional[str] = None
-
-    if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        password = (request.form.get("password") or "").strip()
-        confirm = (request.form.get("confirm") or "").strip()
-
-        if not username or not password:
-            error = "Username and password are required."
-        elif password != confirm:
-            error = "Passwords do not match."
-        else:
-            conn = get_db_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-                existing = cur.fetchone()
-                if existing:
-                    error = "That username is already taken."
-                else:
-                    pwd_hash = generate_password_hash(password)
-                    cur.execute(
-                        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                        (username, pwd_hash),
-                    )
-                    conn.commit()
-                    user_id = cur.lastrowid
-                    session["user_id"] = user_id
-                    session["username"] = username
-                    return redirect(url_for("boosts"))
-            finally:
-                conn.close()
-
-    content = """
-    <div class="card">
-      <h1>Create Account</h1>
-      <p class="subtle">
-        Create a login so your <strong>Mastery &amp; Workshop</strong> boosts are saved
-        to your account, independent of which Voya UID you're looking at.
-      </p>
-
-      <form method="post" class="section">
-        <label for="username">Username</label>
-        <input id="username" name="username" type="text" required maxlength="64" value="{{ request.form.get('username','') }}">
-        <div class="hint">This is just for this site. It does not need to match your in-game name.</div>
-
-        <label for="password" style="margin-top:10px;">Password</label>
-        <input id="password" name="password" type="password" required>
-
-        <label for="confirm" style="margin-top:10px;">Confirm password</label>
-        <input id="confirm" name="confirm" type="password" required>
-
-        <button type="submit">Create account</button>
-      </form>
-
-      <p class="hint" style="margin-top:10px;">
-        Already have an account?
-        <a href="{{ url_for('login') }}">Log in</a>.
-      </p>
-
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
-    </div>
-    """
-
-
-    # First render the inner content template so Jinja tags inside it work
-    inner = render_template_string(
-        content,
-        error=error,
-    )
-
-    # Then inject that rendered HTML into the base template
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=inner,
-        active_page="login",
-        has_uid=has_uid_flag(),
-    )
-    return html
-
-
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -1544,7 +1458,7 @@ def login():
       <h1>Log In</h1>
       <p class="subtle">
         Log into your account so your <strong>Mastery &amp; Workshop</strong> boosts
-        follow you, even while you swap Voya UIDs to spy on other accounts.
+        follow you, even while you swap <strong>Account IDs</strong> to spy on other accounts.
       </p>
 
       <form method="post" class="section">
@@ -1568,7 +1482,6 @@ def login():
     </div>
     """
 
-
     inner = render_template_string(
         content,
         error=error,
@@ -1582,8 +1495,6 @@ def login():
     )
     return html
 
-
-
 @app.route("/logout")
 def logout():
     session.pop("user_id", None)
@@ -1595,8 +1506,6 @@ def attr_or_key(obj, name, default=None):
     if isinstance(obj, dict):
         return obj.get(name, default)
     return getattr(obj, name, default)
-
-# -------- Dashboard (CraftWorld.tips mode) --------
 
 # -------- Dashboard (CraftWorld.tips mode) --------
 
@@ -8579,6 +8488,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
