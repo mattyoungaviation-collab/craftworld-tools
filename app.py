@@ -2379,123 +2379,137 @@ def dashboard():
 
     content = """
     <div class="card">
-      <h1>📊 CraftWorld Dashboard</h1>
+      <h1>Dashboard</h1>
       <p class="subtle">
-        Live prices, account snapshot, estimated global profit, and top upgrade ideas.
+        Live overview of your account, token prices, factory profits, and suggested upgrades.
       </p>
+    </div>
 
-      <div style="display:flex; gap:12px; flex-wrap:wrap;">
-        <div><strong>COIN → USD:</strong> {{ '%.6f'|format(coin_usd) }}</div>
-        <div><a href="{{ url_for('dashboard') }}" class="pill">🔄 Refresh</a></div>
-        {% if uid %}
-          <div><strong>UID Loaded:</strong> {{ uid }}</div>
-        {% else %}
-          <div class="subtle">No UID set (set it on the Overview tab)</div>
-        {% endif %}
-      </div>
+    <div class="two-col">
+      <!-- LEFT COLUMN: Prices + Inventory -->
+      <div>
 
-      {% if factory_rows %}
-        <div style="margin-top:10px; font-size:13px;">
-          <strong>Global Production (est.):</strong>
-          COIN/hr: {{ '%.6f'|format(global_coin_hour) }},
-          COIN/day: {{ '%.6f'|format(global_coin_day) }},
-          USD/day: {{ '%.4f'|format(global_usd_day) }}
+        <!-- Live Resource Prices -->
+        <div class="card">
+          <h2>Live Resource Prices</h2>
+          {% if price_rows %}
+            <table>
+              <tr>
+                <th>Resource</th>
+                <th>Price (COIN)</th>
+                <th>Price (USD)</th>
+              </tr>
+
+              {% for pr in price_rows %}
+                <tr>
+                  <td>
+                    {% set addr = token_addresses.get(pr.token) %}
+                    {% if addr %}
+                      <a href="https://katana.roninchain.com/tokens/{{ addr }}"
+                         target="_blank"
+                         rel="noopener">
+                        {{ pr.token }}
+                      </a>
+                    {% else %}
+                      {{ pr.token }}
+                    {% endif %}
+                  </td>
+                  <td>{{ '%.8f'|format(pr.price) }}</td>
+                  <td>{{ '%.6f'|format(pr.usd) }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <p class="subtle">No live price data available right now.</p>
+          {% endif %}
         </div>
-        {% if best_factory %}
-          <div class="subtle" style="margin-top:4px;">
-            Best: {{ best_factory.token }} L{{ best_factory.level }}
-            ({{ '%+.6f'|format(best_factory.profit_coin_hour) }} COIN/hr)
-            {% if worst_factory %}
-              · Worst: {{ worst_factory.token }} L{{ worst_factory.level }}
-              ({{ '%+.6f'|format(worst_factory.profit_coin_hour) }} COIN/hr)
-            {% endif %}
-          </div>
-        {% endif %}
-      {% endif %}
-    </div>
 
-    {% if error %}
-      <div class="card">
-        <div class="error" style="margin:0; white-space:pre-wrap;">{{ error }}</div>
+        <!-- Inventory Snapshot -->
+        <div class="card">
+          <h2>📦 Inventory Snapshot</h2>
+          {% if inventory_rows %}
+            <table>
+              <tr>
+                <th>Token</th>
+                <th>Amount</th>
+                <th>Value (COIN)</th>
+                <th>Value (USD)</th>
+              </tr>
+              {% for item in inventory_rows %}
+                <tr>
+                  <td>{{ item.token }}</td>
+                  <td>{{ '%.4f'|format(item.amount) }}</td>
+                  <td>{{ '%.6f'|format(item.coin_value) }}</td>
+                  <td>{{ '%.6f'|format(item.usd_value) }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <p class="subtle">No inventory data available.</p>
+          {% endif %}
+        </div>
+
       </div>
-    {% endif %}
 
-    <div class="card">
-      <h2>📈 Live Resource Prices</h2>
-      <p class="subtle">Values shown in COIN and USD (updates on refresh).</p>
+      <!-- RIGHT COLUMN: Profit + Upgrades / Factories -->
+      <div>
 
-      <td>
-        {% set addr = token_addresses.get(row.token) %}
-        {% if addr %}
-          <a href="https://katana.roninchain.com/tokens/{{ addr }}"
-             target="_blank"
-             rel="noopener">
-            {{ row.token }}
-          </a>
-        {% else %}
-          {{ row.token }}
-        {% endif %}
-      </td>
+        <!-- Global Profit Summary -->
+        <div class="card">
+          <h2>💰 Estimated Profit</h2>
+          {% if global_coin_hour is not none %}
+            <p class="subtle">
+              <strong>COIN / hour:</strong>
+              {{ '%+.6f'|format(global_coin_hour) }}<br>
+              <strong>COIN / day:</strong>
+              {{ '%+.6f'|format(global_coin_day) }}<br><br>
+              <strong>USD / hour:</strong>
+              {{ '%+.6f'|format(global_usd_hour) }}<br>
+              <strong>USD / day:</strong>
+              {{ '%+.6f'|format(global_usd_day) }}
+            </p>
+          {% else %}
+            <p class="subtle">
+              No profit estimates yet. Make sure factories and prices are loaded.
+            </p>
+          {% endif %}
+        </div>
 
+        <!-- Upgrade Suggestions -->
+        <div class="card">
+          <h2>✨ Suggested Upgrades</h2>
+          {% if upgrade_suggestions %}
+            <table>
+              <tr>
+                <th>Factory</th>
+                <th>Current L</th>
+                <th>Target L</th>
+                <th>Δ COIN/hr</th>
+                <th>Upgrade Cost (COIN)</th>
+              </tr>
+              {% for up in upgrade_suggestions %}
+                <tr>
+                  <td>{{ up.token }}</td>
+                  <td>L{{ up.current_level }}</td>
+                  <td>L{{ up.target_level }}</td>
+                  <td>{{ '%+.6f'|format(up.delta_coin_hour) }}</td>
+                  <td>{{ '%.6f'|format(up.cost_coin) }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          {% else %}
+            <p class="subtle">
+              No upgrade suggestions right now. You might already be well-optimized
+              at current prices.
+            </p>
+          {% endif %}
+        </div>
+
+      </div>
     </div>
 
+    <!-- FACTORY SNAPSHOT OR UID PROMPT -->
     {% if uid %}
-      <div class="card">
-        <h2>🎯 Suggested Upgrades (top {{ upgrade_suggestions|length }})</h2>
-        {% if upgrade_suggestions %}
-          <table>
-            <tr>
-              <th>Factory</th>
-              <th>From → To</th>
-              <th>Δ COIN/hr</th>
-              <th>Upgrade cost (COIN)</th>
-              <th>ROI (Δ/hr per COIN)</th>
-              <th>Payback (hours)</th>
-            </tr>
-            {% for u in upgrade_suggestions %}
-              <tr>
-                <td>{{ u.token }}</td>
-                <td>L{{ u.from_level }} → L{{ u.to_level }}</td>
-                <td>{{ '%+.6f'|format(u.delta_hour) }}</td>
-                <td>{{ '%.6f'|format(u.upgrade_cost_coin) }}</td>
-                <td>{{ '%.6f'|format(u.roi) }}</td>
-                <td>{{ '%.2f'|format(u.payback_hours) }}</td>
-              </tr>
-            {% endfor %}
-          </table>
-        {% else %}
-          <p class="subtle">
-            No positive-ROI upgrades found based on current prices and Boost levels.
-          </p>
-        {% endif %}
-      </div>
-
-      <div class="card">
-        <h2>📦 Inventory Snapshot</h2>
-        {% if inventory_rows %}
-          <table>
-            <tr>
-              <th>Token</th>
-              <th>Amount</th>
-              <th>Price (COIN)</th>
-              <th>Value (COIN)</th>
-              <th>Value (USD)</th>
-            </tr>
-            {% for r in inventory_rows %}
-              <tr>
-                <td>{{ r.token }}</td>
-                <td>{{ '%.6f'|format(r.amount) }}</td>
-                <td>{{ '%.8f'|format(r.price_coin) }}</td>
-                <td>{{ '%.6f'|format(r.value_coin) }}</td>
-                <td>{{ '%.6f'|format(r.value_usd) }}</td>
-              </tr>
-            {% endfor %}
-          </table>
-        {% else %}
-          <p class="subtle">No resources found from the API.</p>
-        {% endif %}
-      </div>
-
       <div class="card">
         <h2>🏭 Factory Snapshot</h2>
         {% if factory_rows %}
@@ -2508,22 +2522,22 @@ def dashboard():
               <th>COIN/hr (est.)</th>
               <th>USD/hr (est.)</th>
             </tr>
-            {% for f in factory_rows %}
+            {% for fac in factory_rows %}
               <tr>
-                <td>{{ f.plot }}</td>
-                <td>{{ f.area }}</td>
-                <td>{{ f.token }}</td>
-                <td>L{{ f.level }}</td>
+                <td>{{ fac.plot }}</td>
+                <td>{{ fac.area }}</td>
+                <td>{{ fac.token }}</td>
+                <td>L{{ fac.level }}</td>
                 <td>
-                  {% if f.profit_coin_hour is defined %}
-                    {{ '%+.6f'|format(f.profit_coin_hour) }}
+                  {% if fac.profit_coin_hour is defined %}
+                    {{ '%+.6f'|format(fac.profit_coin_hour) }}
                   {% else %}
                     —
                   {% endif %}
                 </td>
                 <td>
-                  {% if f.profit_usd_hour is defined %}
-                    {{ '%+.6f'|format(f.profit_usd_hour) }}
+                  {% if fac.profit_usd_hour is defined %}
+                    {{ '%+.6f'|format(fac.profit_usd_hour) }}
                   {% else %}
                     —
                   {% endif %}
@@ -2533,7 +2547,7 @@ def dashboard():
           </table>
         {% else %}
           <p class="subtle">No factories found for this account.</p>
-    {% endif %}
+        {% endif %}
       </div>
     {% else %}
       <div class="card">
@@ -2545,6 +2559,7 @@ def dashboard():
       </div>
     {% endif %}
     """
+
 
     html = render_template_string(
         BASE_TEMPLATE,
@@ -9201,6 +9216,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
