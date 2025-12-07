@@ -6343,6 +6343,132 @@ def masterpieces_view():
                     }
                 )
 
+    # ---------- Simple Tier Ladder (for the "Tier ladder" table) ----------
+    tier_rows: List[Dict[str, Any]] = []
+    prev_req = 0.0
+    for idx, req in enumerate(MP_TIER_THRESHOLDS, start=1):
+        try:
+            req_val = float(req)
+        except (TypeError, ValueError):
+            continue
+        tier_rows.append(
+            {
+                "tier": idx,
+                "required": req_val,
+                "delta": req_val - prev_req,
+            }
+        )
+        prev_req = req_val
+
+    # ---------- Per-rank totals for *your* current bracket ----------
+    my_rank_totals: Dict[str, float] = {}
+    my_rank_totals_list: List[Dict[str, Any]] = []
+
+    if selected_reward_snapshot:
+        pos_raw = selected_reward_snapshot.get("position")
+        pos_int: Optional[int] = None
+        try:
+            pos_int = int(pos_raw)
+        except Exception:
+            pos_int = None
+
+        if pos_int is not None:
+            for blk in leaderboard_bracket_totals:
+                fr = blk.get("from_rank")
+                to = blk.get("to_rank")
+
+                # Normalise rank bounds to ints when possible
+                try:
+                    fr_int = int(fr)
+                except Exception:
+                    fr_int = None
+                try:
+                    to_int = int(to)
+                except Exception:
+                    to_int = fr_int
+
+                if fr_int is None and to_int is None:
+                    continue
+
+                if fr_int is not None and to_int is not None:
+                    if fr_int <= pos_int <= to_int:
+                        my_rank_totals = dict(blk.get("totals") or {})
+                        break
+                elif fr_int is not None:
+                    if pos_int >= fr_int:
+                        my_rank_totals = dict(blk.get("totals") or {})
+                        break
+
+    if my_rank_totals:
+        my_rank_totals_list = _totals_to_rows(my_rank_totals)
+    else:
+        my_rank_totals_list = []
+
+    # ---------- Grand totals (tiers + your rank rewards) ----------
+    grand_totals: Dict[str, float] = dict(combined_totals)
+    for sym, amt in my_rank_totals.items():
+        grand_totals[sym] = grand_totals.get(sym, 0.0) + float(amt or 0.0)
+
+    grand_totals_list = _totals_to_rows(grand_totals)
+    grand_total_coin = sum(r["coin_value"] for r in grand_totals_list)
+    grand_total_usd = grand_total_coin * coin_usd if coin_usd else 0.0
+
+    # ---------- Render page ----------
+    content_html = render_template_string(
+        content,
+        # Top-level error + basic context
+        error=error,
+        coin_usd=coin_usd,
+
+        # Current MP overview / gap
+        current_mp=current_mp,
+        current_mp_top50=current_mp_top50,
+        current_gap=current_gap,
+        general_snapshot=general_snapshot,
+        event_snapshot=event_snapshot,
+
+        # Rewards tab context
+        src_mp=src_mp,
+        selected_reward_snapshot=selected_reward_snapshot,
+        tier_rows=tier_rows,
+        reward_tier_rows=reward_tier_rows,
+        tier_base_totals_list=tier_base_totals_list,
+        tier_bp_totals_list=tier_bp_totals_list,
+        tier_combined_totals_list=tier_combined_totals_list,
+        tier_combined_total_coin=tier_combined_total_coin,
+        tier_combined_total_usd=tier_combined_total_usd,
+        my_rank_totals_list=my_rank_totals_list,
+        grand_totals_list=grand_totals_list,
+        grand_total_coin=grand_total_coin,
+        grand_total_usd=grand_total_usd,
+        has_battle_pass=has_battle_pass,
+
+        # History / selector tab
+        history_mp_options=history_mp_options,
+        selected_mp=selected_mp,
+        selected_mp_top50=selected_mp_top50,
+        selected_gap=selected_gap,
+        highlight_query=highlight_query,
+        top_n=top_n,
+        top_n_options=TOP_N_OPTIONS,
+
+        # Planner tab
+        planner_mp_options=planner_mp_options,
+        planner_mp=planner_mp,
+        planner_tokens=planner_tokens,
+        calc_resources=calc_resources,
+        calc_result=calc_result,
+        calc_state_json=calc_state_json,
+    )
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=content_html,
+        active_page="masterpieces",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
     # ---------- My rank rewards (from leaderboard bracket) ----------
     my_rank_totals: Dict[str, float] = {}
     my_rank_totals_list: List[Dict[str, Any]] = []
@@ -9511,6 +9637,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
