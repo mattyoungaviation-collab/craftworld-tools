@@ -2485,18 +2485,22 @@ def dashboard():
             <table>
               <tr>
                 <th>Factory</th>
-                <th>Current L</th>
-                <th>Target L</th>
+                <th>From L</th>
+                <th>To L</th>
                 <th>Δ COIN/hr</th>
                 <th>Upgrade Cost (COIN)</th>
+                <th>ROI (Δ/hr per COIN)</th>
+                <th>Payback (hours)</th>
               </tr>
               {% for up in upgrade_suggestions %}
                 <tr>
                   <td>{{ up.token }}</td>
-                  <td>L{{ up.current_level }}</td>
-                  <td>L{{ up.target_level }}</td>
-                  <td>{{ '%+.6f'|format(up.delta_coin_hour) }}</td>
-                  <td>{{ '%.6f'|format(up.cost_coin) }}</td>
+                  <td>L{{ up.from_level }}</td>
+                  <td>L{{ up.to_level }}</td>
+                  <td>{{ '%+.6f'|format(up.delta_hour) }}</td>
+                  <td>{{ '%.6f'|format(up.upgrade_cost_coin) }}</td>
+                  <td>{{ '%.6f'|format(up.roi) }}</td>
+                  <td>{{ '%.2f'|format(up.payback_hours) }}</td>
                 </tr>
               {% endfor %}
             </table>
@@ -9219,6 +9223,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
