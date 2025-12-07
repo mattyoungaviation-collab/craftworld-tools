@@ -3,7 +3,8 @@ from typing import Dict, List, Tuple, Optional
 import csv
 
 # Point this at your new, clean CSV
-CSV_FILE = "Game Data - Factories - rev. v_01 .csv"
+CSV_FILE = "Game Data - Factories - rev. v_01 +events.csv"
+
 
 # ============================================================
 # Mastery & Workshop modifiers
@@ -474,6 +475,7 @@ def compute_best_setups_csv(
 
     results.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
     return results[:top_n], combined_speed, worker_factor
+
 
 
 
