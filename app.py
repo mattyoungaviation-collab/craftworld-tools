@@ -2546,28 +2546,29 @@ def dashboard():
     {% endif %}
     """
 
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=render_template_string(
-            content,
-            uid=uid,
-            price_rows=price_rows,
-            coin_usd=coin_usd,
-            error=error,
-            inventory_rows=inventory_rows,
-            factory_rows=factory_rows,
-            global_coin_hour=global_coin_hour,
-            global_coin_day=global_coin_day,
-            global_usd_hour=global_usd_hour,
-            global_usd_day=global_usd_day,
-            best_factory=best_factory,
-            worst_factory=worst_factory,
-            upgrade_suggestions=upgrade_suggestions,
-            token_addresses=TOKEN_ADDRESSES,
-        ),
-        active_page="dashboard",
-        has_uid=has_uid_flag(),
-    )
+html = render_template_string(
+    BASE_TEMPLATE,
+    content=render_template_string(
+        content,
+        uid=uid,
+        price_rows=price_rows,
+        coin_usd=coin_usd,
+        error=error,
+        inventory_rows=inventory_rows,
+        factory_rows=factory_rows,
+        global_coin_hour=global_coin_hour,
+        global_coin_day=global_coin_day,
+        global_usd_hour=global_usd_hour,
+        global_usd_day=global_usd_day,
+        best_factory=best_factory,
+        worst_factory=best_factory,
+        upgrade_suggestions=upgrade_suggestions,
+        token_addresses=TOKEN_ADDRESSES,
+    ),
+    active_page="dashboard",
+    has_uid=has_uid_flag(),
+)
+
 
     return html
 
@@ -2576,109 +2577,70 @@ def dashboard():
 @app.route("/charts", methods=["GET"])
 def charts():
     """
-    Simple hub page that links to all the live / data-heavy views:
-    - Dashboard (live prices + account snapshot)
-    - Profitability (profit tables)
-    - Masterpieces (live MP leaderboard & rewards)
-    - Boosts, Flex Planner, etc.
+    Token → Katana v3 chart directory.
+
+    Shows a list of tokens that have a known Ronin address and
+    links out to their Katana token page in a new tab.
     """
+    # You can filter or reorder these later if you want
+    symbols = sorted(TOKEN_ADDRESSES.keys())
+
+    chart_rows = []
+    for sym in symbols:
+        addr = TOKEN_ADDRESSES.get(sym)
+        if not addr:
+            continue
+        chart_rows.append(
+            {
+                "symbol": sym,
+                "address": addr,
+                "url": f"https://katana.roninchain.com/tokens/{addr}",
+            }
+        )
+
     content = """
     <div class="card">
-      <h1>📈 Live Charts & Snapshots</h1>
+      <h1>📈 Token Charts (Katana v3)</h1>
       <p class="subtle">
-        Quick access to all live-powered views in one place. These use
-        Craft World's GraphQL API, <code>predictReward</code>, and live COIN prices.
+        Click a token to open its live chart on
+        <strong>Katana v3</strong>. Each link opens in a new tab so
+        CraftWorld Tools.Live stays open.
       </p>
     </div>
 
     <div class="card">
-      <h2>Account &amp; Prices</h2>
-      <div class="two-col">
-        <div>
-          <h3>Dashboard</h3>
-          <p class="subtle">
-            Live resource prices in COIN + USD, account snapshot, global estimated profit,
-            and suggested upgrades.
-          </p>
-          <a href="{{ url_for('dashboard') }}" class="pill">Open Dashboard →</a>
-        </div>
-        <div>
-          <h3>Boosts</h3>
-          <p class="subtle">
-            See how your boosts and multipliers affect production and profit across
-            factories and events.
-          </p>
-          <a href="{{ url_for('boosts') }}" class="pill">Open Boosts →</a>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Production &amp; Profit Charts</h2>
-      <div class="two-col">
-        <div>
-          <h3>Profitability</h3>
-          <p class="subtle">
-            Live profit-per-hour comparisons for all factories based on current market prices.
-          </p>
-          <a href="{{ url_for('profitability') }}" class="pill">Open Profitability →</a>
-        </div>
-        <div>
-          <h3>Factory Calculator</h3>
-          <p class="subtle">
-            Detailed per-factory breakdown (inputs, outputs, profit, and upgrade costs)
-            using your CSV + live prices.
-          </p>
-          <a href="{{ url_for('calculate') }}" class="pill">Open Calculator →</a>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Masterpiece &amp; Events</h2>
-      <div class="two-col">
-        <div>
-          <h3>Masterpieces</h3>
-          <p class="subtle">
-            Live Masterpiece leaderboard, reward ladders, total estimated rewards,
-            and donation planner.
-          </p>
-          <a href="{{ url_for('masterpieces_view') }}" class="pill">Open Masterpieces →</a>
-        </div>
-        <div>
-          <h3>Snipe / Leaderboard View</h3>
-          <p class="subtle">
-            Watch the current MP race and gaps between players to time your snipes.
-          </p>
-          <a href="{{ url_for('snipe') }}" class="pill">Open Snipe →</a>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Planning Tools</h2>
-      <div class="two-col">
-        <div>
-          <h3>Flex Planner</h3>
-          <p class="subtle">
-            Optimize your Flex plot layout using live profit data and your current
-            prices and mastery settings.
-          </p>
-          <a href="{{ url_for('flex_planner') }}" class="pill">Open Flex Planner →</a>
-        </div>
-        <div>
-          <h3>Inventory &amp; Mastery</h3>
-          <p class="subtle">
-            See your live inventory snapshot and mastery stats to support all other planning.
-          </p>
-          <a href="{{ url_for('inventory_view') }}" class="pill">Open Inventory →</a>
-          <a href="{{ url_for('mastery_view') }}" class="pill" style="margin-left:6px;">Open Mastery →</a>
-        </div>
-      </div>
+      {% if chart_rows %}
+        <table>
+          <tr>
+            <th style="width:120px;">Token</th>
+            <th>Ronin address</th>
+            <th style="width:140px;">Chart</th>
+          </tr>
+          {% for row in chart_rows %}
+            <tr>
+              <td><strong>{{ row.symbol }}</strong></td>
+              <td><code>{{ row.address }}</code></td>
+              <td>
+                <a href="{{ row.url }}"
+                   target="_blank"
+                   rel="noopener noreferrer">
+                  Open chart →
+                </a>
+              </td>
+            </tr>
+          {% endfor %}
+        </table>
+      {% else %}
+        <p class="subtle">No token addresses are configured for charts.</p>
+      {% endif %}
     </div>
     """
 
-    content = render_template_string(content)
+    content = render_template_string(
+        content,
+        chart_rows=chart_rows,
+    )
+
     html = render_template_string(
         BASE_TEMPLATE,
         content=content,
@@ -2686,6 +2648,7 @@ def charts():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 @app.route("/resource/<token>", methods=["GET"])
@@ -9239,6 +9202,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
