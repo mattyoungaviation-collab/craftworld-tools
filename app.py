@@ -7766,9 +7766,9 @@ def masterpieces_view():
     }, REFRESH_MS);
   })();
 </script>
-    """
+"""
 
-    # Render inner content with context (use MASTERPIECES_TEMPLATE now)
+    # Render inner content with context using MASTERPIECES_TEMPLATE
     inner = render_template_string(
         MASTERPIECES_TEMPLATE,
         error=error,
@@ -7835,6 +7835,7 @@ def masterpieces_view():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -9466,6 +9467,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
