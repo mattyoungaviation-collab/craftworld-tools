@@ -1217,6 +1217,8 @@ tr:nth-child(odd) td {
         <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
         <a href="{{ url_for('charts') }}" class="{{ 'active' if active_page=='charts' else '' }}">Charts</a>
         <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
+        <a href="{{ url_for('charts') }}" class="{{ 'active' if active_page=='charts' else '' }}">Charts</a>
+
 
         
         {% if session.get('username') %}
@@ -2594,72 +2596,82 @@ def dashboard():
     return html
 
 
-# -------- Live Charts hub --------
+# -------- Live Token Charts (GeckoTerminal-style) --------
 @app.route("/charts", methods=["GET"])
 def charts():
     """
-    Token → Katana v3 chart directory.
-
-    Shows a list of tokens that have a known Ronin address and
-    links out to their Katana token page in a new tab.
+    Live token charts, like the iOS CraftMath app:
+    - Choose a token from TOKEN_ADDRESSES
+    - Embed GeckoTerminal Ronin chart in an iframe
     """
-    # You can filter or reorder these later if you want
-    symbols = sorted(TOKEN_ADDRESSES.keys())
+    # Token symbol from query string, e.g. /charts?token=EARTH
+    selected = (request.args.get("token") or "").upper().strip()
 
-    chart_rows = []
-    for sym in symbols:
-        addr = TOKEN_ADDRESSES.get(sym)
-        if not addr:
-            continue
-        chart_rows.append(
-            {
-                "symbol": sym,
-                "address": addr,
-                "url": f"https://katana.roninchain.com/tokens/{addr}",
-            }
-        )
+    # All tokens we know contract addresses for
+    tokens = sorted(TOKEN_ADDRESSES.keys())
+
+    # Contract address (if any) for the selected token
+    addr = TOKEN_ADDRESSES.get(selected) if selected else None
 
     content = """
     <div class="card">
-      <h1>📈 Token Charts (Katana v3)</h1>
+      <h1>📈 Live Token Charts</h1>
       <p class="subtle">
-        Click a token to open its live chart on
-        <strong>Katana v3</strong>. Each link opens in a new tab so
-        CraftWorld Tools.Live stays open.
+        Choose a token to load its live price chart from
+        GeckoTerminal (Ronin network), similar to the iOS CraftMath app.
       </p>
-    </div>
 
-    <div class="card">
-      {% if chart_rows %}
-        <table>
-          <tr>
-            <th style="width:120px;">Token</th>
-            <th>Ronin address</th>
-            <th style="width:140px;">Chart</th>
-          </tr>
-          {% for row in chart_rows %}
-            <tr>
-              <td><strong>{{ row.symbol }}</strong></td>
-              <td><code>{{ row.address }}</code></td>
-              <td>
-                <a href="{{ row.url }}"
-                   target="_blank"
-                   rel="noopener noreferrer">
-                  Open chart →
-                </a>
-              </td>
-            </tr>
+      <form method="get" style="margin-bottom:12px; max-width:320px;">
+        <label for="token">Token</label>
+        <select id="token" name="token" style="width:100%;">
+          <option value="">-- select token --</option>
+          {% for t in tokens %}
+            <option value="{{ t }}" {% if t == selected %}selected{% endif %}>{{ t }}</option>
           {% endfor %}
-        </table>
-      {% else %}
-        <p class="subtle">No token addresses are configured for charts.</p>
+        </select>
+        <div style="margin-top:8px;">
+          <button type="submit">Load chart</button>
+        </div>
+      </form>
+
+      {% if selected and not addr %}
+        <div class="error" style="margin-top:10px;">
+          No contract address known for <strong>{{ selected }}</strong>.
+        </div>
+      {% elif selected and addr %}
+        <h2 style="margin-top:18px;">{{ selected }} chart</h2>
+        <p class="subtle">
+          Data source: GeckoTerminal · Ronin network<br>
+          You can also
+          <a href="https://www.geckoterminal.com/ronin/tokens/{{ addr }}"
+             target="_blank" rel="noopener">
+            open this chart in a new tab ↗
+          </a>.
+        </p>
+
+        <div style="
+          margin-top:10px;
+          border-radius:12px;
+          overflow:hidden;
+          border:1px solid rgba(148,163,184,0.35);
+          box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        ">
+          <iframe
+            src="https://www.geckoterminal.com/ronin/tokens/{{ addr }}"
+            style="width:100%; height:560px; border:0;"
+            loading="lazy"
+            referrerpolicy="no-referrer-when-downgrade">
+          </iframe>
+        </div>
       {% endif %}
     </div>
     """
 
     content = render_template_string(
         content,
-        chart_rows=chart_rows,
+        tokens=tokens,
+        selected=selected,
+        addr=addr,
     )
 
     html = render_template_string(
@@ -2669,6 +2681,7 @@ def charts():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -9223,6 +9236,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
