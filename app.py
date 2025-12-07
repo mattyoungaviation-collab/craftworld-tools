@@ -4806,7 +4806,7 @@ def boosts():
     return html
 
 # ================= MASTERPIECES TAB TEMPLATE ==================
-content = """
+MASTERPIECES_TEMPLATE = """
 <div class="card">
   <h1>Masterpieces</h1>
 
@@ -4836,8 +4836,7 @@ content = """
           </p>
           <p>
             Rank: <strong>#{{ general_snapshot.position }}</strong><br>
-            Points:
-            <strong>{{ "{:,.0f}".format(general_snapshot.points or 0) }}</strong><br>
+            Points: <strong>{{ "{:,.0f}".format(general_snapshot.points or 0) }}</strong><br>
             {% if general_snapshot.tier %}
               Completion tier: <strong>{{ general_snapshot.tier }}</strong><br>
             {% else %}
@@ -4869,8 +4868,7 @@ content = """
           </p>
           <p>
             Rank: <strong>#{{ event_snapshot.position }}</strong><br>
-            Points:
-            <strong>{{ "{:,.0f}".format(event_snapshot.points or 0) }}</strong><br>
+            Points: <strong>{{ "{:,.0f}".format(event_snapshot.points or 0) }}</strong><br>
             {% if event_snapshot.tier %}
               Completion tier: <strong>{{ event_snapshot.tier }}</strong><br>
             {% else %}
@@ -4889,38 +4887,26 @@ content = """
     <h2>Live leaderboard (Top {{ top_n }})</h2>
     {% if current_mp %}
       <p>
-        Showing <strong>{{ current_mp.name }}</strong>
-        (ID {{ current_mp.id }}) leaderboard.
+        Showing <strong>{{ current_mp.name }}</strong> (ID {{ current_mp.id }}) leaderboard.
       </p>
       {{ current_mp_top50|safe }}
 
       {% if current_gap %}
         <div style="margin-top:0.5rem; font-size:0.9rem;">
           <strong>Your gap:</strong>
-          You are currently <strong>#{{ current_gap.position }}</strong>
-          with
-          <strong>{{ "{:,.0f}".format(current_gap.points or 0) }}</strong>
-          points.
+          You are <strong>#{{ current_gap.position }}</strong> with
+          <strong>{{ "{:,.0f}".format(current_gap.points or 0) }}</strong> points.
           {% if current_gap.above_name %}
-            <br>
-            Need
-            <strong>{{ "{:,.0f}".format(current_gap.gap_up or 0) }}</strong>
-            points to pass {{ current_gap.above_name }}
-            (#{{ current_gap.above_pos }}).
+            <br>Need <strong>{{ "{:,.0f}".format(current_gap.gap_up or 0) }}</strong>
+            points to pass {{ current_gap.above_name }} (#{{ current_gap.above_pos }}).
           {% endif %}
           {% if current_gap.below_name %}
-            <br>
-            You are ahead of {{ current_gap.below_name }}
-            (#{{ current_gap.below_pos }}) by
-            <strong>{{ "{:,.0f}".format(current_gap.gap_down or 0) }}</strong>
-            points.
+            <br>You are ahead of {{ current_gap.below_name }} (#{{ current_gap.below_pos }})
+            by <strong>{{ "{:,.0f}".format(current_gap.gap_down or 0) }}</strong> points.
           {% endif %}
         </div>
       {% else %}
-        <p class="hint">
-          To see your personal gap, enter your in-game name or Account ID
-          in the History tab and reload.
-        </p>
+        <p class="hint">Enter your name/UID in History to see your personal gap.</p>
       {% endif %}
     {% else %}
       <p>No current masterpiece leaderboard available.</p>
@@ -4932,29 +4918,19 @@ content = """
     <h2>Rewards &amp; Totals</h2>
 
     {% if src_mp %}
-      <p>
-        Showing rewards for
-        <strong>{{ src_mp.name }}</strong>
-        (ID {{ src_mp.id }}).
-      </p>
+      <p>Showing rewards for <strong>{{ src_mp.name }}</strong> (ID {{ src_mp.id }}).</p>
     {% else %}
-      <p class="hint">
-        No masterpiece selected yet. Use the History selector or Donation Planner
-        to choose one.
-      </p>
+      <p class="hint">No masterpiece selected yet.</p>
     {% endif %}
 
-    <!-- Your snapshot on selected MP (if any) -->
     {% if selected_reward_snapshot %}
       <div style="border:1px solid #444; border-radius:8px; padding:0.75rem; margin-bottom:1rem;">
-        <h3>Your position on this masterpiece</h3>
+        <h3>Your position</h3>
         <p>
           Rank: <strong>#{{ selected_reward_snapshot.position }}</strong><br>
-          Points:
-          <strong>{{ "{:,.0f}".format(selected_reward_snapshot.points or 0) }}</strong><br>
+          Points: <strong>{{ "{:,.0f}".format(selected_reward_snapshot.points or 0) }}</strong><br>
           {% if selected_reward_snapshot.tier %}
-            Completion tier:
-            <strong>{{ selected_reward_snapshot.tier }}</strong><br>
+            Completion tier: <strong>{{ selected_reward_snapshot.tier }}</strong><br>
           {% endif %}
           {% if selected_reward_snapshot.leaderboard_rewards %}
             Rank rewards: {{ selected_reward_snapshot.leaderboard_rewards }}
@@ -4963,20 +4939,15 @@ content = """
       </div>
     {% endif %}
 
-    <!-- Tier ladder table -->
     <h3>Tier ladder</h3>
     <table class="table">
       <thead>
-        <tr>
-          <th>Tier</th>
-          <th>Required MP</th>
-          <th>MP delta</th>
-        </tr>
+        <tr><th>Tier</th><th>Required MP</th><th>MP delta</th></tr>
       </thead>
       <tbody>
         {% for row in tier_rows %}
           <tr>
-            <td>Tier {{ row.tier }}</td>
+            <td>{{ row.tier }}</td>
             <td>{{ "{:,.0f}".format(row.required) }}</td>
             <td>{{ "{:,.0f}".format(row.delta) }}</td>
           </tr>
@@ -4984,16 +4955,13 @@ content = """
       </tbody>
     </table>
 
-    <!-- Reward stages from rewardStages -->
     <h3 style="margin-top:1rem;">Tier rewards (per stage)</h3>
+
     {% if reward_tier_rows %}
       <table class="table">
         <thead>
           <tr>
-            <th>Tier</th>
-            <th>Required MP</th>
-            <th>Base rewards</th>
-            <th>RawrPass rewards</th>
+            <th>Tier</th><th>Required MP</th><th>Base rewards</th><th>RawrPass rewards</th>
           </tr>
         </thead>
         <tbody>
@@ -5002,41 +4970,19 @@ content = """
               <td>{{ row.tier }}</td>
               <td>{{ row.required }}</td>
 
-              {# ===== BASE REWARDS WITH IMAGES ===== #}
+              <!-- BASE REWARDS -->
               <td class="rewards-cell">
                 {% if row.rewards %}
                   {% for reward in row.rewards %}
                     <div class="reward-chip">
-                      {# ICON #}
                       {% if reward.__typename == 'Avatar' %}
-                        <img
-                          class="reward-icon"
-                          src="{{ reward.avatarUrl }}"
-                          alt="Avatar reward"
-                          loading="lazy"
-                        >
-                      {% elif reward.__typename == 'Badge' %}
-                        <img
-                          class="reward-icon"
-                          src="{{ reward.url|ipfs_to_http }}"
-                          alt="{{ reward.displayName or reward.badgeName }}"
-                          loading="lazy"
-                        >
-                      {% endif %}
-
-                      {# LABEL #}
-                      {% if reward.__typename == 'Resource' %}
-                        <span>{{ reward.amount|int }} {{ reward.symbol }}</span>
-                      {% elif reward.__typename == 'Avatar' %}
+                        <img class="reward-icon" src="{{ reward.avatarUrl }}">
                         <span>Avatar</span>
                       {% elif reward.__typename == 'Badge' %}
+                        <img class="reward-icon" src="{{ reward.url|ipfs_to_http }}">
                         <span>{{ reward.displayName or reward.badgeName }}</span>
-                      {% elif reward.__typename == 'TradePack' %}
-                        <span>{{ reward.amount }}x Trade Pack</span>
-                      {% elif reward.__typename == 'BuildingReward' %}
-                        <span>{{ reward.buildingSubType }} ({{ reward.buildingType }})</span>
-                      {% elif reward.__typename == 'OnChainToken' %}
-                        <span>{{ reward.symbol }}</span>
+                      {% elif reward.__typename == 'Resource' %}
+                        <span>{{ reward.amount|int }} {{ reward.symbol }}</span>
                       {% else %}
                         <span>{{ reward.__typename }}</span>
                       {% endif %}
@@ -5047,39 +4993,18 @@ content = """
                 {% endif %}
               </td>
 
-              {# ===== RAWRPASS REWARDS WITH IMAGES ===== #}
+              <!-- RAWRPASS -->
               <td class="rewards-cell">
                 {% if row.battlepass_rewards %}
                   {% for reward in row.battlepass_rewards %}
                     <div class="reward-chip">
                       {% if reward.__typename == 'Avatar' %}
-                        <img
-                          class="reward-icon"
-                          src="{{ reward.avatarUrl }}"
-                          alt="Avatar reward"
-                          loading="lazy"
-                        >
+                        <img class="reward-icon" src="{{ reward.avatarUrl }}"><span>Avatar</span>
                       {% elif reward.__typename == 'Badge' %}
-                        <img
-                          class="reward-icon"
-                          src="{{ reward.url|ipfs_to_http }}"
-                          alt="{{ reward.displayName or reward.badgeName }}"
-                          loading="lazy"
-                        >
-                      {% endif %}
-
-                      {% if reward.__typename == 'Resource' %}
-                        <span>{{ reward.amount|int }} {{ reward.symbol }}</span>
-                      {% elif reward.__typename == 'Avatar' %}
-                        <span>Avatar</span>
-                      {% elif reward.__typename == 'Badge' %}
+                        <img class="reward-icon" src="{{ reward.url|ipfs_to_http }}">
                         <span>{{ reward.displayName or reward.badgeName }}</span>
-                      {% elif reward.__typename == 'TradePack' %}
-                        <span>{{ reward.amount }}x Trade Pack</span>
-                      {% elif reward.__typename == 'BuildingReward' %}
-                        <span>{{ reward.buildingSubType }} ({{ reward.buildingType }})</span>
-                      {% elif reward.__typename == 'OnChainToken' %}
-                        <span>{{ reward.symbol }}</span>
+                      {% elif reward.__typename == 'Resource' %}
+                        <span>{{ reward.amount|int }} {{ reward.symbol }}</span>
                       {% else %}
                         <span>{{ reward.__typename }}</span>
                       {% endif %}
@@ -5094,29 +5019,19 @@ content = """
         </tbody>
       </table>
     {% else %}
-      <p class="hint">
-        This masterpiece does not expose detailed rewardStages via the API.
-        Check in-game for full details.
-      </p>
+      <p class="hint">This masterpiece does not expose rewardStages.</p>
     {% endif %}
 
-
-    <!-- Totals (base / BP / combined) -->
+    <!-- TOTALS -->
     <h3 style="margin-top:1rem;">Total resource rewards</h3>
 
     <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+      <!-- BASE -->
       <div style="flex:1 1 240px;">
-        <h4>Base track only</h4>
+        <h4>Base track</h4>
         {% if tier_base_totals_list %}
           <table class="table">
-            <thead>
-              <tr>
-                <th>Token</th>
-                <th>Amount</th>
-                <th>Value (COIN)</th>
-                <th>Value (USD)</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Token</th><th>Amount</th><th>COIN</th><th>USD</th></tr></thead>
             <tbody>
               {% for row in tier_base_totals_list %}
                 <tr>
@@ -5128,23 +5043,15 @@ content = """
               {% endfor %}
             </tbody>
           </table>
-        {% else %}
-          <p class="hint">No numeric base rewards detected.</p>
-        {% endif %}
+        {% else %}<p class="hint">None detected.</p>{% endif %}
       </div>
 
+      <!-- BP -->
       <div style="flex:1 1 240px;">
-        <h4>RawrPass track only</h4>
+        <h4>RawrPass track</h4>
         {% if tier_bp_totals_list %}
           <table class="table">
-            <thead>
-              <tr>
-                <th>Token</th>
-                <th>Amount</th>
-                <th>Value (COIN)</th>
-                <th>Value (USD)</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Token</th><th>Amount</th><th>COIN</th><th>USD</th></tr></thead>
             <tbody>
               {% for row in tier_bp_totals_list %}
                 <tr>
@@ -5156,23 +5063,15 @@ content = """
               {% endfor %}
             </tbody>
           </table>
-        {% else %}
-          <p class="hint">No numeric RawrPass rewards detected.</p>
-        {% endif %}
+        {% else %}<p class="hint">None detected.</p>{% endif %}
       </div>
 
+      <!-- COMBINED -->
       <div style="flex:1 1 240px;">
-        <h4>Combined (Base + RawrPass)</h4>
+        <h4>Combined</h4>
         {% if tier_combined_totals_list %}
           <table class="table">
-            <thead>
-              <tr>
-                <th>Token</th>
-                <th>Amount</th>
-                <th>Value (COIN)</th>
-                <th>Value (USD)</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Token</th><th>Amount</th><th>COIN</th><th>USD</th></tr></thead>
             <tbody>
               {% for row in tier_combined_totals_list %}
                 <tr>
@@ -5186,28 +5085,17 @@ content = """
           </table>
           <p>
             <strong>Total value:</strong>
-            {{ "{:,.2f}".format(tier_combined_total_coin or 0) }} COIN
-            (~{{ "{:,.2f}".format(tier_combined_total_usd or 0) }} USD,
-            using COIN ≈ {{ "{:,.3f}".format(coin_usd or 0) }} USD).
+            {{ "{:,.2f}".format(tier_combined_total_coin) }} COIN
+            (~{{ "{:,.2f}".format(tier_combined_total_usd) }} USD).
           </p>
-        {% else %}
-          <p class="hint">No combined rewards detected.</p>
-        {% endif %}
+        {% else %}<p class="hint">None detected.</p>{% endif %}
       </div>
     </div>
 
-    <!-- Rank-based grand totals if available -->
     {% if my_rank_totals_list %}
-      <h3 style="margin-top:1.5rem;">Your total rewards at current rank</h3>
+      <h3>Your rank rewards</h3>
       <table class="table">
-        <thead>
-          <tr>
-            <th>Token</th>
-            <th>Amount</th>
-            <th>Value (COIN)</th>
-            <th>Value (USD)</th>
-          </tr>
-        </thead>
+        <thead><tr><th>Token</th><th>Amount</th><th>COIN</th><th>USD</th></tr></thead>
         <tbody>
           {% for row in my_rank_totals_list %}
             <tr>
@@ -5222,16 +5110,9 @@ content = """
     {% endif %}
 
     {% if grand_totals_list %}
-      <h3 style="margin-top:1.5rem;">Grand totals (all tiers + rank rewards)</h3>
+      <h3>Grand totals (tiers + rank)</h3>
       <table class="table">
-        <thead>
-          <tr>
-            <th>Token</th>
-            <th>Amount</th>
-            <th>Value (COIN)</th>
-            <th>Value (USD)</th>
-          </tr>
-        </thead>
+        <thead><tr><th>Token</th><th>Amount</th><th>COIN</th><th>USD</th></tr></thead>
         <tbody>
           {% for row in grand_totals_list %}
             <tr>
@@ -5243,11 +5124,7 @@ content = """
           {% endfor %}
         </tbody>
       </table>
-      <p>
-        <strong>Grand total:</strong>
-        {{ "{:,.2f}".format(grand_total_coin or 0) }} COIN
-        (~{{ "{:,.2f}".format(grand_total_usd or 0) }} USD).
-      </p>
+      <p><strong>Grand total:</strong> {{ "{:,.2f}".format(grand_total_coin) }} COIN (~{{ "{:,.2f}".format(grand_total_usd) }} USD).</p>
     {% endif %}
   </div>
 
@@ -5264,8 +5141,6 @@ content = """
               {% if selected_mp and selected_mp.id|string == opt.id|string %}selected{% endif %}>
               {% if opt.name %}
                 {{ opt.name }} (ID {{ opt.id }})
-              {% elif opt.addressable_label %}
-                {{ opt.addressable_label }} (ID {{ opt.id }})
               {% else %}
                 MP #{{ opt.id }}
               {% endif %}
@@ -5275,25 +5150,22 @@ content = """
       </label>
 
       <label style="margin-left:0.5rem;">
-        Highlight (name or Voya ID):
-        <input type="text" name="highlight" value="{{ highlight_query }}" placeholder="Your name or Voya ID">
+        Highlight:
+        <input type="text" name="highlight" value="{{ highlight_query }}">
       </label>
 
       <label style="margin-left:0.5rem;">
         Leaderboard size:
         <select name="top_n">
           {% for n in top_n_options %}
-            <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>
-              Top {{ n }}
-            </option>
+            <option value="{{ n }}" {% if n == top_n %}selected{% endif %}>Top {{ n }}</option>
           {% endfor %}
         </select>
       </label>
 
       <label style="margin-left:0.5rem;">
         RawrPass:
-        <input type="checkbox" name="has_battle_pass"
-          {% if has_battle_pass %}checked{% endif %}>
+        <input type="checkbox" name="has_battle_pass" {% if has_battle_pass %}checked{% endif %}>
       </label>
 
       <button type="submit" style="margin-left:0.5rem;">Load</button>
@@ -5305,25 +5177,8 @@ content = """
 
       {% if selected_gap %}
         <div style="margin-top:0.5rem; font-size:0.9rem;">
-          <strong>Your gap on this MP:</strong>
-          You are <strong>#{{ selected_gap.position }}</strong>
-          with
-          <strong>{{ "{:,.0f}".format(selected_gap.points or 0) }}</strong>
-          points.
-          {% if selected_gap.above_name %}
-            <br>
-            Need
-            <strong>{{ "{:,.0f}".format(selected_gap.gap_up or 0) }}</strong>
-            points to pass {{ selected_gap.above_name }}
-            (#{{ selected_gap.above_pos }}).
-          {% endif %}
-          {% if selected_gap.below_name %}
-            <br>
-            You are ahead of {{ selected_gap.below_name }}
-            (#{{ selected_gap.below_pos }}) by
-            <strong>{{ "{:,.0f}".format(selected_gap.gap_down or 0) }}</strong>
-            points.
-          {% endif %}
+          <strong>Your gap:</strong>
+          You are #{{ selected_gap.position }} with {{ "{:,.0f}".format(selected_gap.points or 0) }} points.
         </div>
       {% endif %}
     {% else %}
@@ -5344,15 +5199,9 @@ content = """
             Masterpiece:
             <select name="planner_mp_id">
               {% for opt in planner_mp_options %}
-                <option value="{{ opt.id }}"
-                  {% if planner_mp and planner_mp.id|string == opt.id|string %}selected{% endif %}>
-                  {% if opt.name %}
-                    {{ opt.name }} (ID {{ opt.id }})
-                  {% elif opt.addressable_label %}
-                    {{ opt.addressable_label }} (ID {{ opt.id }})
-                  {% else %}
-                    MP #{{ opt.id }}
-                  {% endif %}
+                <option value="{{ opt.id }}" {% if planner_mp and planner_mp.id|string == opt.id|string %}selected{% endif %}>
+                  {% if opt.name %} {{ opt.name }} (ID {{ opt.id }})
+                  {% else %} MP #{{ opt.id }} {% endif %}
                 </option>
               {% endfor %}
             </select>
@@ -5386,15 +5235,7 @@ content = """
       {% if calc_resources %}
         <h3>Your bundle</h3>
         <table class="table">
-          <thead>
-            <tr>
-              <th>Token</th>
-              <th>Amount</th>
-              <th>MP points</th>
-              <th>XP</th>
-              <th>Battery</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Token</th><th>Amount</th><th>MP</th><th>XP</th><th>Battery</th></tr></thead>
           <tbody>
             {% for row in calc_resources %}
               <tr>
@@ -5412,146 +5253,24 @@ content = """
       {% if calc_result %}
         <h3>Summary</h3>
         <p>
-          Total MP:
-          <strong>{{ calc_result.total_points_str }}</strong><br>
-          Total XP:
-          <strong>{{ calc_result.total_xp_str }}</strong><br>
-          Required power:
-          <strong>{{ calc_result.total_power_str }}</strong><br>
-          COIN cost:
-          <strong>{{ calc_result.total_cost_str }}</strong><br>
-          Current tier:
-          <strong>Tier {{ calc_result.tier }}</strong>
+          Total MP: <strong>{{ calc_result.total_points_str }}</strong><br>
+          XP: <strong>{{ calc_result.total_xp_str }}</strong><br>
+          Battery: <strong>{{ calc_result.total_power_str }}</strong><br>
+          COIN cost: <strong>{{ calc_result.total_cost_str }}</strong><br>
+          Tier: <strong>{{ calc_result.tier }}</strong>
           {% if calc_result.next_tier_index %}
-            <br>
-            To Tier {{ calc_result.next_tier_index }}:
-            need
-            <strong>{{ calc_result.points_to_next_str }}</strong>
-            MP
-            ({{ calc_result.progress_to_next_pct }}% of the way).
+            <br>To Tier {{ calc_result.next_tier_index }}:
+            <strong>{{ calc_result.points_to_next_str }}</strong> MP
+            ({{ calc_result.progress_to_next_pct }}%).
           {% endif %}
         </p>
       {% else %}
-        <p class="hint">
-          Build a bundle and click "Add" to see points, XP, battery, and COIN cost.
-        </p>
+        <p class="hint">Add resources to calculate totals.</p>
       {% endif %}
     </form>
   </div>
 </div>
 """
-# ================= END MASTERPIECES TEMPLATE ==================
-
-  <!-- ================= DONATION PLANNER ================= -->
-  <div id=\"planner\" style=\"margin-top:1.5rem;\">
-    <h2>Donation Planner</h2>
-
-    <form method=\"post\">
-      <input type=\"hidden\" name=\"calc_state\" value=\"{{ calc_state_json|e }}\">
-
-      <div style=\"display:flex; flex-wrap:wrap; gap:1rem; margin-bottom:1rem;\">
-        <div>
-          <label>
-            Masterpiece:
-            <select name=\"planner_mp_id\">
-              {% for opt in planner_mp_options %}
-                <option value=\"{{ opt.id }}\"
-                  {% if planner_mp and planner_mp.id|string == opt.id|string %}selected{% endif %}>
-                  {% if opt.name %}
-                    {{ opt.name }} (ID {{ opt.id }})
-                  {% elif opt.addressable_label %}
-                    {{ opt.addressable_label }} (ID {{ opt.id }})
-                  {% else %}
-                    MP #{{ opt.id }}
-                  {% endif %}
-                </option>
-              {% endfor %}
-            </select>
-          </label>
-        </div>
-
-        <div>
-          <label>
-            Token:
-            <select name=\"calc_token\">
-              {% for sym in planner_tokens %}
-                <option value=\"{{ sym }}\">{{ sym }}</option>
-              {% endfor %}
-            </select>
-          </label>
-        </div>
-
-        <div>
-          <label>
-            Amount:
-            <input type=\"number\" step=\"0.0001\" min=\"0\" name=\"calc_amount\">
-          </label>
-        </div>
-
-        <div style=\"align-self:flex-end; display:flex; gap:0.5rem;\">
-          <button type=\"submit\" name=\"calc_action\" value=\"add\">Add</button>
-          <button type=\"submit\" name=\"calc_action\" value=\"clear\">Clear</button>
-        </div>
-      </div>
-
-      {% if calc_resources %}
-        <h3>Your bundle</h3>
-        <table class=\"table\">
-          <thead>
-            <tr>
-              <th>Token</th>
-              <th>Amount</th>
-              <th>MP points</th>
-              <th>XP</th>
-              <th>Battery</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in calc_resources %}
-              <tr>
-                <td>{{ row.token }}</td>
-                <td>{{ row.amount }}</td>
-                <td>{{ row.points_str or \"—\" }}</td>
-                <td>{{ row.xp_str or \"—\" }}</td>
-                <td>{{ row.battery_str or \"—\" }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      {% endif %}
-
-      {% if calc_result %}
-        <h3>Summary</h3>
-        <p>
-          Total MP:
-          <strong>{{ calc_result.total_points_str }}</strong><br>
-          Total XP:
-          <strong>{{ calc_result.total_xp_str }}</strong><br>
-          Required power:
-          <strong>{{ calc_result.total_power_str }}</strong><br>
-          COIN cost:
-          <strong>{{ calc_result.total_cost_str }}</strong><br>
-          Current tier:
-          <strong>Tier {{ calc_result.tier }}</strong>
-          {% if calc_result.next_tier_index %}
-            <br>
-            To Tier {{ calc_result.next_tier_index }}:
-            need
-            <strong>{{ calc_result.points_to_next_str }}</strong>
-            MP
-            ({{ calc_result.progress_to_next_pct }}% of the way).
-          {% endif %}
-        </p>
-      {% else %}
-        <p class=\"hint\">
-          Build a bundle and click \"Add\" to see points, XP, battery, and COIN cost.
-        </p>
-      {% endif %}
-    </form>
-  </div>
-</div>
-"""
-# ================= END MASTERPIECES TEMPLATE ==================
 
 # ================= END MASTERPIECES TEMPLATE ==================
 
@@ -9747,6 +9466,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
