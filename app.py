@@ -619,9 +619,9 @@ BASE_TEMPLATE = """
   <style>
     :root {
       --bg-main: #050712;
-      --bg-elevated: rgba(17, 22, 46, 0.96);
-      --bg-elevated-soft: rgba(17, 22, 46, 0.85);
-      --bg-chip: rgba(26, 34, 72, 0.9);
+      --bg-elevated: rgba(17, 22, 46, 0.70);
+      --bg-elevated-soft: rgba(17, 22, 46, 0.60);
+      --bg-chip: rgba(26, 34, 72, 0.70);
       --accent: #5cf2ff;
       --accent-soft: rgba(92, 242, 255, 0.16);
       --accent-strong: #ff7af2;
@@ -642,19 +642,34 @@ BASE_TEMPLATE = """
       box-sizing: border-box;
     }
 
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
-                   "Segoe UI", sans-serif;
-      background:
-        radial-gradient(circle at top left, #1b2340 0, transparent 55%),
-        radial-gradient(circle at bottom right, #2c1658 0, transparent 55%),
-        var(--bg-main);
-      color: var(--text-main);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+               "Segoe UI", sans-serif;
+
+  background-image: url('/static/backgrounds/lab_desktop.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+
+  background-color: #050712;
+  background-blend-mode: normal;
+
+  color: var(--text-main);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 768px) {
+  body {
+    background-image: url('/static/backgrounds/lab_mobile.png');
+    background-attachment: scroll;
+    background-position: center top;
+  }
+}
+
 
     a {
       color: var(--accent);
@@ -811,6 +826,8 @@ BASE_TEMPLATE = """
       border: 1px solid rgba(148, 163, 184, 0.25);
       box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65);
       margin-bottom: 18px;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
     }
 
 
