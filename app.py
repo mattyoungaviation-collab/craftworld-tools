@@ -192,6 +192,7 @@ def load_masterpiece_metadata_cache() -> Dict[int, Dict[str, Any]]:
 from pricing import (
     fetch_live_prices_in_coin,
     fetch_buy_sell_for_profitability,
+    TOKEN_ADDRESSES,
 )
 
 
@@ -2423,25 +2424,19 @@ def dashboard():
       <h2>📈 Live Resource Prices</h2>
       <p class="subtle">Values shown in COIN and USD (updates on refresh).</p>
 
-      <table>
-        <tr>
-          <th>Resource</th>
-          <th>Price (COIN)</th>
-          <th>Price (USD)</th>
-        </tr>
+      <td>
+        {% set addr = token_addresses.get(row.token) %}
+        {% if addr %}
+          <a href="https://katana.roninchain.com/tokens/{{ addr }}"
+             target="_blank"
+             rel="noopener">
+            {{ row.token }}
+          </a>
+        {% else %}
+          {{ row.token }}
+        {% endif %}
+      </td>
 
-        {% for row in price_rows %}
-          <tr>
-            <td>
-              <a href="{{ url_for('resource_view', token=row.token) }}">
-                {{ row.token }}
-              </a>
-            </td>
-            <td>{{ '%.8f'|format(row.price) }}</td>
-            <td>{{ '%.6f'|format(row.usd) }}</td>
-          </tr>
-        {% endfor %}
-      </table>
     </div>
 
     {% if uid %}
@@ -2551,27 +2546,29 @@ def dashboard():
     {% endif %}
     """
 
-    html = render_template_string(
-        BASE_TEMPLATE,
-        content=render_template_string(
-            content,
-            uid=uid,
-            price_rows=price_rows,
-            coin_usd=coin_usd,
-            error=error,
-            inventory_rows=inventory_rows,
-            factory_rows=factory_rows,
-            global_coin_hour=global_coin_hour,
-            global_coin_day=global_coin_day,
-            global_usd_hour=global_usd_hour,
-            global_usd_day=global_usd_day,
-            best_factory=best_factory,
-            worst_factory=worst_factory,
-            upgrade_suggestions=upgrade_suggestions,
-        ),
-        active_page="dashboard",
-        has_uid=has_uid_flag(),
-    )
+html = render_template_string(
+    BASE_TEMPLATE,
+    content=render_template_string(
+        content,
+        uid=uid,
+        price_rows=price_rows,
+        coin_usd=coin_usd,
+        error=error,
+        inventory_rows=inventory_rows,
+        factory_rows=factory_rows,
+        global_coin_hour=global_coin_hour,
+        global_coin_day=global_coin_day,
+        global_usd_hour=global_usd_hour,
+        global_usd_day=global_usd_day,
+        best_factory=best_factory,
+        worst_factory=worst_factory,
+        upgrade_suggestions=upgrade_suggestions,
+        token_addresses=TOKEN_ADDRESSES,  # <-- add this line
+    ),
+    active_page="dashboard",
+    has_uid=has_uid_flag(),
+)
+
     return html
 
 # -------- Live Charts hub --------
@@ -9241,6 +9238,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
