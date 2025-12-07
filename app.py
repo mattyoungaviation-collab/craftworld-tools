@@ -1297,6 +1297,31 @@ BASE_TEMPLATE = """
       });
     })();
   </script>
+    <footer class="site-footer">
+    <div class="footer-inner">
+      <a href="{{ url_for('terms') }}">Terms of Service</a>
+      &nbsp;•&nbsp;
+      <a href="{{ url_for('privacy') }}">Privacy Policy</a>
+    </div>
+  </footer>
+
+  <style>
+    .site-footer {
+      margin-top: 40px;
+      padding: 14px 0;
+      text-align: center;
+      font-size: 12px;
+      color: rgba(226, 232, 240, 0.55);
+    }
+    .site-footer a {
+      color: rgba(226, 232, 240, 0.85);
+      text-decoration: none;
+    }
+    .site-footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+
 </body>
 </html>
 """
@@ -1583,6 +1608,145 @@ def logout():
     session.pop("user_id", None)
     session.pop("username", None)
     return redirect(url_for("index"))
+
+@app.route("/terms")
+def terms():
+    content = """
+    <div class="card">
+      <h1>Terms of Service</h1>
+      <p class="subtle">
+        These Terms of Service (“Terms”) govern your use of the CraftWorld Tools Live service (“the Service”),
+        operated by CraftWorld Tools Live (“we”, “us”, or “our”).
+      </p>
+
+      <h2>1. Acceptance of Terms</h2>
+      <p>By accessing or using this Service, you agree to be bound by these Terms. If you do not agree, do not use the Service.</p>
+
+      <h2>2. Nature of the Service</h2>
+      <p>
+        CraftWorld Tools Live is an independently developed, unofficial companion tool for the game Craft World.
+        We are not affiliated with, endorsed by, or connected to VOYA Games, Craft World, Angry Dynomites Lab,
+        or any related brands.
+      </p>
+
+      <h2>3. No Liability for Game Data</h2>
+      <p>
+        This Service reads publicly accessible Craft World data and presents calculations and estimates for convenience only.
+        We do not guarantee accuracy, completeness, or continued access to any external data sources.
+        You acknowledge that any actions you take in-game based on information from this Service are done at your own risk.
+      </p>
+
+      <h2>4. Wallets, Keys, and Security</h2>
+      <p>
+        We NEVER request private keys, seed phrases, signatures, or wallet access.  
+        You agree not to enter any sensitive wallet information into this Service.  
+        We are not responsible for account loss, compromised wallets, or third-party scams.
+      </p>
+
+      <h2>5. Donations</h2>
+      <p>
+        Users may voluntarily send on-chain donations to help with server costs.  
+        All donations are non-refundable and carry no expectation of benefits, features, or compensation.
+      </p>
+
+      <h2>6. Data Handling</h2>
+      <p>
+        We store only optional account login data for your CraftWorld Tools Live profile (if you create one).  
+        We do NOT store Craft World account data, wallet addresses, or game inventories.
+      </p>
+
+      <h2>7. Limitation of Liability</h2>
+      <p>
+        The Service is provided “AS IS” without warranties of any kind.
+        To the maximum extent permitted by law, CraftWorld Tools Live is not liable for losses including:
+      </p>
+      <ul>
+        <li>game progress,</li>
+        <li>missed leaderboard placement,</li>
+        <li>incorrect calculations,</li>
+        <li>server downtime,</li>
+        <li>third-party actions,</li>
+        <li>lost digital assets.</li>
+      </ul>
+
+      <h2>8. Modifications</h2>
+      <p>
+        We may modify these Terms at any time. Continued use of the Service constitutes acceptance of updated Terms.
+      </p>
+
+      <h2>9. Contact</h2>
+      <p>
+        For questions, contact: <strong>crypto23b@gmail.com</strong>
+      </p>
+
+      <p class="subtle">© CraftWorld Tools Live</p>
+    </div>
+    """
+
+    return render_template_string(
+        BASE_TEMPLATE,
+        content=content,
+        active_page=None,
+        has_uid=has_uid_flag(),
+    )
+
+@app.route("/privacy")
+def privacy():
+    content = """
+    <div class="card">
+      <h1>Privacy Policy</h1>
+      <p class="subtle">
+        This Privacy Policy describes how CraftWorld Tools Live (“we”, “us”, “our”) handles information.
+      </p>
+
+      <h2>1. Information We Collect</h2>
+      <p>We collect only the following information:</p>
+      <ul>
+        <li>Your CraftWorld Tools Live login credentials (username + hashed password).</li>
+        <li>Optional Account ID for loading Craft World public data.</li>
+      </ul>
+      <p><strong>We do NOT collect:</strong></p>
+      <ul>
+        <li>wallet private keys or seed phrases,</li>
+        <li>signatures or transactions,</li>
+        <li>hidden or private Craft World data,</li>
+        <li>payment or financial information.</li>
+      </ul>
+
+      <h2>2. How Data Is Used</h2>
+      <p>Your stored data is used only to save mastery/workshop boosts and preferences within this Service.</p>
+
+      <h2>3. Cookies & Sessions</h2>
+      <p>We use session cookies only to keep you logged in. We do not use tracking cookies, analytics cookies, or advertising cookies.</p>
+
+      <h2>4. Data Sharing</h2>
+      <p>We do NOT sell, trade, or share your data with any third parties.</p>
+
+      <h2>5. Security</h2>
+      <p>
+        Passwords are hashed before storage.  
+        No sensitive wallet information is ever requested, stored, or processed.
+      </p>
+
+      <h2>6. Your Choices</h2>
+      <p>You may delete your CraftWorld Tools Live account at any time by contacting: <strong>crypto23b@gmail.com</strong></p>
+
+      <h2>7. Policy Changes</h2>
+      <p>
+        We may update this Privacy Policy when needed. Continued use of the Service indicates acceptance of the updated policy.
+      </p>
+
+      <p class="subtle">© CraftWorld Tools Live</p>
+    </div>
+    """
+
+    return render_template_string(
+        BASE_TEMPLATE,
+        content=content,
+        active_page=None,
+        has_uid=has_uid_flag(),
+    )
+
 
 # Helper: read either object.attribute or dict["key"]
 def attr_or_key(obj, name, default=None):
@@ -8571,6 +8735,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
