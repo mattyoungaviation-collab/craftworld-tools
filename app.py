@@ -2432,6 +2432,7 @@ def dashboard():
               <tr>
                 <th>Token</th>
                 <th>Amount</th>
+                <th>Price (COIN)</th>
                 <th>Value (COIN)</th>
                 <th>Value (USD)</th>
               </tr>
@@ -2439,8 +2440,9 @@ def dashboard():
                 <tr>
                   <td>{{ item.token }}</td>
                   <td>{{ '%.4f'|format(item.amount) }}</td>
-                  <td>{{ '%.6f'|format(item.coin_value) }}</td>
-                  <td>{{ '%.6f'|format(item.usd_value) }}</td>
+                  <td>{{ '%.8f'|format(item.price_coin) }}</td>
+                  <td>{{ '%.6f'|format(item.value_coin) }}</td>
+                  <td>{{ '%.6f'|format(item.value_usd) }}</td>
                 </tr>
               {% endfor %}
             </table>
@@ -2448,6 +2450,7 @@ def dashboard():
             <p class="subtle">No inventory data available.</p>
           {% endif %}
         </div>
+
 
       </div>
 
@@ -9216,6 +9219,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
