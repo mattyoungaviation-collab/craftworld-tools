@@ -819,16 +819,16 @@ body {
       margin: 0 auto;
     }
 
-    .card {
-      background: rgba(15, 23, 42, 0.96);
-      border-radius: var(--radius-lg);
-      padding: 18px 18px 16px;
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65);
-      margin-bottom: 18px;
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-    }
+.card {
+  background: rgba(15, 23, 42, 0.60);  /* ~40% see-through */
+  border-radius: var(--radius-lg);
+  padding: 18px 18px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65);
+  margin-bottom: 18px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
 
 
     h1, h2, h3 {
@@ -953,17 +953,26 @@ body {
     }
 
     /* Tables */
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-      margin-top: 6px;
-      border-radius: 12px;
-      overflow: hidden;
-      background: rgba(15, 23, 42, 0.98);
-      border: 1px solid rgba(51, 65, 85, 0.9);
-      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
-    }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 6px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.50);  /* translucent */
+  border: 1px solid rgba(51, 65, 85, 0.7);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
+}
+
+tr:nth-child(even) td {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+tr:nth-child(odd) td {
+  background: rgba(15, 23, 42, 0.40);
+}
+
 
     tr:nth-child(even) td {
       background: rgba(15, 23, 42, 0.94);
@@ -9081,6 +9090,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
