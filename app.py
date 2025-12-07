@@ -1189,8 +1189,7 @@ BASE_TEMPLATE = """
         <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
         <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
         <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
-        <a href="{{ url_for('trees') }}" class="{{ 'active' if active_page=='trees' else '' }}">Trees</a>
-
+        
         {% if session.get('username') %}
           {% set uname = session['username'] %}
           {% if nav_profile and nav_profile.displayName %}
@@ -1378,7 +1377,6 @@ def index():
           <a href="{{ url_for('profitability') }}" class="pill">🏭 Profitability</a>
           <a href="{{ url_for('flex_planner') }}" class="pill">🧠 Flex Planner</a>
           <a href="{{ url_for('masterpieces_view') }}" class="pill">🎨 Masterpieces</a>
-          <a href="{{ url_for('trees') }}" class="pill">🌳 Trees</a>
         </div>
       </div>
 
@@ -9066,6 +9064,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
