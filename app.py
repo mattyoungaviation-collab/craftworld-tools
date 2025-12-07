@@ -2569,7 +2569,7 @@ html = render_template_string(
     has_uid=has_uid_flag(),
 )
 
-    return html
+return html
 
 # -------- Live Charts hub --------
 @app.route("/charts", methods=["GET"])
@@ -9238,6 +9238,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
