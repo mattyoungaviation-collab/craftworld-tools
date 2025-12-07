@@ -1419,6 +1419,89 @@ def index():
     )
     return html
 
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    error: Optional[str] = None
+
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = (request.form.get("password") or "").strip()
+        confirm = (request.form.get("confirm") or "").strip()
+
+        if not username or not password:
+            error = "Username and password are required."
+        elif password != confirm:
+            error = "Passwords do not match."
+        else:
+            conn = get_db_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT id FROM users WHERE username = ?", (username,))
+                existing = cur.fetchone()
+                if existing:
+                    error = "That username is already taken."
+                else:
+                    pwd_hash = generate_password_hash(password)
+                    cur.execute(
+                        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                        (username, pwd_hash),
+                    )
+                    conn.commit()
+                    user_id = cur.lastrowid
+                    session["user_id"] = user_id
+                    session["username"] = username
+                    return redirect(url_for("boosts"))
+            finally:
+                conn.close()
+
+    content = """
+    <div class="card">
+      <h1>Create Account</h1>
+      <p class="subtle">
+        Create a login so your <strong>Mastery &amp; Workshop</strong> boosts are saved
+        to your account, independent of which <strong>Account ID</strong> you're looking at.
+      </p>
+
+      <form method="post" class="section">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required maxlength="64" value="{{ request.form.get('username','') }}">
+        <div class="hint">This is just for this site. It does not need to match your in-game name.</div>
+
+        <label for="password" style="margin-top:10px;">Password</label>
+        <input id="password" name="password" type="password" required>
+
+        <label for="confirm" style="margin-top:10px;">Confirm password</label>
+        <input id="confirm" name="confirm" type="password" required>
+
+        <button type="submit">Create account</button>
+      </form>
+
+      <p class="hint" style="margin-top:10px;">
+        Already have an account?
+        <a href="{{ url_for('login') }}">Log in</a>.
+      </p>
+
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+    </div>
+    """
+
+    # First render the inner content template so Jinja tags inside it work
+    inner = render_template_string(
+        content,
+        error=error,
+    )
+
+    # Then inject that rendered HTML into the base template
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=inner,
+        active_page="login",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -8488,6 +8571,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
