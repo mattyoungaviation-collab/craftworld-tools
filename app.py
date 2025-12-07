@@ -1225,7 +1225,76 @@ tr:nth-child(odd) td {
       padding: 0 4px;
       line-height: 1;
     }
-  </style>
+
+  /* --- Masterpieces: rewards layout --- */
+
+  .rewards-cell {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .reward-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: #020617;
+    border: 1px solid #1e293b;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .reward-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    object-fit: contain;
+    flex-shrink: 0;
+  }
+
+  /* Make tier rewards tables a bit more compact overall */
+  #rewards .table th,
+  #rewards .table td {
+    padding: 4px 6px;
+    font-size: 11px;
+    vertical-align: top;
+  }
+
+  /* Optional: slightly smaller text inside tier tables on very small screens */
+  @media (max-width: 768px) {
+    .reward-chip {
+      font-size: 10px;
+    }
+    .reward-icon {
+      width: 22px;
+      height: 22px;
+    }
+  }
+
+  /* --- Masterpieces: leaderboard list style --- */
+
+  .mp-leaderboard-box {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(2, 6, 23, 0.95);
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    max-height: 480px;
+    overflow: auto;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.75);
+  }
+
+  .mp-leaderboard-box pre {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                 "Liberation Mono", "Courier New", monospace;
+    font-size: 11px;
+    white-space: pre;
+  }
+</style>
+
 
 </head>
 <body>
@@ -4892,7 +4961,9 @@ MASTERPIECES_TEMPLATE = """
         Showing <strong>{{ current_mp.name }}</strong>
         (ID {{ current_mp.id }}) leaderboard.
       </p>
-      {{ current_mp_top50|safe }}
+      <div class="mp-leaderboard-box">
+        {{ current_mp_top50|safe }}
+      </div>
 
       {% if current_gap %}
         <div style="margin-top:0.5rem; font-size:0.9rem;">
@@ -5301,7 +5372,9 @@ MASTERPIECES_TEMPLATE = """
 
     {% if selected_mp %}
       <h3>{{ selected_mp.name or ("MP #" ~ selected_mp.id) }} (ID {{ selected_mp.id }})</h3>
-      {{ selected_mp_top50|safe }}
+      <div class="mp-leaderboard-box">
+        {{ selected_mp_top50|safe }}
+      </div>
 
       {% if selected_gap %}
         <div style="margin-top:0.5rem; font-size:0.9rem;">
@@ -8239,6 +8312,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
