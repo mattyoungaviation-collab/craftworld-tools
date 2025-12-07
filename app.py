@@ -2568,9 +2568,7 @@ html = render_template_string(
     active_page="dashboard",
     has_uid=has_uid_flag(),
 )
-
-
-    return html
+return html
 
 
 # -------- Live Charts hub --------
@@ -9202,6 +9200,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
