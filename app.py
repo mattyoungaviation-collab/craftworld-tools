@@ -4967,7 +4967,7 @@ MASTERPIECES_TEMPLATE = """
 {% for row in current_mp_top50 %}
 {% set prof = row.profile or {} %}
 {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
-{{ "%3d"|format(row.position) }}. {{ "%,d"|format(row.masterpiecePoints) }} MP — {{ name }}
+{{ "%3d"|format(row.position) }}. {{ "{:,.0f}".format(row.masterpiecePoints or 0) }} MP — {{ name }}
 {% endfor %}
         </pre>
       </div>
@@ -5386,7 +5386,7 @@ MASTERPIECES_TEMPLATE = """
 {% for row in selected_mp_top50 %}
 {% set prof = row.profile or {} %}
 {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
-{{ "%3d"|format(row.position) }}. {{ "%,d"|format(row.masterpiecePoints) }} MP — {{ name }}
+{{ "%3d"|format(row.position) }}. {{ "{:,.0f}".format(row.masterpiecePoints or 0) }} MP — {{ name }}
 {% endfor %}
         </pre>
       </div>
@@ -8327,6 +8327,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
