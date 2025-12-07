@@ -6413,6 +6413,26 @@ def masterpieces_view():
         grand_total_coin = sum(r["coin_value"] for r in grand_totals_list)
         grand_total_usd = grand_total_coin * coin_usd if coin_usd else 0.0
 
+    # ---------- Build simple tier ladder rows for planner ----------
+    # Uses MP_TIER_THRESHOLDS (e.g. [10_000, 25_000, 50_000, ...])
+    tier_rows: List[Dict[str, Any]] = []
+    prev_req = 0
+    for idx, req in enumerate(MP_TIER_THRESHOLDS, start=1):
+        try:
+            req_val = int(req)
+        except (TypeError, ValueError):
+            continue  # skip weird values
+
+        delta = req_val - prev_req if idx > 1 else 0
+        tier_rows.append(
+            {
+                "tier": idx,
+                "required": req_val,
+                "delta": delta,
+            }
+        )
+        prev_req = req_val
+
 
     # ---------- Render content for this tab ----------
     content = """
@@ -9491,6 +9511,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
