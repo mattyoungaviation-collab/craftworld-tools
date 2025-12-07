@@ -4961,8 +4961,15 @@ MASTERPIECES_TEMPLATE = """
         Showing <strong>{{ current_mp.name }}</strong>
         (ID {{ current_mp.id }}) leaderboard.
       </p>
+
       <div class="mp-leaderboard-box">
-        {{ current_mp_top50|safe }}
+        <pre>
+{% for row in current_mp_top50 %}
+{% set prof = row.profile or {} %}
+{% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
+{{ "%3d"|format(row.position) }}. {{ "%,d"|format(row.masterpiecePoints) }} MP — {{ name }}
+{% endfor %}
+        </pre>
       </div>
 
       {% if current_gap %}
@@ -4996,6 +5003,7 @@ MASTERPIECES_TEMPLATE = """
     {% else %}
       <p>No current masterpiece leaderboard available.</p>
     {% endif %}
+
   </div>
 
   <!-- ================= REWARDS & TOTALS ================= -->
@@ -5372,8 +5380,15 @@ MASTERPIECES_TEMPLATE = """
 
     {% if selected_mp %}
       <h3>{{ selected_mp.name or ("MP #" ~ selected_mp.id) }} (ID {{ selected_mp.id }})</h3>
+
       <div class="mp-leaderboard-box">
-        {{ selected_mp_top50|safe }}
+        <pre>
+{% for row in selected_mp_top50 %}
+{% set prof = row.profile or {} %}
+{% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
+{{ "%3d"|format(row.position) }}. {{ "%,d"|format(row.masterpiecePoints) }} MP — {{ name }}
+{% endfor %}
+        </pre>
       </div>
 
       {% if selected_gap %}
@@ -8312,6 +8327,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
