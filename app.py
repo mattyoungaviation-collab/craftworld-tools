@@ -6244,8 +6244,7 @@ def masterpieces_view():
 
     # ---------- Render page ----------
     content_html = render_template_string(
-        content,
-        # Top-level error + basic context
+        MASTERPIECES_TEMPLATE,
         error=error,
         coin_usd=coin_usd,
 
@@ -9467,6 +9466,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
