@@ -7768,9 +7768,9 @@ def masterpieces_view():
 </script>
     """
 
-    # Render inner content with context
+    # Render inner content with context (use MASTERPIECES_TEMPLATE now)
     inner = render_template_string(
-        content,
+        MASTERPIECES_TEMPLATE,
         error=error,
         masterpieces_data=masterpieces_data,
         general_mps=general_mps,
@@ -7817,7 +7817,6 @@ def masterpieces_view():
         grand_total_coin=grand_total_coin,
         grand_total_usd=grand_total_usd,
 
-
         # leaderboard size options
         top_n=top_n,
         top_n_options=TOP_N_OPTIONS,
@@ -7836,6 +7835,7 @@ def masterpieces_view():
         has_uid=has_uid_flag(),
     )
     return html
+
 
 
 
@@ -9466,6 +9466,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
