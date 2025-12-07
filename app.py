@@ -6129,6 +6129,35 @@ def masterpieces_view():
             rewards_list = st.get("rewards") or st.get("items") or []
             base_parts: list[str] = []
 
+    if isinstance(src_mp, dict):
+        raw_stages = src_mp.get("rewardStages") or []
+
+        # rewardStages can be either a list or dict; normalise to list
+        if isinstance(raw_stages, dict):
+            stages_iter = list(raw_stages.values())
+        elif isinstance(raw_stages, list):
+            stages_iter = raw_stages
+        else:
+            stages_iter = []
+
+        for idx, st in enumerate(stages_iter, start=1):
+            if not isinstance(st, dict):
+                continue
+
+            # Try to guess tier index and required points from common keys
+            tier_num = st.get("tier") or st.get("stage") or idx
+            required = (
+                st.get("requiredPoints")
+                or st.get("minPoints")
+                or st.get("minimumPoints")
+                or st.get("points")
+                or st.get("requiredMasterpiecePoints")
+            )
+
+            # --- base (free) rewards ---
+            rewards_list = st.get("rewards") or st.get("items") or []
+            base_parts: list[str] = []
+
             if isinstance(rewards_list, list):
                 for rw in rewards_list:
                     if not isinstance(rw, dict):
@@ -6160,58 +6189,59 @@ def masterpieces_view():
                     if label:
                         base_parts.append(label)
 
-        # --- RawrPass / battle pass rewards ---
-        bp_list = st.get("battlePassRewards") or []
-        bp_parts: list[str] = []
+            # --- RawrPass / battle pass rewards ---
+            bp_list = st.get("battlePassRewards") or []
+            bp_parts: list[str] = []
 
-        if isinstance(bp_list, list):
-            for rw in bp_list:
-                if not isinstance(rw, dict):
-                    continue
-                amount = rw.get("amount") or rw.get("quantity")
-                token = rw.get("token") or rw.get("symbol") or rw.get("resource")
-                rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
+            if isinstance(bp_list, list):
+                for rw in bp_list:
+                    if not isinstance(rw, dict):
+                        continue
+                    amount = rw.get("amount") or rw.get("quantity")
+                    token = rw.get("token") or rw.get("symbol") or rw.get("resource")
+                    rtype = rw.get("type") or rw.get("rewardType") or rw.get("__typename")
 
-                # Aggregate numeric resource rewards for RawrPass totals
-                try:
-                    amt_val = float(amount or 0)
-                except (TypeError, ValueError):
-                    amt_val = 0.0
+                    # Aggregate numeric resource rewards for RawrPass totals
+                    try:
+                        amt_val = float(amount or 0)
+                    except (TypeError, ValueError):
+                        amt_val = 0.0
 
-                if token and amt_val > 0 and (not rtype or str(rtype).lower() == "resource"):
-                    t_sym = str(token).upper()
-                    tier_bp_totals[t_sym] = tier_bp_totals.get(t_sym, 0.0) + amt_val
+                    if token and amt_val > 0 and (not rtype or str(rtype).lower() == "resource"):
+                        t_sym = str(token).upper()
+                        tier_bp_totals[t_sym] = tier_bp_totals.get(t_sym, 0.0) + amt_val
 
-                # Text label for the table
-                label_bits: list[str] = []
-                if amount not in (None, "", 0):
-                    label_bits.append(str(amount))
-                if token:
-                    label_bits.append(str(token))
-                elif rtype:
-                    label_bits.append(str(rtype))
+                    # Text label for the table
+                    label_bits: list[str] = []
+                    if amount not in (None, "", 0):
+                        label_bits.append(str(amount))
+                    if token:
+                        label_bits.append(str(token))
+                    elif rtype:
+                        label_bits.append(str(rtype))
 
-                label = " ".join(label_bits).strip()
-                if label:
-                    bp_parts.append(label)
+                    label = " ".join(label_bits).strip()
+                    if label:
+                        bp_parts.append(label)
 
-        # ---- Build the row for this stage ----
-        base_text = ", ".join(base_parts) if base_parts else ""
-        bp_text = ", ".join(bp_parts) if bp_parts else ""
-        if not base_text and not bp_text:
-            base_text = "See in-game rewards"
+            # ---- Build the row for this stage ----
+            base_text = ", ".join(base_parts) if base_parts else ""
+            bp_text = ", ".join(bp_parts) if bp_parts else ""
+            if not base_text and not bp_text:
+                base_text = "See in-game rewards"
 
-        reward_tier_rows.append(
-            {
-                "tier": tier_num,
-                "required": required,
-                "rewards_text": base_text,
-                "battlepass_text": bp_text,
-                # NEW: pass full objects so the template can show icons
-                "rewards": rewards_list,
-                "battlepass_rewards": bp_list,
-            }
-        )
+            reward_tier_rows.append(
+                {
+                    "tier": tier_num,
+                    "required": required,
+                    "rewards_text": base_text,
+                    "battlepass_text": bp_text,
+                    # full objects so template can show icons
+                    "rewards": rewards_list,
+                    "battlepass_rewards": bp_list,
+                }
+            )
+
 
     # Turn totals into lists with value in COIN / USD
     def _totals_to_rows(totals: Dict[str, float]) -> List[Dict[str, Any]]:
@@ -9392,6 +9422,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
