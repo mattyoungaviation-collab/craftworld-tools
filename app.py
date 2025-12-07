@@ -6817,97 +6817,96 @@ def masterpieces_view():
     </label>
   </div>
 
-                {% if reward_tier_rows %}
-                  {% set my_tier = selected_reward_snapshot.tier_index if selected_reward_snapshot else None %}
-                  <div class="scroll-x">
-                    <table class="mp-tier-table">
-                      <tr>
-                        <th>Tier</th>
-                        <th>Required points</th>
-                        <th>Rewards{% if has_battle_pass %} (base + RawrPass){% endif %}</th>
-                      </tr>
-                      {% for row in reward_tier_rows %}
-                        {% set tier_num = row.tier or loop.index %}
-                        <tr class="{% if my_tier and tier_num == my_tier %}mp-row-me{% endif %}">
-                          <td>Tier {{ tier_num }}</td>
-                          <td>
-                            {% if row.required %}
-                              {{ "{:,}".format(row.required) }}
-                            {% else %}
-                              —
-                            {% endif %}
-                          </td>
-                          <td>
-                            <div class="rewards-cell">
-                              {# Base (free) text #}
-                              {% if row.rewards_text %}
-                                <span>{{ row.rewards_text }}</span>
-                              {% endif %}
+  {% if reward_tier_rows %}
+    {% set my_tier = selected_reward_snapshot.tier_index if selected_reward_snapshot else None %}
+    <div class="scroll-x">
+      <table class="mp-tier-table">
+        <tr>
+          <th>Tier</th>
+          <th>Required points</th>
+          <th>Rewards{% if has_battle_pass %} (base + RawrPass){% endif %}</th>
+        </tr>
+        {% for row in reward_tier_rows %}
+          {% set tier_num = row.tier or loop.index %}
+          <tr class="{% if my_tier and tier_num == my_tier %}mp-row-me{% endif %}">
+            <td>Tier {{ tier_num }}</td>
+            <td>
+              {% if row.required %}
+                {{ "{:,}".format(row.required) }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td>
+              <div class="rewards-cell">
+                {# Base text #}
+                {% if row.rewards_text %}
+                  <span>{{ row.rewards_text }}</span>
+                {% endif %}
 
-                              {# Base (free) icons #}
-                              {% for rw in row.rewards or [] %}
-                                {% set typename = rw.__typename or rw.type or rw.rewardType %}
-                                {% set img = None %}
-                                {% if typename == "Badge" %}
-                                  {% set img = rw.url %}
-                                {% elif typename == "Avatar" %}
-                                  {% set img = rw.avatarUrl %}
-                                {% elif typename == "BuildingReward" %}
-                                  {% set img = rw.image or rw.icon or rw.url %}
-                                {% endif %}
+                {# Base icons #}
+                {% for rw in row.rewards or [] %}
+                  {% set typename = rw.__typename or rw.type or rw.rewardType %}
+                  {% set img = None %}
+                  {% if typename == "Badge" %}
+                    {% set img = rw.url %}
+                  {% elif typename == "Avatar" %}
+                    {% set img = rw.avatarUrl %}
+                  {% elif typename == "BuildingReward" %}
+                    {% set img = rw.image or rw.icon or rw.url %}
+                  {% endif %}
 
-                                {% if img %}
-                                  {% if img.startswith("ipfs://") %}
-                                    {% set img = "https://ipfs.io/ipfs/" + img[7:] %}
-                                  {% endif %}
-                                  <span class="reward-chip"
-                                        title="{{ rw.displayName or rw.badgeName or rw.buildingSubType or typename }}">
-                                    <img src="{{ img }}" class="reward-icon" alt="">
-                                  </span>
-                                {% endif %}
-                              {% endfor %}
+                  {% if img %}
+                    {% if img.startswith("ipfs://") %}
+                      {% set img = "https://ipfs.io/ipfs/" + img[7:] %}
+                    {% endif %}
+                    <span class="reward-chip"
+                          title="{{ rw.displayName or rw.badgeName or rw.buildingSubType or typename }}">
+                      <img src="{{ img }}" class="reward-icon" alt="">
+                    </span>
+                  {% endif %}
+                {% endfor %}
 
-                              {# RawrPass extras #}
-                              {% if has_battle_pass %}
-                                {% if row.battlepass_text %}
-                                  <span class="subtle">+ RawrPass: {{ row.battlepass_text }}</span>
-                                {% endif %}
-                                {% for rw in row.battlepass_rewards or [] %}
-                                  {% set typename = rw.__typename or rw.type or rw.rewardType %}
-                                  {% set img = None %}
-                                  {% if typename == "Badge" %}
-                                    {% set img = rw.url %}
-                                  {% elif typename == "Avatar" %}
-                                    {% set img = rw.avatarUrl %}
-                                  {% elif typename == "BuildingReward" %}
-                                    {% set img = rw.image or rw.icon or rw.url %}
-                                  {% endif %}
+                {# RawrPass extras #}
+                {% if has_battle_pass %}
+                  {% if row.battlepass_text %}
+                    <span class="subtle">+ RawrPass: {{ row.battlepass_text }}</span>
+                  {% endif %}
+                  {% for rw in row.battlepass_rewards or [] %}
+                    {% set typename = rw.__typename or rw.type or rw.rewardType %}
+                    {% set img = None %}
+                    {% if typename == "Badge" %}
+                      {% set img = rw.url %}
+                    {% elif typename == "Avatar" %}
+                      {% set img = rw.avatarUrl %}
+                    {% elif typename == "BuildingReward" %}
+                      {% set img = rw.image or rw.icon or rw.url %}
+                    {% endif %}
 
-                                  {% if img %}
-                                    {% if img.startswith("ipfs://") %}
-                                      {% set img = "https://ipfs.io/ipfs/" + img[7:] %}
-                                    {% endif %}
-                                    <span class="reward-chip"
-                                          title="{{ rw.displayName or rw.badgeName or rw.buildingSubType or typename }}">
-                                      <img src="{{ img }}" class="reward-icon" alt="">
-                                    </span>
-                                  {% endif %}
-                                {% endfor %}
-                              {% endif %}
-                            </div>
-                          </td>
-                        </tr>
-                      {% endfor %}
-                    </table>
-                  </div>
-                {% else %}
-
+                    {% if img %}
+                      {% if img.startswith("ipfs://") %}
+                        {% set img = "https://ipfs.io/ipfs/" + img[7:] %}
+                      {% endif %}
+                      <span class="reward-chip"
+                            title="{{ rw.displayName or rw.badgeName or rw.buildingSubType or typename }}">
+                        <img src="{{ img }}" class="reward-icon" alt="">
+                      </span>
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
   {% else %}
     <p class="hint">
       No tier reward metadata in the API for this Masterpiece yet — check in-game rewards.
     </p>
   {% endif %}
 </div>
+
 
 
 
@@ -7175,35 +7174,41 @@ def masterpieces_view():
                       <th>Player</th>
                       <th>Points</th>
                     </tr>
-{% for row in current_mp_top50 %}
-  {% set prof = row.profile or {} %}
-  {% set name = prof.displayName or "" %}
-  {% set uid = prof.uid or "" %}
-  {% set is_me = highlight_query and (
-    highlight_query|lower in name|lower
-    or highlight_query|lower in uid|lower
-  ) %}
-  <td class="subtle">
-    {% if name %}
-      {{ name }}
-      {% if uid %}
-        <br>
-        <span style="font-size:11px; opacity:0.8;">
-          {{ uid }}
-        </span>
-      {% endif %}
-    {% elif uid %}
-      {{ uid }}
-    {% else %}
-      —
-    {% endif %}
-    {% if is_me %}
-      <span class="me-pill">← you</span>
-    {% endif %}
-  </td>
-{% endfor %}
-    </table>
-  </div>
+                    {% for row in current_mp_top50 %}
+                      {% set prof = row.profile or {} %}
+                      {% set name = prof.displayName or "" %}
+                      {% set uid = prof.uid or "" %}
+                      {% set is_me = highlight_query and (
+                        highlight_query|lower in name|lower
+                        or highlight_query|lower in uid|lower
+                      ) %}
+                      <tr class="{% if is_me %}mp-row-me{% endif %}">
+                        <td>{{ row.position }}</td>
+                        <td class="subtle">
+                          {% if name %}
+                            {{ name }}
+                            {% if uid %}
+                              <br>
+                              <span style="font-size:11px; opacity:0.8;">
+                                {{ uid }}
+                              </span>
+                            {% endif %}
+                          {% elif uid %}
+                            {{ uid }}
+                          {% else %}
+                            —
+                          {% endif %}
+                          {% if is_me %}
+                            <span class="me-pill">← you</span>
+                          {% endif %}
+                        </td>
+                        <td>{{ "{:,.0f}".format(row.masterpiecePoints or 0) }}</td>
+                      </tr>
+                    {% endfor %}
+                  </table>
+                </div>
+              {% else %}
+
 
               {% else %}
                 <p class="hint">No leaderboard data yet for the current masterpiece.</p>
@@ -7289,97 +7294,94 @@ def masterpieces_view():
               </p>
             {% endif %}
 
-            <div class="two-col" style="margin-top:10px; gap:12px;">
               <div>
                 <h3 style="margin-top:0;">Tier rewards</h3>
-  {% if reward_tier_rows %}
-    <div class="scroll-x">
-      <table class="mp-tier-table">
-        <tr>
-          <th>Tier</th>
-          <th>Required points</th>
-          <th>Rewards{% if has_battle_pass %} (base + RawrPass){% endif %}</th>
-        </tr>
-        {% for row in reward_tier_rows %}
-          <tr>
-            <td>Tier {{ row.tier or loop.index }}</td>
-            <td>
-              {% if row.required %}
-                {{ "{:,}".format(row.required) }}
-              {% else %}
-                —
-              {% endif %}
-            </td>
-            <td>
-              <div class="rewards-cell">
-                {# Base (free) text #}
-                {% if row.rewards_text %}
-                  <span>{{ row.rewards_text }}</span>
-                {% endif %}
+                {% if reward_tier_rows %}
+                  <div class="scroll-x">
+                    <table class="mp-tier-table">
+                      <tr>
+                        <th>Tier</th>
+                        <th>Required points</th>
+                        <th>Rewards{% if has_battle_pass %} (base + RawrPass){% endif %}</th>
+                      </tr>
+                      {% for row in reward_tier_rows %}
+                        {% set tier_num = row.tier or loop.index %}
+                        <tr class="{% if selected_reward_snapshot and selected_reward_snapshot.tier_index and tier_num == selected_reward_snapshot.tier_index %}mp-row-me{% endif %}">
+                          <td>Tier {{ tier_num }}</td>
+                          <td>
+                            {% if row.required %}
+                              {{ "{:,}".format(row.required) }}
+                            {% else %}
+                              —
+                            {% endif %}
+                          </td>
+                          <td>
+                            <div class="rewards-cell">
+                              {% if row.rewards_text %}
+                                <span>{{ row.rewards_text }}</span>
+                              {% endif %}
 
-                {# Base (free) icons #}
-                {% for rw in row.rewards or [] %}
-                  {% set typename = rw.__typename or rw.type or rw.rewardType %}
-                  {% set img = None %}
-                  {% if typename == "Badge" %}
-                    {% set img = rw.url %}
-                  {% elif typename == "Avatar" %}
-                    {% set img = rw.avatarUrl %}
-                  {% elif typename == "BuildingReward" %}
-                    {% set img = rw.image or rw.icon or rw.url %}
-                  {% endif %}
+                              {% for rw in row.rewards or [] %}
+                                {% set typename = rw.__typename or rw.type or rw.rewardType %}
+                                {% set img = None %}
+                                {% if typename == "Badge" %}
+                                  {% set img = rw.url %}
+                                {% elif typename == "Avatar" %}
+                                  {% set img = rw.avatarUrl %}
+                                {% elif typename == "BuildingReward" %}
+                                  {% set img = rw.image or rw.icon or rw.url %}
+                                {% endif %}
 
-                  {% if img %}
-                    {% if img.startswith("ipfs://") %}
-                      {% set img = "https://ipfs.io/ipfs/" + img[7:] %}
-                    {% endif %}
-                    <span class="reward-chip"
-                          title="{{ rw.displayName or rw.badgeName or rw.buildingSubType or typename }}">
-                      <img src="{{ img }}" class="reward-icon" alt="">
-                    </span>
-                  {% endif %}
-                {% endfor %}
+                                {% if img %}
+                                  {% if img.startswith("ipfs://") %}
+                                    {% set img = "https://ipfs.io/ipfs/" + img[7:] %}
+                                  {% endif %}
+                                  <span class="reward-chip"
+                                        title="{{ rw.displayName or rw.badgeName or rw.buildingSubType or typename }}">
+                                    <img src="{{ img }}" class="reward-icon" alt="">
+                                  </span>
+                                {% endif %}
+                              {% endfor %}
 
-                {# RawrPass extras #}
-                {% if has_battle_pass %}
-                  {% if row.battlepass_text %}
-                    <span class="subtle">+ RawrPass: {{ row.battlepass_text }}</span>
-                  {% endif %}
-                  {% for rw in row.battlepass_rewards or [] %}
-                    {% set typename = rw.__typename or rw.type or rw.rewardType %}
-                    {% set img = None %}
-                    {% if typename == "Badge" %}
-                      {% set img = rw.url %}
-                    {% elif typename == "Avatar" %}
-                      {% set img = rw.avatarUrl %}
-                    {% elif typename == "BuildingReward" %}
-                      {% set img = rw.image or rw.icon or rw.url %}
-                    {% endif %}
+                              {% if has_battle_pass %}
+                                {% if row.battlepass_text %}
+                                  <span class="subtle">+ RawrPass: {{ row.battlepass_text }}</span>
+                                {% endif %}
+                                {% for rw in row.battlepass_rewards or [] %}
+                                  {% set typename = rw.__typename or rw.type or rw.rewardType %}
+                                  {% set img = None %}
+                                  {% if typename == "Badge" %}
+                                    {% set img = rw.url %}
+                                  {% elif typename == "Avatar" %}
+                                    {% set img = rw.avatarUrl %}
+                                  {% elif typename == "BuildingReward" %}
+                                    {% set img = rw.image or rw.icon or rw.url %}
+                                  {% endif %}
 
-                    {% if img %}
-                      {% if img.startswith("ipfs://") %}
-                        {% set img = "https://ipfs.io/ipfs/" + img[7:] %}
-                      {% endif %}
-                      <span class="reward-chip"
-                            title="{{ rw.displayName or rw.badgeName or rw.buildingSubType or typename }}">
-                        <img src="{{ img }}" class="reward-icon" alt="">
-                      </span>
-                    {% endif %}
-                  {% endfor %}
-                {% endif %}
-              </div>
-            </td>
-          </tr>
-        {% endfor %}
-      </table>
-    </div>
-  {% else %}
-
+                                  {% if img %}
+                                    {% if img.startswith("ipfs://") %}
+                                      {% set img = "https://ipfs.io/ipfs/" + img[7:] %}
+                                    {% endif %}
+                                    <span class="reward-chip"
+                                          title="{{ rw.displayName or rw.badgeName or rw.buildingSubType or typename }}">
+                                      <img src="{{ img }}" class="reward-icon" alt="">
+                                    </span>
+                                  {% endif %}
+                                {% endfor %}
+                              {% endif %}
+                            </div>
+                          </td>
+                        </tr>
+                      {% endfor %}
+                    </table>
+                  </div>
+                {% else %}
                   <p class="hint">
                     No tier reward metadata in the API for this masterpiece yet — check in-game rewards.
                   </p>
                 {% endif %}
               </div>
+
               <div class="section" style="margin-top:8px;">
   <h4 style="margin-top:0;">📦 Total estimated tier rewards (full completion)</h4>
   <p class="subtle">
@@ -9489,6 +9491,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
