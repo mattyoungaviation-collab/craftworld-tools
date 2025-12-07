@@ -8649,71 +8649,100 @@ def calculate():
       {% endif %}
 
       {% if calc_result %}
-        <div class="card" style="margin-top:8px;">
+
+        <!-- SUMMARY CARD -->
+        <div class="card" style="margin-top:8px; margin-bottom:16px;">
           <h2>
-            Result for {{ calc_result.token }} L{{ calc_result.level }}
+            {{ calc_result.token }} L{{ calc_result.level }}
             {% if calc_result.target_level %} → L{{ calc_result.target_level }}{% endif %}
           </h2>
           <p class="subtle">
-            # factories: {{ calc_result.count }}<br>
-            Yield/Mastery: {{ calc_result.yield_pct }}%<br>
-            Speed factor: {{ calc_result.speed_factor }}x<br>
-            Workers: {{ calc_result.workers }}
+            Factories: <strong>{{ calc_result.count }}</strong> •
+            Yield / Mastery: <strong>{{ "%.1f"|format(calc_result.yield_pct) }}%</strong> •
+            Speed: <strong>{{ "%.2f"|format(calc_result.speed_factor) }}x</strong> •
+            Workers: <strong>{{ calc_result.workers }}</strong>
           </p>
+        </div>
 
+        <!-- PRODUCTION -->
+        <div class="card" style="margin-bottom:12px;">
           <h3>Production</h3>
-          <p>
-            Duration (base): {{ "%.2f"|format(calc_result.duration_min) }} min<br>
-            Effective duration (speed & workers): {{ "%.2f"|format(calc_result.effective_duration) }} min<br>
-            Crafts/hour (single factory): {{ "%.4f"|format(calc_result.crafts_per_hour) }}
+          <p class="subtle">
+            <strong>Base duration:</strong>
+            {{ "%.2f"|format(calc_result.duration_min) }} min<br>
+            <strong>Effective duration (speed &amp; workers):</strong>
+            {{ "%.2f"|format(calc_result.effective_duration) }} min<br>
+            <strong>Crafts / hour (per factory):</strong>
+            {{ "%.4f"|format(calc_result.crafts_per_hour) }}
           </p>
+        </div>
 
+        <!-- OUTPUTS -->
+        <div class="card" style="margin-bottom:12px;">
           <h3>Outputs (per craft)</h3>
-          <p>
+          <p class="subtle">
+            <strong>Amount:</strong>
             {{ "%.4f"|format(calc_result.out_amount) }} {{ calc_result.out_token }}<br>
-            Value: {{ "%.6f"|format(calc_result.value_coin_per_craft) }} COIN / craft
+            <strong>Value:</strong>
+            {{ "%.6f"|format(calc_result.value_coin_per_craft) }} COIN / craft
           </p>
+        </div>
 
-          <h3>Inputs (per craft – adjusted for {{ calc_result.yield_pct }}% yield)</h3>
+        <!-- INPUTS -->
+        <div class="card" style="margin-bottom:12px;">
+          <h3>Inputs (per craft — adjusted for {{ calc_result.yield_pct }}% yield)</h3>
           {% if calc_result.inputs %}
             <table>
-              <tr>
-                <th>Token</th>
-                <th>Amount</th>
-                <th>Value (COIN)</th>
-              </tr>
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Amount</th>
+                  <th>Value (COIN)</th>
+                </tr>
+              </thead>
+              <tbody>
               {% for tok, qty in calc_result.inputs.items() %}
                 <tr>
                   <td>{{ tok }}</td>
                   <td>{{ "%.6f"|format(qty) }}</td>
-                  <td>
-                    {% set val = calc_result.inputs_value_coin[tok] %}
-                    {{ "%.6f"|format(val) }}
-                  </td>
+                  <td>{{ "%.6f"|format(calc_result.inputs_value_coin[tok]) }}</td>
                 </tr>
               {% endfor %}
+              </tbody>
             </table>
           {% else %}
             <p class="subtle">No inputs found for this recipe.</p>
           {% endif %}
+        </div>
 
+        <!-- PROFIT -->
+        <div class="card" style="margin-bottom:12px;">
           <h3>Profit</h3>
-          <p>
-            Cost / craft: {{ "%.6f"|format(calc_result.cost_coin_per_craft) }} COIN<br>
-            Value / craft: {{ "%.6f"|format(calc_result.value_coin_per_craft) }} COIN<br>
-            <br>
-            Profit / craft: {{ "%+.6f"|format(calc_result.profit_coin_per_craft) }} COIN<br>
-            Profit / hour ({{ calc_result.count }} factory/factories):
+          <p class="subtle">
+            <strong>Cost / craft:</strong>
+            {{ "%.6f"|format(calc_result.cost_coin_per_craft) }} COIN<br>
+            <strong>Value / craft:</strong>
+            {{ "%.6f"|format(calc_result.value_coin_per_craft) }} COIN<br><br>
+
+            <strong>Profit / craft:</strong>
+            {{ "%+.6f"|format(calc_result.profit_coin_per_craft) }} COIN<br>
+            <strong>Profit / hour ({{ calc_result.count }} factory/factories):</strong>
             {{ "%+.6f"|format(calc_result.profit_coin_per_hour) }} COIN
           </p>
+        </div>
 
-          <h3>Upgrade costs</h3>
+        <!-- UPGRADES -->
+        <div class="card">
+          <h3>Upgrade Costs</h3>
+
           {% if calc_result.upgrade_single %}
-            <p>
-              <strong>Next level (single step):</strong><br>
+            <h4>Next level (single step)</h4>
+            <p class="subtle">
+              <strong>Resource:</strong>
               {{ calc_result.upgrade_single.amount_per_factory }} {{ calc_result.upgrade_single.token }} per factory<br>
-              Cost per factory: {{ "%.6f"|format(calc_result.upgrade_single.coin_per_factory) }} COIN<br>
-              Cost for {{ calc_result.count }} factory/factories:
+              <strong>Cost / factory:</strong>
+              {{ "%.6f"|format(calc_result.upgrade_single.coin_per_factory) }} COIN<br>
+              <strong>Total for {{ calc_result.count }} factories:</strong>
               {{ "%.6f"|format(calc_result.upgrade_single.coin_total) }} COIN
             </p>
           {% else %}
@@ -8721,16 +8750,18 @@ def calculate():
           {% endif %}
 
           {% if calc_result.upgrade_chain %}
-            <p>
-              <strong>Full chain {{ calc_result.level }} → {{ calc_result.target_level }}:</strong>
-            </p>
+            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.15);margin:10px 0 8px;">
+            <h4>Full upgrade chain L{{ calc_result.level }} → L{{ calc_result.target_level }}</h4>
             <table>
-              <tr>
-                <th>Token</th>
-                <th>Amount per factory</th>
-                <th>COIN / factory</th>
-                <th>COIN (all factories)</th>
-              </tr>
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Amount / factory</th>
+                  <th>COIN / factory</th>
+                  <th>COIN (all factories)</th>
+                </tr>
+              </thead>
+              <tbody>
               {% for step in calc_result.upgrade_chain %}
                 <tr>
                   <td>{{ step.token }}</td>
@@ -8739,10 +8770,12 @@ def calculate():
                   <td>{{ "%.6f"|format(step.coin_total) }}</td>
                 </tr>
               {% endfor %}
+              </tbody>
             </table>
           {% endif %}
         </div>
       {% endif %}
+
 
       {% if best_rows %}
         <div class="card" style="margin-top:8px;">
@@ -9090,6 +9123,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
