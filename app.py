@@ -2546,29 +2546,30 @@ def dashboard():
     {% endif %}
     """
 
-html = render_template_string(
-    BASE_TEMPLATE,
-    content=render_template_string(
-        content,
-        uid=uid,
-        price_rows=price_rows,
-        coin_usd=coin_usd,
-        error=error,
-        inventory_rows=inventory_rows,
-        factory_rows=factory_rows,
-        global_coin_hour=global_coin_hour,
-        global_coin_day=global_coin_day,
-        global_usd_hour=global_usd_hour,
-        global_usd_day=global_usd_day,
-        best_factory=best_factory,
-        worst_factory=best_factory,
-        upgrade_suggestions=upgrade_suggestions,
-        token_addresses=TOKEN_ADDRESSES,
-    ),
-    active_page="dashboard",
-    has_uid=has_uid_flag(),
-)
-return html
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=render_template_string(
+            content,
+            uid=uid,
+            price_rows=price_rows,
+            coin_usd=coin_usd,
+            error=error,
+            inventory_rows=inventory_rows,
+            factory_rows=factory_rows,
+            global_coin_hour=global_coin_hour,
+            global_coin_day=global_coin_day,
+            global_usd_hour=global_usd_hour,
+            global_usd_day=global_usd_day,
+            best_factory=best_factory,
+            worst_factory=worst_factory,  # <-- fix this
+            upgrade_suggestions=upgrade_suggestions,
+            token_addresses=TOKEN_ADDRESSES,
+        ),
+        active_page="dashboard",
+        has_uid=has_uid_flag(),
+    )
+
+    return html
 
 
 # -------- Live Charts hub --------
@@ -9200,6 +9201,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
