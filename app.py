@@ -6078,18 +6078,6 @@ def masterpieces_view():
     # Serialize calculator state back into hidden JSON field
     calc_state_json = json.dumps(calc_resources)
 
-    # ---------- Tier thresholds (static ladder) ----------
-    tier_rows = []
-    for i, req in enumerate(MP_TIER_THRESHOLDS, start=1):
-        prev_req = MP_TIER_THRESHOLDS[i - 2] if i > 1 else 0
-        tier_rows.append(
-            {
-                "tier": i,
-                "required": req,
-                "delta": req - prev_req,
-            }
-        )
-
     # ---------- Tier rewards from the Masterpiece (rewardStages) ----------
     reward_tier_rows: list[dict[str, object]] = []
 
@@ -6099,35 +6087,6 @@ def masterpieces_view():
 
     # Use the selected MP for History first, then planner, then current
     src_mp = selected_mp or planner_mp or current_mp
-
-    if isinstance(src_mp, dict):
-        raw_stages = src_mp.get("rewardStages") or []
-
-        # rewardStages can be either a list or dict; normalise to list
-        if isinstance(raw_stages, dict):
-            stages_iter = list(raw_stages.values())
-        elif isinstance(raw_stages, list):
-            stages_iter = raw_stages
-        else:
-            stages_iter = []
-
-        for idx, st in enumerate(stages_iter, start=1):
-            if not isinstance(st, dict):
-                continue
-
-            # Try to guess tier index and required points from common keys
-            tier_num = st.get("tier") or st.get("stage") or idx
-            required = (
-                st.get("requiredPoints")
-                or st.get("minPoints")
-                or st.get("minimumPoints")
-                or st.get("points")
-                or st.get("requiredMasterpiecePoints")
-            )
-
-            # --- base (free) rewards ---
-            rewards_list = st.get("rewards") or st.get("items") or []
-            base_parts: list[str] = []
 
     if isinstance(src_mp, dict):
         raw_stages = src_mp.get("rewardStages") or []
@@ -6236,11 +6195,12 @@ def masterpieces_view():
                     "required": required,
                     "rewards_text": base_text,
                     "battlepass_text": bp_text,
-                    # full objects so template can show icons
+                    # full objects so template can show icons later if you want
                     "rewards": rewards_list,
                     "battlepass_rewards": bp_list,
                 }
             )
+
 
 
     # Turn totals into lists with value in COIN / USD
@@ -9422,6 +9382,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
