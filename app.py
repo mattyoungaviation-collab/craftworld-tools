@@ -195,6 +195,40 @@ from pricing import (
     TOKEN_ADDRESSES,
 )
 
+# Fixed display order for token charts dropdown
+TOKENS_CHART_ORDER = [
+    "EARTH",
+    "WATER",
+    "FIRE",
+    "MUD",
+    "CLAY",
+    "SAND",
+    "COPPER",
+    "SEAWATER",
+    "HEAT",
+    "ALGAE",
+    "LAVA",
+    "CERAMICS",
+    "STEEL",
+    "OXYGEN",
+    "GLASS",
+    "GAS",
+    "STONE",
+    "STEAM",
+    "SCREWS",
+    "FUEL",
+    "CEMENT",
+    "OIL",
+    "ACID",
+    "SULFUR",
+    "PLASTICS",
+    "FIBERGLASS",
+    "ENERGY",
+    "HYDROGEN",
+    "DYNAMITE",
+    "COIN",
+]
+
 
 from factories import (
     my_factories,
@@ -2608,7 +2642,7 @@ def charts():
     selected = (request.args.get("token") or "").upper().strip()
 
     # All tokens we know contract addresses for
-    tokens = sorted(TOKEN_ADDRESSES.keys())
+    tokens = [t for t in TOKENS_CHART_ORDER if t in TOKEN_ADDRESSES]
 
     # Contract address (if any) for the selected token
     addr = TOKEN_ADDRESSES.get(selected) if selected else None
@@ -9236,6 +9270,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
