@@ -633,7 +633,6 @@ def inject_nav_user():
         "nav_avatar_url": avatar_url,
     }
 
-# somewhere near the top of app.py (after app is created)
 def ipfs_to_http(url: str | None) -> str:
     """
     Turn ipfs://Qm... into a real https URL.
@@ -6196,20 +6195,22 @@ def masterpieces_view():
                     if label:
                         bp_parts.append(label)
 
-            base_text = ", ".join(base_parts) if base_parts else ""
-            bp_text = ", ".join(bp_parts) if bp_parts else ""
+base_text = ", ".join(base_parts) if base_parts else ""
+bp_text = ", ".join(bp_parts) if bp_parts else ""
+if not base_text and not bp_text:
+    base_text = "See in-game rewards"
 
-            if not base_text and not bp_text:
-                base_text = "See in-game rewards"
-
-            reward_tier_rows.append(
-                {
-                    "tier": tier_num,
-                    "required": required,
-                    "rewards_text": base_text,
-                    "battlepass_text": bp_text,
-                }
-            )
+reward_tier_rows.append(
+    {
+        "tier": tier_num,
+        "required": required,
+        "rewards_text": base_text,
+        "battlepass_text": bp_text,
+        # NEW: pass full objects so the template can show icons
+        "rewards": rewards_list,
+        "battlepass_rewards": bp_list,
+    }
+)
 
     # Turn totals into lists with value in COIN / USD
     def _totals_to_rows(totals: Dict[str, float]) -> List[Dict[str, Any]]:
@@ -9390,6 +9391,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
