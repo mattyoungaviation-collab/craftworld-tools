@@ -633,9 +633,20 @@ def inject_nav_user():
         "nav_avatar_url": avatar_url,
     }
 
+# somewhere near the top of app.py (after app is created)
+def ipfs_to_http(url: str | None) -> str:
+    """
+    Turn ipfs://Qm... into a real https URL.
+    """
+    if not url:
+        return ""
+    if url.startswith("ipfs://"):
+        return "https://ipfs.io/ipfs/" + url[len("ipfs://"):]
+        # or use your preferred gateway
+        # return "https://craft-world-ips.angry-dynomites-lab.com/ipfs/" + url[len("ipfs://"):]
+    return url
 
-
-
+app.jinja_env.filters["ipfs_to_http"] = ipfs_to_http
 
 # -------- Helper: do we have a UID stored? --------
 def has_uid_flag() -> bool:
@@ -4992,8 +5003,94 @@ content = """
             <tr>
               <td>{{ row.tier }}</td>
               <td>{{ row.required }}</td>
-              <td>{{ row.rewards_text }}</td>
-              <td>{{ row.battlepass_text }}</td>
+
+              {# ===== BASE REWARDS WITH IMAGES ===== #}
+              <td class=\"rewards-cell\">
+                {% if row.rewards %}
+                  {% for reward in row.rewards %}
+                    <div class=\"reward-chip\">
+                      {# ICON #}
+                      {% if reward.__typename == 'Avatar' %}
+                        <img
+                          class=\"reward-icon\"
+                          src=\"{{ reward.avatarUrl }}\"
+                          alt=\"Avatar reward\"
+                          loading=\"lazy\"
+                        >
+                      {% elif reward.__typename == 'Badge' %}
+                        <img
+                          class=\"reward-icon\"
+                          src=\"{{ reward.url|ipfs_to_http }}\"
+                          alt=\"{{ reward.displayName or reward.badgeName }}\"
+                          loading=\"lazy\"
+                        >
+                      {% endif %}
+
+                      {# LABEL #}
+                      {% if reward.__typename == 'Resource' %}
+                        <span>{{ reward.amount|int }} {{ reward.symbol }}</span>
+                      {% elif reward.__typename == 'Avatar' %}
+                        <span>Avatar</span>
+                      {% elif reward.__typename == 'Badge' %}
+                        <span>{{ reward.displayName or reward.badgeName }}</span>
+                      {% elif reward.__typename == 'TradePack' %}
+                        <span>{{ reward.amount }}x Trade Pack</span>
+                      {% elif reward.__typename == 'BuildingReward' %}
+                        <span>{{ reward.buildingSubType }} ({{ reward.buildingType }})</span>
+                      {% elif reward.__typename == 'OnChainToken' %}
+                        <span>{{ reward.symbol }}</span>
+                      {% else %}
+                        <span>{{ reward.__typename }}</span>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                {% else %}
+                  {{ row.rewards_text }}
+                {% endif %}
+              </td>
+
+              {# ===== RAWRPASS REWARDS WITH IMAGES ===== #}
+              <td class=\"rewards-cell\">
+                {% if row.battlepass_rewards %}
+                  {% for reward in row.battlepass_rewards %}
+                    <div class=\"reward-chip\">
+                      {% if reward.__typename == 'Avatar' %}
+                        <img
+                          class=\"reward-icon\"
+                          src=\"{{ reward.avatarUrl }}\"
+                          alt=\"Avatar reward\"
+                          loading=\"lazy\"
+                        >
+                      {% elif reward.__typename == 'Badge' %}
+                        <img
+                          class=\"reward-icon\"
+                          src=\"{{ reward.url|ipfs_to_http }}\"
+                          alt=\"{{ reward.displayName or reward.badgeName }}\"
+                          loading=\"lazy\"
+                        >
+                      {% endif %}
+
+                      {% if reward.__typename == 'Resource' %}
+                        <span>{{ reward.amount|int }} {{ reward.symbol }}</span>
+                      {% elif reward.__typename == 'Avatar' %}
+                        <span>Avatar</span>
+                      {% elif reward.__typename == 'Badge' %}
+                        <span>{{ reward.displayName or reward.badgeName }}</span>
+                      {% elif reward.__typename == 'TradePack' %}
+                        <span>{{ reward.amount }}x Trade Pack</span>
+                      {% elif reward.__typename == 'BuildingReward' %}
+                        <span>{{ reward.buildingSubType }} ({{ reward.buildingType }})</span>
+                      {% elif reward.__typename == 'OnChainToken' %}
+                        <span>{{ reward.symbol }}</span>
+                      {% else %}
+                        <span>{{ reward.__typename }}</span>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                {% else %}
+                  {{ row.battlepass_text }}
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -5004,6 +5101,7 @@ content = """
         Check in-game for full details.
       </p>
     {% endif %}
+
 
     <!-- Totals (base / BP / combined) -->
     <h3 style=\"margin-top:1rem;\">Total resource rewards</h3>
@@ -6494,9 +6592,32 @@ def masterpieces_view():
           background:rgba(30,64,175,0.65);
         }
 
+        /* ===== Reward chips (tier + leaderboard) ===== */
+        .rewards-cell {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .reward-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 2px 6px;
+          border-radius: 999px;
+          font-size: 0.8rem;
+          border: 1px solid rgba(148,163,184,0.5);
+          background: rgba(15,23,42,0.85);
+          white-space: nowrap;
+        }
+        .reward-icon {
+          width: 22px;
+          height: 22px;
+          border-radius: 4px;
+          object-fit: cover;
+        }
+
         @media (max-width: 768px) {
           .mp-planner-grid {
-
             grid-template-columns: 1fr;
           }
         }
@@ -9269,6 +9390,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
