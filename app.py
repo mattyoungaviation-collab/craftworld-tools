@@ -5027,15 +5027,13 @@ MASTERPIECES_TEMPLATE = """
       </p>
 
       <div class="mp-leaderboard-box">
-<pre>
-{% for row in SOME_LIST %}
+<pre>{% for row in current_mp_top50 %}
 {% set prof = row.profile or {} %}
 {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
 {{ "%3d"|format(row.position) }}. {{ "{:,.0f}".format(row.masterpiecePoints or 0) }} MP — {{ name }}
-{% endfor %}
-</pre>
-
+{% endfor %}</pre>
       </div>
+
 
       {% if current_gap %}
         <div style="margin-top:0.5rem; font-size:0.9rem;">
@@ -5447,15 +5445,13 @@ MASTERPIECES_TEMPLATE = """
       <h3>{{ selected_mp.name or ("MP #" ~ selected_mp.id) }} (ID {{ selected_mp.id }})</h3>
 
       <div class="mp-leaderboard-box">
-<pre>
-{% for row in SOME_LIST %}
+<pre>{% for row in selected_mp_top50 %}
 {% set prof = row.profile or {} %}
 {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
 {{ "%3d"|format(row.position) }}. {{ "{:,.0f}".format(row.masterpiecePoints or 0) }} MP — {{ name }}
-{% endfor %}
-</pre>
-
+{% endfor %}</pre>
       </div>
+
 
       {% if selected_gap %}
         <div style="margin-top:0.5rem; font-size:0.9rem;">
@@ -8393,6 +8389,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
