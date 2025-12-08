@@ -1907,12 +1907,12 @@ def index():
           {% if result.resources %}
             <table>
               <tr><th>Token</th><th>Amount</th></tr>
-              {% for r in result.resources %}
-                <tr>
-                  <td>{{ r.symbol }}</td>
-                  <td>{{ "%.6f"|format(r.amount) }}</td>
-                </tr>
-              {% endfor %}
+          {% for r in resources %}
+            <tr>
+              <td>{{ r.symbol }}</td>
+              <td>{{ "%.6f"|format(r.amount|default(0)) }}</td>
+            </tr>
+          {% endfor %}
             </table>
           {% else %}
             <p class="subtle">No resources found for this account.</p>
@@ -5276,14 +5276,15 @@ PLAYER_VIEW_TEMPLATE = """
         {% for r in donation_summary.rows %}
           <tr>
             <td>{{ r.symbol }}</td>
-            <td>{{ "%.3f"|format(r.available) }}</td>
-            <td>{{ "{:,.0f}".format(r.points_per_unit) }}</td>
-            <td>{{ "{:,.0f}".format(r.battery_per_unit) }}</td>
-            <td>{{ "{:,.2f}".format(r.points_per_battery) }}</td>
-            <td>{{ "{:,.0f}".format(r.max_points) }}</td>
-            <td>{{ "{:,.0f}".format(r.max_battery) }}</td>
+            <td>{{ "%.3f"|format(r.available|default(0)) }}</td>
+            <td>{{ "{:,.0f}".format((r.points_per_unit or 0)) }}</td>
+            <td>{{ "{:,.0f}".format((r.battery_per_unit or 0)) }}</td>
+            <td>{{ "{:,.2f}".format(r.points_per_battery|default(0)) }}</td>
+            <td>{{ "{:,.0f}".format((r.max_points or 0)) }}</td>
+            <td>{{ "{:,.0f}".format((r.max_battery or 0)) }}</td>
           </tr>
         {% endfor %}
+
       </table>
     {% else %}
       <p class="subtle">No resources in your inventory currently give points for this masterpiece.</p>
@@ -5292,13 +5293,13 @@ PLAYER_VIEW_TEMPLATE = """
     {% if battery_plan %}
       <h3 style="margin-top:14px;">🔥 15,000 Battery Plan (best points per battery)</h3>
       <p class="subtle">
-        Battery budget: {{ "{:,.0f}".format(battery_plan.battery_budget) }}  
+        Battery budget: {{ "{:,.0f}".format((battery_plan.battery_budget or 0)) }}  
         &nbsp;•&nbsp;
-        Used: {{ "{:,.0f}".format(battery_plan.total_battery_used) }}  
+        Used: {{ "{:,.0f}".format((battery_plan.total_battery_used or 0)) }}  
         &nbsp;•&nbsp;
-        Remaining: {{ "{:,.0f}".format(battery_plan.remaining_battery) }}  
+        Remaining: {{ "{:,.0f}".format((battery_plan.remaining_battery or 0)) }}  
         &nbsp;•&nbsp;
-        Total points: {{ "{:,.0f}".format(battery_plan.total_points) }}
+        Total points: {{ "{:,.0f}".format((battery_plan.total_points or 0)) }}
       </p>
 
       <table>
@@ -5314,12 +5315,12 @@ PLAYER_VIEW_TEMPLATE = """
         {% for r in battery_plan.rows %}
           <tr>
             <td>{{ r.symbol }}</td>
-            <td>{{ "%.3f"|format(r.donate_amount) }}</td>
-            <td>{{ "%.3f"|format(r.available) }}</td>
-            <td>{{ "{:,.1f}".format(r.completion_pct) }}%</td>
-            <td>{{ "{:,.0f}".format(r.battery_used) }}</td>
-            <td>{{ "{:,.0f}".format(r.points_gained) }}</td>
-            <td>{{ "{:,.2f}".format(r.points_per_battery) }}</td>
+            <td>{{ "%.3f"|format(r.donate_amount|default(0)) }}</td>
+            <td>{{ "%.3f"|format(r.available|default(0)) }}</td>
+            <td>{{ "{:,.1f}".format((r.completion_pct or 0)) }}%</td>
+            <td>{{ "{:,.0f}".format((r.battery_used or 0)) }}</td>
+            <td>{{ "{:,.0f}".format((r.points_gained or 0)) }}</td>
+            <td>{{ "{:,.2f}".format(r.points_per_battery|default(0)) }}</td>
           </tr>
         {% endfor %}
       </table>
@@ -5341,13 +5342,13 @@ PLAYER_VIEW_TEMPLATE = """
         </div>
         {% if gap.above_name and gap.gap_up is not none %}
           <div class="pill">
-            +{{ "{:,.0f}".format(gap.gap_up) }} pts to pass #{{ gap.above_pos }} ({{ gap.above_name }})
+            +{{ "{:,.0f}".format((gap.gap_up or 0)) }} pts to pass #{{ gap.above_pos }} ({{ gap.above_name }})
           </div>
         {% endif %}
         {% if gap.below_name and gap.gap_down is not none %}
           <div class="pill-bad">
             Lead over #{{ gap.below_pos }} ({{ gap.below_name }}):
-            {{ "{:,.0f}".format(gap.gap_down) }} pts
+            {{ "{:,.0f}".format((gap.gap_down or 0)) }} pts
           </div>
         {% endif %}
       </div>
@@ -5449,7 +5450,7 @@ PLAYER_VIEW_TEMPLATE = """
           {% for r in resources %}
             <tr>
               <td>{{ r.symbol }}</td>
-              <td>{{ "%.6f"|format(r.amount) }}</td>
+              <td>{{ "%.6f"|format(r.amount|default(0)) }}</td>
             </tr>
           {% endfor %}
         </table>
@@ -5468,17 +5469,18 @@ PLAYER_VIEW_TEMPLATE = """
         <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;">
           <div class="pill">
             All-in points:
-            {{ "{:,.0f}".format(donation_summary.total_points_all) }}
+            {{ "{:,.0f}".format((donation_summary.total_points_all or 0)) }}
           </div>
           <div class="pill">
             Battery to donate everything:
-            {{ "{:,.0f}".format(donation_summary.total_battery_all) }}
+            {{ "{:,.0f}".format((donation_summary.total_battery_all or 0)) }}
           </div>
           <div class="pill">
             15,000 battery plan:
-            ~{{ "{:,.0f}".format(donation_summary.points_15000) }} points
+            ~{{ "{:,.0f}".format((donation_summary.points_15000 or 0)) }} points
           </div>
         </div>
+
 
         <h3 style="margin-top:10px;">Best resources (points per battery)</h3>
         {% if donation_rows %}
@@ -5495,12 +5497,12 @@ PLAYER_VIEW_TEMPLATE = """
             {% for row in donation_rows %}
               <tr>
                 <td>{{ row.symbol }}</td>
-                <td>{{ "%.3f"|format(row.amount) }}</td>
-                <td>{{ "{:,.0f}".format(row.points_per_unit) }}</td>
-                <td>{{ "{:,.0f}".format(row.battery_per_unit) }}</td>
-                <td>{{ "%.3f"|format(row.efficiency) }}</td>
-                <td>{{ "{:,.0f}".format(row.total_points) }}</td>
-                <td>{{ "{:,.0f}".format(row.total_battery) }}</td>
+                <td>{{ "%.3f"|format(row.amount|default(0)) }}</td>
+                <td>{{ "{:,.0f}".format((row.points_per_unit or 0)) }}</td>
+                <td>{{ "{:,.0f}".format((row.battery_per_unit or 0)) }}</td>
+                <td>{{ "%.3f"|format(row.efficiency|default(0)) }}</td>
+                <td>{{ "{:,.0f}".format((row.total_points or 0)) }}</td>
+                <td>{{ "{:,.0f}".format((row.total_battery or 0)) }}</td>
               </tr>
             {% endfor %}
           </table>
@@ -5523,10 +5525,10 @@ PLAYER_VIEW_TEMPLATE = """
             {% for r in battery_plan_rows %}
               <tr>
                 <td>{{ r.symbol }}</td>
-                <td>{{ "%.3f"|format(r.units) }}</td>
-                <td>{{ "{:,.0f}".format(r.battery) }}</td>
-                <td>{{ "{:,.0f}".format(r.points) }}</td>
-                <td>{{ "%.3f"|format(r.efficiency) }}</td>
+                <td>{{ "%.3f"|format(r.units|default(0)) }}</td>
+                <td>{{ "{:,.0f}".format((r.battery or 0)) }}</td>
+                <td>{{ "{:,.0f}".format((r.points or 0)) }}</td>
+                <td>{{ "%.3f"|format(r.efficiency|default(0)) }}</td>
               </tr>
             {% endfor %}
           </table>
@@ -9283,6 +9285,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
