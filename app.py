@@ -4954,6 +4954,66 @@ MASTERPIECES_TEMPLATE = """
     <a href="#planner">Donation Planner</a>
   </div>
 
+  <style>
+    .mp-leaderboard-list {
+      max-height: 420px;
+      overflow-y: auto;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #111;
+      padding: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    .mp-row {
+      display: flex;
+      align-items: center;
+      padding: 0.35rem 0.6rem;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      font-size: 0.95rem;
+    }
+    .mp-row:last-child {
+      border-bottom: none;
+    }
+    .mp-rank {
+      width: 3rem;
+      font-weight: 700;
+      color: #ffd65c;
+    }
+    .mp-avatar {
+      width: 32px;
+      height: 32px;
+      margin-right: 0.5rem;
+      flex-shrink: 0;
+    }
+    .mp-avatar img,
+    .mp-avatar-placeholder {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      object-fit: cover;
+      border: 1px solid #555;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #222;
+      color: #ddd;
+      font-weight: 700;
+    }
+    .mp-name {
+      flex: 1;
+      padding-right: 0.5rem;
+    }
+    .mp-points {
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .mp-row--me {
+      background: rgba(0, 255, 127, 0.08);
+      box-shadow: 0 0 0 1px rgba(0, 255, 127, 0.5);
+      border-radius: 8px;
+    }
+  </style>
+
   <!-- ================= OVERVIEW / CURRENT ================= -->
   <div id="overview">
     <h2>Current Masterpieces</h2>
@@ -5026,12 +5086,27 @@ MASTERPIECES_TEMPLATE = """
         (ID {{ current_mp.id }}) leaderboard.
       </p>
 
-      <div class="mp-leaderboard-box">
-<pre>{% for row in current_mp_top50 %}
-{% set prof = row.profile or {} %}
-{% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
-{{ "%3d"|format(row.position) }}. {{ "{:,.0f}".format(row.masterpiecePoints or 0) }} MP — {{ name }}
-{% endfor %}</pre>
+      <div class="mp-leaderboard-list">
+        {% for row in current_mp_top50 %}
+          {% set prof = row.profile or {} %}
+          {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
+          <div class="mp-row {% if current_gap and row.position == current_gap.position %}mp-row--me{% endif %}">
+            <div class="mp-rank">{{ row.position }}</div>
+            <div class="mp-avatar">
+              {% if prof.avatarUrl %}
+                <img src="{{ prof.avatarUrl|ipfs_to_http }}" alt="{{ name }} avatar" loading="lazy">
+              {% else %}
+                <div class="mp-avatar-placeholder">
+                  {{ name[0]|upper }}
+                </div>
+              {% endif %}
+            </div>
+            <div class="mp-name">{{ name }}</div>
+            <div class="mp-points">
+              {{ "{:,.0f}".format(row.masterpiecePoints or 0) }}
+            </div>
+          </div>
+        {% endfor %}
       </div>
 
 
@@ -5066,7 +5141,6 @@ MASTERPIECES_TEMPLATE = """
     {% else %}
       <p>No current masterpiece leaderboard available.</p>
     {% endif %}
-
   </div>
 
   <!-- ================= REWARDS & TOTALS ================= -->
@@ -5444,12 +5518,27 @@ MASTERPIECES_TEMPLATE = """
     {% if selected_mp %}
       <h3>{{ selected_mp.name or ("MP #" ~ selected_mp.id) }} (ID {{ selected_mp.id }})</h3>
 
-      <div class="mp-leaderboard-box">
-<pre>{% for row in selected_mp_top50 %}
-{% set prof = row.profile or {} %}
-{% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
-{{ "%3d"|format(row.position) }}. {{ "{:,.0f}".format(row.masterpiecePoints or 0) }} MP — {{ name }}
-{% endfor %}</pre>
+      <div class="mp-leaderboard-list">
+        {% for row in selected_mp_top50 %}
+          {% set prof = row.profile or {} %}
+          {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
+          <div class="mp-row {% if selected_gap and row.position == selected_gap.position %}mp-row--me{% endif %}">
+            <div class="mp-rank">{{ row.position }}</div>
+            <div class="mp-avatar">
+              {% if prof.avatarUrl %}
+                <img src="{{ prof.avatarUrl|ipfs_to_http }}" alt="{{ name }} avatar" loading="lazy">
+              {% else %}
+                <div class="mp-avatar-placeholder">
+                  {{ name[0]|upper }}
+                </div>
+              {% endif %}
+            </div>
+            <div class="mp-name">{{ name }}</div>
+            <div class="mp-points">
+              {{ "{:,.0f}".format(row.masterpiecePoints or 0) }}
+            </div>
+          </div>
+        {% endfor %}
       </div>
 
 
@@ -8389,6 +8478,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
