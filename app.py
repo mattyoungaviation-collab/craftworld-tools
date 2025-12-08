@@ -5053,6 +5053,54 @@ MASTERPIECES_TEMPLATE = """
       box-shadow: 0 0 0 1px rgba(0, 255, 127, 0.5);
       border-radius: 8px;
     }
+
+        .mp-subtabs {
+      display: inline-flex;
+      gap: 6px;
+      margin: 0.5rem 0;
+      padding: 3px;
+      border-radius: 999px;
+      background: #111827;
+      border: 1px solid rgba(148, 163, 184, 0.45);
+    }
+
+    .mp-subtab-btn {
+      border: none;
+      background: transparent;
+      color: #9ca3af;
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .mp-subtab-btn.active {
+      background: rgba(37, 99, 235, 0.96);
+      color: #e5e7eb;
+      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.8);
+      font-weight: 600;
+    }
+
+    .mp-subtab {
+      display: none;
+      margin-top: 0.4rem;
+    }
+
+    .mp-subtab.active {
+      display: block;
+    }
+
+    .mp-leaderboard-box {
+      margin-top: 0.4rem;
+      padding: 0.45rem 0.6rem;
+      background: #020617;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.8);
+    }
   </style>
 
   <!-- ================= OVERVIEW / CURRENT ================= -->
@@ -8606,6 +8654,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
