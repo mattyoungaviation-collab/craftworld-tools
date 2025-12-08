@@ -5879,31 +5879,6 @@ def masterpieces_view():
         coin_usd = 0.0
 
 
-    # --- Event leaderboard data for the Event subtab ---
-    event_mp_top50 = []
-    event_gap = None
-
-    # If we have an event snapshot, pull leaderboard rows for that MP
-    if event_snapshot:
-        # depending on your snapshot shape, adjust this line:
-        mp_obj = event_snapshot.get("mp") if isinstance(event_snapshot, dict) else getattr(event_snapshot, "mp", None)
-        event_mp_id = None
-        if isinstance(mp_obj, dict):
-            event_mp_id = mp_obj.get("id")
-        elif mp_obj is not None:
-            event_mp_id = getattr(mp_obj, "id", None)
-
-        if event_mp_id:
-            try:
-                # 👉 use the SAME helper you use for current_mp_top50
-                # e.g. if you currently do something like:
-                #   current_mp_top50 = fetch_mp_leaderboard(current_mp["id"], top_n, highlight_profile)
-                # then do the same here:
-                event_mp_top50 = fetch_mp_leaderboard(
-                    event_mp_id,
-                    top_n,
-                    highlight_profile,
-                ) or []
 
                 # If you have a helper that computes the gap row,
                 # mirror whatever you do for `current_gap`
@@ -6136,6 +6111,16 @@ def masterpieces_view():
     else:
         current_mp_top50 = []
 
+    # --- Event leaderboard data for the Event subtab ---
+    event_mp_top50: List[Dict[str, Any]] = []
+    event_gap = None  # optional; template guards with `is defined`
+
+    if current_event_mp:
+        lb_event = current_event_mp.get("leaderboard") or []
+        try:
+            event_mp_top50 = list(lb_event[:top_n])
+        except Exception:
+            event_mp_top50 = []
 
 
     # ---------- Personal reward snapshots for active general & event MPs ----------
@@ -6863,20 +6848,25 @@ def masterpieces_view():
     content_html = render_template_string(
         MASTERPIECES_TEMPLATE,
         error=error,
-        coin_usd=coin_usd,
-
-        # Current MP overview / gap
+        # overview / current
         current_mp=current_mp,
         current_mp_top50=current_mp_top50,
         current_gap=current_gap,
         general_snapshot=general_snapshot,
         event_snapshot=event_snapshot,
+        # 🔽 NEW: event tab
         event_mp_top50=event_mp_top50,
         event_gap=event_gap,
-
-        # Rewards tab context
+        # history
+        selected_mp=selected_mp,
+        selected_mp_top50=selected_mp_top50,
+        selected_gap=selected_gap,
+        history_mp_options=history_mp_options,
+        highlight_query=highlight_query,
+        top_n=top_n,
+        top_n_options=TOP_N_OPTIONS,
+        # rewards / totals
         src_mp=src_mp,
-        selected_reward_snapshot=selected_reward_snapshot,
         tier_rows=tier_rows,
         reward_tier_rows=reward_tier_rows,
         tier_base_totals_list=tier_base_totals_list,
@@ -6888,20 +6878,12 @@ def masterpieces_view():
         grand_totals_list=grand_totals_list,
         grand_total_coin=grand_total_coin,
         grand_total_usd=grand_total_usd,
+        coin_usd=coin_usd,
+        selected_reward_snapshot=selected_reward_snapshot,
         has_battle_pass=has_battle_pass,
-
-        # History / selector tab
-        history_mp_options=history_mp_options,
-        selected_mp=selected_mp,
-        selected_mp_top50=selected_mp_top50,
-        selected_gap=selected_gap,
-        highlight_query=highlight_query,
-        top_n=top_n,
-        top_n_options=TOP_N_OPTIONS,
-
-        # Planner tab
-        planner_mp_options=planner_mp_options,
+        # planner
         planner_mp=planner_mp,
+        planner_mp_options=planner_mp_options,
         planner_tokens=planner_tokens,
         calc_resources=calc_resources,
         calc_result=calc_result,
@@ -7011,18 +6993,25 @@ def masterpieces_view():
     content_html = render_template_string(
         MASTERPIECES_TEMPLATE,
         error=error,
-        coin_usd=coin_usd,
-
-        # Current MP overview / gap
+        # overview / current
         current_mp=current_mp,
         current_mp_top50=current_mp_top50,
         current_gap=current_gap,
         general_snapshot=general_snapshot,
         event_snapshot=event_snapshot,
-
-        # Rewards tab context
+        # 🔽 NEW: event tab
+        event_mp_top50=event_mp_top50,
+        event_gap=event_gap,
+        # history
+        selected_mp=selected_mp,
+        selected_mp_top50=selected_mp_top50,
+        selected_gap=selected_gap,
+        history_mp_options=history_mp_options,
+        highlight_query=highlight_query,
+        top_n=top_n,
+        top_n_options=TOP_N_OPTIONS,
+        # rewards / totals
         src_mp=src_mp,
-        selected_reward_snapshot=selected_reward_snapshot,
         tier_rows=tier_rows,
         reward_tier_rows=reward_tier_rows,
         tier_base_totals_list=tier_base_totals_list,
@@ -7034,20 +7023,12 @@ def masterpieces_view():
         grand_totals_list=grand_totals_list,
         grand_total_coin=grand_total_coin,
         grand_total_usd=grand_total_usd,
+        coin_usd=coin_usd,
+        selected_reward_snapshot=selected_reward_snapshot,
         has_battle_pass=has_battle_pass,
-
-        # History / selector tab
-        history_mp_options=history_mp_options,
-        selected_mp=selected_mp,
-        selected_mp_top50=selected_mp_top50,
-        selected_gap=selected_gap,
-        highlight_query=highlight_query,
-        top_n=top_n,
-        top_n_options=TOP_N_OPTIONS,
-
-        # Planner tab
-        planner_mp_options=planner_mp_options,
+        # planner
         planner_mp=planner_mp,
+        planner_mp_options=planner_mp_options,
         planner_tokens=planner_tokens,
         calc_resources=calc_resources,
         calc_result=calc_result,
@@ -8690,6 +8671,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
