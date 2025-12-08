@@ -5878,16 +5878,6 @@ def masterpieces_view():
         prices = {}
         coin_usd = 0.0
 
-
-
-                # If you have a helper that computes the gap row,
-                # mirror whatever you do for `current_gap`
-                # e.g.:
-                # event_gap = compute_gap_row(event_mp_top50, highlight_profile)
-            except Exception:
-                event_mp_top50 = []
-                event_gap = None
-
     # Load MP list from Craft World
     try:
         masterpieces_data = fetch_masterpieces()
@@ -8671,6 +8661,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
