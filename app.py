@@ -430,7 +430,6 @@ def compute_leaderboard_gap_for_highlight(
         "below_pos": below_pos,
     }
 
-
 def _default_boost_levels() -> dict[str, dict[str, int]]:
     """
     Default per-token mastery/workshop levels (0–10).
@@ -632,6 +631,66 @@ def inject_nav_user():
         "nav_profile": prof,
         "nav_avatar_url": avatar_url,
     }
+@app.route("/player/<uid>")
+def player_view(uid: str):
+    """
+    Simple player dashboard:
+      - Profile info (name, wallet, ENS, avatar)
+      - Masterpiece position (if mp_id is provided)
+      - Inventory & land plots from fetch_craftworld
+    """
+    error: Optional[str] = None
+    profile: Optional[Dict[str, Any]] = None
+    account: Optional[Dict[str, Any]] = None
+    mp: Optional[Dict[str, Any]] = None
+    gap: Optional[Dict[str, Any]] = None
+
+    mp_id = (request.args.get("mp_id") or "").strip() or None
+
+    # 1) Profile (name, avatar, wallet, etc.)
+    try:
+        profile = fetch_profile_by_uid(uid)
+    except Exception as e:
+        error = f"Error fetching profile: {e}"
+
+    # 2) Full account data (resources, land, etc.)
+    try:
+        account = fetch_craftworld(uid)
+    except Exception as e:
+        if error:
+            error += f" | Error fetching account: {e}"
+        else:
+            error = f"Error fetching account: {e}"
+
+    # 3) Position on a specific masterpiece, if mp_id provided
+    if mp_id:
+        try:
+            mp = fetch_masterpiece_details(mp_id)
+            lb = mp.get("leaderboard") or []
+            gap = compute_leaderboard_gap_for_highlight(lb, uid)
+        except Exception as e:
+            if error:
+                error += f" | Error fetching masterpiece stats: {e}"
+            else:
+                error = f"Error fetching masterpiece stats: {e}"
+
+    content_html = render_template_string(
+        PLAYER_VIEW_TEMPLATE,
+        error=error,
+        uid=uid,
+        profile=profile or {},
+        account=account or {},
+        mp=mp,
+        gap=gap,
+    )
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=content_html,
+        active_page="player",
+        has_uid=has_uid_flag(),
+    )
+    return html
 
 def ipfs_to_http(url: str | None) -> str:
     """
@@ -4979,6 +5038,126 @@ def boosts():
     )
     return html
 
+PLAYER_VIEW_TEMPLATE = """
+<div class="card">
+  <h1>Player overview</h1>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {% if profile %}
+    <div class="player-header">
+      <div class="player-main">
+        <h2>{{ profile.displayName or profile.walletAddress or profile.uid or uid }}</h2>
+        <p>
+          <strong>UID:</strong> {{ profile.uid or uid }}<br>
+          {% if profile.walletAddress %}
+            <strong>Wallet:</strong> {{ profile.walletAddress }}<br>
+          {% endif %}
+          {% if profile.ens %}
+            <strong>ENS:</strong> {{ profile.ens }}<br>
+          {% endif %}
+        </p>
+      </div>
+      {% if profile.avatarUrl %}
+        <div class="player-avatar">
+          <img src="{{ profile.avatarUrl|ipfs_to_http }}" alt="Avatar" loading="lazy">
+        </div>
+      {% endif %}
+    </div>
+  {% else %}
+    <p class="hint">
+      No profile data found for UID {{ uid }}.
+    </p>
+  {% endif %}
+
+  {% if mp and gap %}
+    <div class="player-section">
+      <h3>Masterpiece position</h3>
+      <p>
+        <strong>{{ mp.name }}</strong> (ID {{ mp.id }})<br>
+        Rank: <strong>#{{ gap.position }}</strong><br>
+        Points:
+        <strong>{{ "{:,.0f}".format(gap.points or 0) }}</strong><br>
+        {% if gap.above_name %}
+          Need
+          <strong>{{ "{:,.0f}".format(gap.gap_up or 0) }}</strong>
+          to pass {{ gap.above_name }}
+          (#{{ gap.above_pos }}).<br>
+        {% endif %}
+        {% if gap.below_name %}
+          You are ahead of {{ gap.below_name }}
+          (#{{ gap.below_pos }})
+          by
+          <strong>{{ "{:,.0f}".format(gap.gap_down or 0) }}</strong>
+          points.<br>
+        {% endif %}
+      </p>
+    </div>
+  {% endif %}
+
+  {% if account %}
+    {% if account.resources %}
+      <div class="player-section">
+        <h3>Inventory</h3>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in account.resources %}
+              <tr>
+                <td>{{ r.symbol }}</td>
+                <td>{{ "{:,.0f}".format(r.amount or 0) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+
+    {% if account.landPlots %}
+      <div class="player-section">
+        <h3>Land plots</h3>
+        <ul>
+          {% for p in account.landPlots %}
+            <li>
+              {{ p.name or p.id or ("Plot " ~ loop.index) }}
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  {% endif %}
+</div>
+
+<style>
+.player-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.player-avatar img {
+  width: 72px;
+  height: 72px;
+  border-radius: 12px;
+  border: 1px solid #555;
+  object-fit: cover;
+}
+
+.player-section {
+  margin-top: 1.25rem;
+}
+</style>
+"""
+
 # ================= MASTERPIECES TAB TEMPLATE ==================
 MASTERPIECES_TEMPLATE = """
 <div class="card">
@@ -5043,6 +5222,15 @@ MASTERPIECES_TEMPLATE = """
     .mp-name {
       flex: 1;
       padding-right: 0.5rem;
+    }
+
+    .mp-name a.mp-name-link {
+      color: var(--text-main);
+      text-decoration: none;
+    }
+
+    .mp-name a.mp-name-link:hover {
+      text-decoration: underline;
     }
     .mp-points {
       font-weight: 700;
@@ -5214,7 +5402,20 @@ MASTERPIECES_TEMPLATE = """
                     </div>
                   {% endif %}
                 </div>
-                <div class="mp-name">{{ name }}</div>
+                <div class="mp-name">
+                  <a
+                    href="{{ url_for(
+                            'player_view',
+                            uid=prof.uid or prof.walletAddress,
+                            mp_id=current_mp.id if current_mp else None
+                          ) }}"
+                    class="mp-name-link"
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    {{ name }}
+                  </a>
+                </div>
                 <div class="mp-points">
                   {{ "{:,.0f}".format(row.masterpiecePoints or 0) }}
                 </div>
@@ -5286,7 +5487,24 @@ MASTERPIECES_TEMPLATE = """
                     </div>
                   {% endif %}
                 </div>
-                <div class="mp-name">{{ name }}</div>
+                <div class="mp-name">
+                  <a
+                    href="{{ url_for(
+                            'player_view',
+                            uid=prof.uid or prof.walletAddress,
+                            mp_id=(
+                              event_snapshot.mp.id
+                              if event_snapshot and event_snapshot.mp
+                              else (current_event_mp.id if current_event_mp else None)
+                            )
+                          ) }}"
+                    class="mp-name-link"
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    {{ name }}
+                  </a>
+                </div>
                 <div class="mp-points">
                   {{ "{:,.0f}".format(row.masterpiecePoints or 0) }}
                 </div>
@@ -5690,7 +5908,20 @@ MASTERPIECES_TEMPLATE = """
                 </div>
               {% endif %}
             </div>
-            <div class="mp-name">{{ name }}</div>
+            <div class="mp-name">
+              <a
+                href="{{ url_for(
+                        'player_view',
+                        uid=prof.uid or prof.walletAddress,
+                        mp_id=selected_mp.id if selected_mp else None
+                      ) }}"
+                class="mp-name-link"
+                target="_blank"
+                rel="noopener"
+              >
+                {{ name }}
+              </a>
+            </div>
             <div class="mp-points">
               {{ "{:,.0f}".format(row.masterpiecePoints or 0) }}
             </div>
@@ -6844,6 +7075,7 @@ def masterpieces_view():
         current_gap=current_gap,
         general_snapshot=general_snapshot,
         event_snapshot=event_snapshot,
+        current_event_mp=current_event_mp,
         # 🔽 NEW: event tab
         event_mp_top50=event_mp_top50,
         event_gap=event_gap,
@@ -8661,6 +8893,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
