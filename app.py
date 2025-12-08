@@ -636,14 +636,22 @@ def player_view(uid: str):
     """
     Simple player dashboard:
       - Profile info (name, wallet, ENS, avatar)
-      - Masterpiece position (if mp_id is provided)
-      - Inventory & land plots from fetch_craftworld
+      - Land plots (event plots first, then standard)
+      - Inventory
+      - Masterpiece position + point detector for the selected MP (if mp_id is provided)
     """
     error: Optional[str] = None
     profile: Optional[Dict[str, Any]] = None
     account: Optional[Dict[str, Any]] = None
     mp: Optional[Dict[str, Any]] = None
     gap: Optional[Dict[str, Any]] = None
+
+    # These are for the template
+    event_plots: List[Dict[str, Any]] = []
+    standard_plots: List[Dict[str, Any]] = []
+    donation_rows: List[Dict[str, Any]] = []
+    donation_summary: Optional[Dict[str, Any]] = None
+    battery_plan_rows: List[Dict[str, Any]] = []
 
     mp_id = (request.args.get("mp_id") or "").strip() or None
 
@@ -662,6 +670,78 @@ def player_view(uid: str):
         else:
             error = f"Error fetching account: {e}"
 
+    # 2a) Split land plots into event vs standard and flatten factories/levels
+    if account:
+        try:
+            from math import isnan  # just in case we ever need it, safe import
+
+            land_plots = attr_or_key(account, "landPlots", []) or []
+            for plot in land_plots:
+                plot_name = attr_or_key(plot, "symbol", "") or str(
+                    attr_or_key(plot, "id", "")
+                )
+                # Heuristic: treat any plot with eventId / isEvent as an event plot
+                is_event_plot = bool(
+                    attr_or_key(plot, "eventId", None)
+                    or attr_or_key(plot, "isEvent", False)
+                )
+
+                areas_raw = attr_or_key(plot, "areas", []) or []
+                areas: List[Dict[str, Any]] = []
+
+                for area in areas_raw:
+                    area_symbol = attr_or_key(area, "symbol", "") or ""
+                    factories_raw = attr_or_key(area, "factories", []) or []
+                    factories_list: List[Dict[str, Any]] = []
+
+                    for facwrap in factories_raw:
+                        fac = attr_or_key(facwrap, "factory", None)
+                        if not fac:
+                            continue
+                        definition = attr_or_key(fac, "definition", {}) or {}
+                        token = attr_or_key(definition, "id", None)
+                        if not token:
+                            continue
+
+                        try:
+                            api_level = int(attr_or_key(fac, "level", 0) or 0)
+                        except Exception:
+                            api_level = 0
+                        csv_level = api_level + 1  # API level is 0-based
+
+                        factories_list.append(
+                            {
+                                "token": str(token),
+                                "level": csv_level,
+                            }
+                        )
+
+                    areas.append(
+                        {
+                            "symbol": area_symbol,
+                            "factories": factories_list,
+                        }
+                    )
+
+                row = {
+                    "name": plot_name,
+                    "is_event": is_event_plot,
+                    "areas": areas,
+                }
+                if is_event_plot:
+                    event_plots.append(row)
+                else:
+                    standard_plots.append(row)
+
+            # Sort plots by name for a clean display
+            event_plots.sort(key=lambda p: p["name"])
+            standard_plots.sort(key=lambda p: p["name"])
+        except Exception as e:
+            if error:
+                error += f" | Error processing land plots: {e}"
+            else:
+                error = f"Error processing land plots: {e}"
+
     # 3) Position on a specific masterpiece, if mp_id provided
     if mp_id:
         try:
@@ -674,6 +754,112 @@ def player_view(uid: str):
             else:
                 error = f"Error fetching masterpiece stats: {e}"
 
+    # 4) Point detector: compute points / battery from inventory for this MP
+    if mp_id and account:
+        try:
+            resources = attr_or_key(account, "resources", []) or []
+            symbols: List[str] = []
+            for r in resources:
+                sym = (attr_or_key(r, "symbol", "") or "").upper()
+                if sym:
+                    symbols.append(sym)
+
+            per_unit = get_mp_per_unit_rewards(mp_id, symbols)
+            pts_per = per_unit.get("points", {}) or {}
+            power_per = per_unit.get("power", {}) or {}
+
+            total_points_all = 0.0
+            total_battery_all = 0.0
+
+            # Build base rows for each resource that actually gives MP points
+            for r in resources:
+                sym = (attr_or_key(r, "symbol", "") or "").upper()
+                if not sym:
+                    continue
+                try:
+                    amt = float(attr_or_key(r, "amount", 0.0) or 0.0)
+                except Exception:
+                    amt = 0.0
+                if amt <= 0:
+                    continue
+
+                ppu = float(pts_per.get(sym, 0.0) or 0.0)          # points per unit
+                bpu = float(power_per.get(sym, 0.0) or 0.0)        # battery per unit
+                if ppu <= 0 or bpu <= 0:
+                    continue
+
+                total_pts = amt * ppu
+                total_batt = amt * bpu
+                eff = ppu / bpu if bpu > 0 else 0.0  # points per battery
+
+                total_points_all += total_pts
+                total_battery_all += total_batt
+
+                donation_rows.append(
+                    {
+                        "symbol": sym,
+                        "amount": amt,
+                        "points_per_unit": ppu,
+                        "battery_per_unit": bpu,
+                        "efficiency": eff,
+                        "total_points": total_pts,
+                        "total_battery": total_batt,
+                    }
+                )
+
+            # Sort by efficiency (points per battery), best first
+            donation_rows.sort(key=lambda row: row["efficiency"], reverse=True)
+
+            # Now create a simple battery-budget plan for 15,000 battery
+            BATTERY_BUDGET = 15_000.0
+            remaining_batt = BATTERY_BUDGET
+            points_15000 = 0.0
+            battery_used_15000 = 0.0
+
+            for row in donation_rows:
+                if remaining_batt <= 0:
+                    break
+                bpu = row["battery_per_unit"]
+                if bpu <= 0:
+                    continue
+
+                max_batt_for_token = bpu * row["amount"]
+                use_batt = min(remaining_batt, max_batt_for_token)
+                if use_batt <= 0:
+                    continue
+
+                units = use_batt / bpu
+                pts = units * row["points_per_unit"]
+
+                battery_used_15000 += use_batt
+                points_15000 += pts
+                remaining_batt -= use_batt
+
+                battery_plan_rows.append(
+                    {
+                        "symbol": row["symbol"],
+                        "units": units,
+                        "battery": use_batt,
+                        "points": pts,
+                        "efficiency": row["efficiency"],
+                    }
+                )
+
+            if donation_rows:
+                donation_summary = {
+                    "total_points_all": total_points_all,
+                    "total_battery_all": total_battery_all,
+                    "battery_budget": BATTERY_BUDGET,
+                    "battery_used_15000": battery_used_15000,
+                    "points_15000": points_15000,
+                }
+        except Exception as e:
+            if error:
+                error += f" | Error computing donation stats: {e}"
+            else:
+                error = f"Error computing donation stats: {e}"
+
+    # Render inner content
     content_html = render_template_string(
         PLAYER_VIEW_TEMPLATE,
         error=error,
@@ -682,8 +868,14 @@ def player_view(uid: str):
         account=account or {},
         mp=mp,
         gap=gap,
+        event_plots=event_plots,
+        standard_plots=standard_plots,
+        donation_rows=donation_rows,
+        donation_summary=donation_summary,
+        battery_plan_rows=battery_plan_rows,
     )
 
+    # Wrap in your base layout
     html = render_template_string(
         BASE_TEMPLATE,
         content=content_html,
@@ -691,6 +883,7 @@ def player_view(uid: str):
         has_uid=has_uid_flag(),
     )
     return html
+
 
 def ipfs_to_http(url: str | None) -> str:
     """
@@ -5040,122 +5233,249 @@ def boosts():
 
 PLAYER_VIEW_TEMPLATE = """
 <div class="card">
-  <h1>Player overview</h1>
+  {% set p = profile or {} %}
+  {% set name = p.displayName or p.uid or "Unknown player" %}
+  <h1>Player: {{ name }}</h1>
+  <p class="subtle">
+    Account ID: <code>{{ uid }}</code>
+    {% if p.walletAddress %}
+      &nbsp;•&nbsp; Wallet: <code>{{ p.walletAddress }}</code>
+    {% endif %}
+  </p>
 
   {% if error %}
-    <div class="error">{{ error }}</div>
-  {% endif %}
-
-  {% if profile %}
-    <div class="player-header">
-      <div class="player-main">
-        <h2>{{ profile.displayName or profile.walletAddress or profile.uid or uid }}</h2>
-        <p>
-          <strong>UID:</strong> {{ profile.uid or uid }}<br>
-          {% if profile.walletAddress %}
-            <strong>Wallet:</strong> {{ profile.walletAddress }}<br>
-          {% endif %}
-          {% if profile.ens %}
-            <strong>ENS:</strong> {{ profile.ens }}<br>
-          {% endif %}
-        </p>
-      </div>
-      {% if profile.avatarUrl %}
-        <div class="player-avatar">
-          <img src="{{ profile.avatarUrl|ipfs_to_http }}" alt="Avatar" loading="lazy">
-        </div>
-      {% endif %}
-    </div>
-  {% else %}
-    <p class="hint">
-      No profile data found for UID {{ uid }}.
-    </p>
-  {% endif %}
-
-  {% if mp and gap %}
-    <div class="player-section">
-      <h3>Masterpiece position</h3>
-      <p>
-        <strong>{{ mp.name }}</strong> (ID {{ mp.id }})<br>
-        Rank: <strong>#{{ gap.position }}</strong><br>
-        Points:
-        <strong>{{ "{:,.0f}".format(gap.points or 0) }}</strong><br>
-        {% if gap.above_name %}
-          Need
-          <strong>{{ "{:,.0f}".format(gap.gap_up or 0) }}</strong>
-          to pass {{ gap.above_name }}
-          (#{{ gap.above_pos }}).<br>
-        {% endif %}
-        {% if gap.below_name %}
-          You are ahead of {{ gap.below_name }}
-          (#{{ gap.below_pos }})
-          by
-          <strong>{{ "{:,.0f}".format(gap.gap_down or 0) }}</strong>
-          points.<br>
-        {% endif %}
-      </p>
-    </div>
-  {% endif %}
-
-  {% if account %}
-    {% if account.resources %}
-      <div class="player-section">
-        <h3>Inventory</h3>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Token</th>
-              <th>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for r in account.resources %}
-              <tr>
-                <td>{{ r.symbol }}</td>
-                <td>{{ "{:,.0f}".format(r.amount or 0) }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% endif %}
-
-    {% if account.landPlots %}
-      <div class="player-section">
-        <h3>Land plots</h3>
-        <ul>
-          {% for p in account.landPlots %}
-            <li>
-              {{ p.name or p.id or ("Plot " ~ loop.index) }}
-            </li>
-          {% endfor %}
-        </ul>
-      </div>
-    {% endif %}
+    <div class="error" style="margin-top:8px;">{{ error }}</div>
   {% endif %}
 </div>
 
-<style>
-.player-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1rem;
-}
+{% if mp %}
+  <div class="card">
+    <h2>Current Masterpiece</h2>
+    <p class="subtle">
+      {{ mp.name or ("Masterpiece #" ~ mp.id) }}
+      {% if mp.addressableLabel %}
+        &nbsp;•&nbsp; <code>{{ mp.addressableLabel }}</code>
+      {% endif %}
+      {% if mp.type %}
+        &nbsp;•&nbsp; Type: {{ mp.type }}
+      {% endif %}
+    </p>
 
-.player-avatar img {
-  width: 72px;
-  height: 72px;
-  border-radius: 12px;
-  border: 1px solid #555;
-  object-fit: cover;
-}
+    {% if gap %}
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;">
+        <div class="pill">
+          Position: #{{ gap.position or "?" }}
+        </div>
+        <div class="pill">
+          Current points: {{ "{:,.0f}".format(gap.points or 0) }}
+        </div>
+        {% if gap.above_name and gap.gap_up is not none %}
+          <div class="pill">
+            +{{ "{:,.0f}".format(gap.gap_up) }} pts to pass #{{ gap.above_pos }} ({{ gap.above_name }})
+          </div>
+        {% endif %}
+        {% if gap.below_name and gap.gap_down is not none %}
+          <div class="pill-bad">
+            Lead over #{{ gap.below_pos }} ({{ gap.below_name }}):
+            {{ "{:,.0f}".format(gap.gap_down) }} pts
+          </div>
+        {% endif %}
+      </div>
+    {% else %}
+      <p class="subtle" style="margin-top:6px;">
+        No position found for this player on this masterpiece.
+      </p>
+    {% endif %}
+  </div>
+{% endif %}
 
-.player-section {
-  margin-top: 1.25rem;
-}
-</style>
+<div class="two-col">
+  <!-- LEFT: Land plots (event first, then standard) -->
+  <div>
+    <div class="card">
+      <h2>Event Land Plots</h2>
+      {% if event_plots %}
+        {% for plot in event_plots %}
+          <h3>{{ plot.name }}</h3>
+          {% if plot.areas %}
+            {% for area in plot.areas %}
+              <p class="subtle" style="margin-top:4px; margin-bottom:4px;">
+                Area: {{ area.symbol }}
+              </p>
+              {% if area.factories %}
+                <table>
+                  <tr>
+                    <th>Factory</th>
+                    <th>Level</th>
+                  </tr>
+                  {% for f in area.factories %}
+                    <tr>
+                      <td>{{ f.token }}</td>
+                      <td>L{{ f.level }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              {% else %}
+                <p class="subtle">No factories in this area.</p>
+              {% endif %}
+            {% endfor %}
+          {% else %}
+            <p class="subtle">No areas on this plot.</p>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <p class="subtle">No event plots for this player.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Standard Land Plots</h2>
+      {% if standard_plots %}
+        {% for plot in standard_plots %}
+          <h3>{{ plot.name }}</h3>
+          {% if plot.areas %}
+            {% for area in plot.areas %}
+              <p class="subtle" style="margin-top:4px; margin-bottom:4px;">
+                Area: {{ area.symbol }}
+              </p>
+              {% if area.factories %}
+                <table>
+                  <tr>
+                    <th>Factory</th>
+                    <th>Level</th>
+                  </tr>
+                  {% for f in area.factories %}
+                    <tr>
+                      <td>{{ f.token }}</td>
+                      <td>L{{ f.level }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              {% else %}
+                <p class="subtle">No factories in this area.</p>
+              {% endif %}
+            {% endfor %}
+          {% else %}
+            <p class="subtle">No areas on this plot.</p>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <p class="subtle">No standard plots for this player.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- RIGHT: Inventory + point detector -->
+  <div>
+    <div class="card">
+      <h2>Inventory</h2>
+      {% set resources = account.resources or [] %}
+      {% if resources %}
+        <table>
+          <tr>
+            <th>Token</th>
+            <th>Amount</th>
+          </tr>
+          {% for r in resources %}
+            <tr>
+              <td>{{ r.symbol }}</td>
+              <td>{{ "%.6f"|format(r.amount) }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      {% else %}
+        <p class="subtle">No resources found for this account.</p>
+      {% endif %}
+    </div>
+
+    {% if mp and donation_summary %}
+      <div class="card">
+        <h2>Masterpiece Point Detector</h2>
+        <p class="subtle">
+          Based on your current inventory and this masterpiece's donation rewards.
+        </p>
+
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;">
+          <div class="pill">
+            All-in points:
+            {{ "{:,.0f}".format(donation_summary.total_points_all) }}
+          </div>
+          <div class="pill">
+            Battery to donate everything:
+            {{ "{:,.0f}".format(donation_summary.total_battery_all) }}
+          </div>
+          <div class="pill">
+            15,000 battery plan:
+            ~{{ "{:,.0f}".format(donation_summary.points_15000) }} points
+          </div>
+        </div>
+
+        <h3 style="margin-top:10px;">Best resources (points per battery)</h3>
+        {% if donation_rows %}
+          <table>
+            <tr>
+              <th>Resource</th>
+              <th>Amount</th>
+              <th>Pts / unit</th>
+              <th>Battery / unit</th>
+              <th>Pts / battery</th>
+              <th>Total pts (all)</th>
+              <th>Total battery (all)</th>
+            </tr>
+            {% for row in donation_rows %}
+              <tr>
+                <td>{{ row.symbol }}</td>
+                <td>{{ "%.3f"|format(row.amount) }}</td>
+                <td>{{ "{:,.0f}".format(row.points_per_unit) }}</td>
+                <td>{{ "{:,.0f}".format(row.battery_per_unit) }}</td>
+                <td>{{ "%.3f"|format(row.efficiency) }}</td>
+                <td>{{ "{:,.0f}".format(row.total_points) }}</td>
+                <td>{{ "{:,.0f}".format(row.total_battery) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <p class="subtle">
+            No resources in your inventory currently give masterpiece points for this event.
+          </p>
+        {% endif %}
+
+        <h3 style="margin-top:10px;">Suggested use of 15,000 battery</h3>
+        {% if battery_plan_rows %}
+          <table>
+            <tr>
+              <th>Resource</th>
+              <th>Units to donate</th>
+              <th>Battery used</th>
+              <th>Points gained</th>
+              <th>Pts / battery</th>
+            </tr>
+            {% for r in battery_plan_rows %}
+              <tr>
+                <td>{{ r.symbol }}</td>
+                <td>{{ "%.3f"|format(r.units) }}</td>
+                <td>{{ "{:,.0f}".format(r.battery) }}</td>
+                <td>{{ "{:,.0f}".format(r.points) }}</td>
+                <td>{{ "%.3f"|format(r.efficiency) }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <p class="subtle">
+            No efficient plan found within a 15,000 battery budget.
+          </p>
+        {% endif %}
+      </div>
+    {% elif mp %}
+      <div class="card">
+        <h2>Masterpiece Point Detector</h2>
+        <p class="subtle">
+          Not enough data to estimate points from your inventory for this masterpiece.
+        </p>
+      </div>
+    {% endif %}
+  </div>
+</div>
 """
 
 # ================= MASTERPIECES TAB TEMPLATE ==================
@@ -8893,6 +9213,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
