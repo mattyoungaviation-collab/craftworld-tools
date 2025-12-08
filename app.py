@@ -1273,25 +1273,89 @@ tr:nth-child(odd) td {
     }
   }
 
-  /* --- Masterpieces: leaderboard list style --- */
+  /* --- Masterpieces: leaderboard row list --- */
+
+  .mp-leaderboard-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .mp-lb-row {
+    display: grid;
+    grid-template-columns: 40px 38px minmax(0, 1fr) auto;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.96);
+    border: 1px solid rgba(51, 65, 85, 0.9);
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.55);
+    font-size: 12px;
+  }
+
+  .mp-lb-row.me-row {
+    border-color: rgba(34, 197, 94, 0.9);
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.7),
+                0 10px 22px rgba(22, 163, 74, 0.75);
+    background: radial-gradient(circle at left, rgba(34,197,94,0.25), transparent 55%),
+                rgba(15, 23, 42, 0.98);
+  }
+
+  .mp-lb-rank {
+    font-weight: 800;
+    font-size: 13px;
+  }
+
+  .mp-lb-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.8);
+    background: radial-gradient(circle at 30% 30%, #0f172a, #020617);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .mp-lb-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .mp-lb-avatar-fallback {
+    font-size: 11px;
+    font-weight: 700;
+    color: #e5e7eb;
+  }
+
+  .mp-lb-name {
+    padding-left: 6px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mp-lb-points {
+    font-weight: 800;
+    font-size: 13px;
+    text-align: right;
+  }
 
   .mp-leaderboard-box {
     margin-top: 0.5rem;
     padding: 0.5rem 0.75rem;
     background: rgba(2, 6, 23, 0.95);
-    border-radius: 10px;
+    border-radius: 12px;
     border: 1px solid rgba(148, 163, 184, 0.35);
-    max-height: 480px;
+    max-height: 460px;
     overflow: auto;
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.75);
-  }
-
-  .mp-leaderboard-box pre {
-    margin: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-                 "Liberation Mono", "Courier New", monospace;
-    font-size: 11px;
-    white-space: pre;
   }
 </style>
 
@@ -4963,13 +5027,14 @@ MASTERPIECES_TEMPLATE = """
       </p>
 
       <div class="mp-leaderboard-box">
-        <pre>
-{% for row in current_mp_top50 %}
+<pre>
+{% for row in SOME_LIST %}
 {% set prof = row.profile or {} %}
 {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
 {{ "%3d"|format(row.position) }}. {{ "{:,.0f}".format(row.masterpiecePoints or 0) }} MP — {{ name }}
 {% endfor %}
-        </pre>
+</pre>
+
       </div>
 
       {% if current_gap %}
@@ -5382,13 +5447,14 @@ MASTERPIECES_TEMPLATE = """
       <h3>{{ selected_mp.name or ("MP #" ~ selected_mp.id) }} (ID {{ selected_mp.id }})</h3>
 
       <div class="mp-leaderboard-box">
-        <pre>
-{% for row in selected_mp_top50 %}
+<pre>
+{% for row in SOME_LIST %}
 {% set prof = row.profile or {} %}
 {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
 {{ "%3d"|format(row.position) }}. {{ "{:,.0f}".format(row.masterpiecePoints or 0) }} MP — {{ name }}
 {% endfor %}
-        </pre>
+</pre>
+
       </div>
 
       {% if selected_gap %}
@@ -8327,6 +8393,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
