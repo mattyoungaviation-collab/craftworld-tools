@@ -1357,6 +1357,47 @@ tr:nth-child(odd) td {
     overflow: auto;
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.75);
   }
+
+    /* --- Masterpieces: live leaderboard subtabs --- */
+
+  .mp-subtabs {
+    display: inline-flex;
+    gap: 6px;
+    margin: 0.5rem 0;
+    padding: 3px;
+    border-radius: var(--radius-pill);
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+  }
+
+  .mp-subtab-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-soft);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .mp-subtab-btn.active {
+    background: rgba(37, 99, 235, 0.96);
+    color: #e5e7eb;
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.7);
+    font-weight: 600;
+  }
+
+  .mp-subtab {
+    display: none;
+    margin-top: 0.25rem;
+  }
+
+  .mp-subtab.active {
+    display: block;
+  }
 </style>
 
 
@@ -5079,36 +5120,63 @@ MASTERPIECES_TEMPLATE = """
       </div>
     </div>
 
-    <h2>Live leaderboard (Top {{ top_n }})</h2>
-    {% if current_mp %}
-      <p>
-        Showing <strong>{{ current_mp.name }}</strong>
-        (ID {{ current_mp.id }}) leaderboard.
-      </p>
+    <h2>Live leaderboards (Top {{ top_n }})</h2>
 
-      <div class="mp-leaderboard-list">
-        {% for row in current_mp_top50 %}
-          {% set prof = row.profile or {} %}
-          {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
-          <div class="mp-row {% if current_gap and row.position == current_gap.position %}mp-row--me{% endif %}">
-            <div class="mp-rank">{{ row.position }}</div>
-            <div class="mp-avatar">
-              {% if prof.avatarUrl %}
-                <img src="{{ prof.avatarUrl|ipfs_to_http }}" alt="{{ name }} avatar" loading="lazy">
-              {% else %}
-                <div class="mp-avatar-placeholder">
-                  {{ name[0]|upper }}
+    <div class="mp-subtabs">
+      <button type="button"
+              class="mp-subtab-btn active"
+              data-target="general">
+        General
+      </button>
+      <button type="button"
+              class="mp-subtab-btn"
+              data-target="event">
+        Event
+      </button>
+    </div>
+
+    {# -------- GENERAL LIVE LEADERBOARD SUBTAB -------- #}
+    <div id="mp-subtab-general" class="mp-subtab active">
+      {% if current_mp and not current_mp.eventId %}
+        <p>
+          Showing <strong>{{ current_mp.name }}</strong>
+          (ID {{ current_mp.id }}) leaderboard.
+        </p>
+      {% elif general_snapshot %}
+        <p>
+          Showing <strong>{{ general_snapshot.mp.name }}</strong>
+          (ID {{ general_snapshot.mp.id }}) leaderboard.
+        </p>
+      {% endif %}
+
+      {% if current_mp_top50 %}
+        <div class="mp-leaderboard-box">
+          <div class="mp-leaderboard-list">
+            {% for row in current_mp_top50 %}
+              {% set prof = row.profile or {} %}
+              {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
+              <div class="mp-row {% if current_gap and row.position == current_gap.position %}mp-row--me{% endif %}">
+                <div class="mp-rank">{{ row.position }}</div>
+                <div class="mp-avatar">
+                  {% if prof.avatarUrl %}
+                    <img src="{{ prof.avatarUrl|ipfs_to_http }}" alt="{{ name }} avatar" loading="lazy">
+                  {% else %}
+                    <div class="mp-avatar-placeholder">
+                      {{ name[0]|upper }}
+                    </div>
+                  {% endif %}
                 </div>
-              {% endif %}
-            </div>
-            <div class="mp-name">{{ name }}</div>
-            <div class="mp-points">
-              {{ "{:,.0f}".format(row.masterpiecePoints or 0) }}
-            </div>
+                <div class="mp-name">{{ name }}</div>
+                <div class="mp-points">
+                  {{ "{:,.0f}".format(row.masterpiecePoints or 0) }}
+                </div>
+              </div>
+            {% endfor %}
           </div>
-        {% endfor %}
-      </div>
-
+        </div>
+      {% else %}
+        <p class="hint">No general leaderboard data available.</p>
+      {% endif %}
 
       {% if current_gap %}
         <div style="margin-top:0.5rem; font-size:0.9rem;">
@@ -5138,10 +5206,51 @@ MASTERPIECES_TEMPLATE = """
           in the History tab and reload.
         </p>
       {% endif %}
-    {% else %}
-      <p>No current masterpiece leaderboard available.</p>
-    {% endif %}
-  </div>
+    </div>
+
+    {# -------- EVENT LIVE LEADERBOARD SUBTAB -------- #}
+    <div id="mp-subtab-event" class="mp-subtab">
+      {% if event_snapshot %}
+        <p>
+          Showing <strong>{{ event_snapshot.mp.name }}</strong>
+          (ID {{ event_snapshot.mp.id }}) leaderboard.
+        </p>
+      {% endif %}
+
+      {# 
+        Uses `event_mp_top50` and optional `event_gap` if you provide them
+        from Python. `is defined` prevents template errors for now.
+      #}
+      {% if event_mp_top50 is defined and event_mp_top50 %}
+        <div class="mp-leaderboard-box">
+          <div class="mp-leaderboard-list">
+            {% for row in event_mp_top50 %}
+              {% set prof = row.profile or {} %}
+              {% set name = prof.displayName or prof.walletAddress or prof.uid or "Unknown" %}
+              <div class="mp-row {% if event_gap is defined and event_gap and row.position == event_gap.position %}mp-row--me{% endif %}">
+                <div class="mp-rank">{{ row.position }}</div>
+                <div class="mp-avatar">
+                  {% if prof.avatarUrl %}
+                    <img src="{{ prof.avatarUrl|ipfs_to_http }}" alt="{{ name }} avatar" loading="lazy">
+                  {% else %}
+                    <div class="mp-avatar-placeholder">
+                      {{ name[0]|upper }}
+                    </div>
+                  {% endif %}
+                </div>
+                <div class="mp-name">{{ name }}</div>
+                <div class="mp-points">
+                  {{ "{:,.0f}".format(row.masterpiecePoints or 0) }}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% else %}
+        <p class="hint">No event leaderboard data available.</p>
+      {% endif %}
+    </div>
+
 
   <!-- ================= REWARDS & TOTALS ================= -->
   <div id="rewards" style="margin-top:1.5rem;">
@@ -5677,6 +5786,25 @@ MASTERPIECES_TEMPLATE = """
       {% endif %}
     </form>
   </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const btns = document.querySelectorAll('.mp-subtab-btn');
+  const panes = document.querySelectorAll('.mp-subtab');
+
+  btns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.target;
+      // toggle buttons
+      btns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      // toggle panes
+      panes.forEach(p => p.classList.remove('active'));
+      const pane = document.getElementById('mp-subtab-' + target);
+      if (pane) pane.classList.add('active');
+    });
+  });
+});
+</script>
 </div>
 """
 # ================= END MASTERPIECES TEMPLATE ==================
@@ -8478,6 +8606,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
