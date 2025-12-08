@@ -5879,6 +5879,40 @@ def masterpieces_view():
         coin_usd = 0.0
 
 
+    # --- Event leaderboard data for the Event subtab ---
+    event_mp_top50 = []
+    event_gap = None
+
+    # If we have an event snapshot, pull leaderboard rows for that MP
+    if event_snapshot:
+        # depending on your snapshot shape, adjust this line:
+        mp_obj = event_snapshot.get("mp") if isinstance(event_snapshot, dict) else getattr(event_snapshot, "mp", None)
+        event_mp_id = None
+        if isinstance(mp_obj, dict):
+            event_mp_id = mp_obj.get("id")
+        elif mp_obj is not None:
+            event_mp_id = getattr(mp_obj, "id", None)
+
+        if event_mp_id:
+            try:
+                # 👉 use the SAME helper you use for current_mp_top50
+                # e.g. if you currently do something like:
+                #   current_mp_top50 = fetch_mp_leaderboard(current_mp["id"], top_n, highlight_profile)
+                # then do the same here:
+                event_mp_top50 = fetch_mp_leaderboard(
+                    event_mp_id,
+                    top_n,
+                    highlight_profile,
+                ) or []
+
+                # If you have a helper that computes the gap row,
+                # mirror whatever you do for `current_gap`
+                # e.g.:
+                # event_gap = compute_gap_row(event_mp_top50, highlight_profile)
+            except Exception:
+                event_mp_top50 = []
+                event_gap = None
+
     # Load MP list from Craft World
     try:
         masterpieces_data = fetch_masterpieces()
@@ -6837,6 +6871,8 @@ def masterpieces_view():
         current_gap=current_gap,
         general_snapshot=general_snapshot,
         event_snapshot=event_snapshot,
+        event_mp_top50=event_mp_top50,
+        event_gap=event_gap,
 
         # Rewards tab context
         src_mp=src_mp,
@@ -8654,6 +8690,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
