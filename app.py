@@ -1682,7 +1682,6 @@ tr:nth-child(odd) td {
         {% endif %}
 
         <a href="{{ url_for('boosts') }}" class="{{ 'active' if active_page=='boosts' else '' }}">Boosts</a>
-        <a href="{{ url_for('mastery_view') }}" class="{{ 'active' if active_page=='mastery' else '' }}">Mastery</a>
         <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
         <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
         <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
@@ -9213,6 +9212,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
