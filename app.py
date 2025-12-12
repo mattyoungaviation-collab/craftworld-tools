@@ -430,180 +430,6 @@ def compute_leaderboard_gap_for_highlight(
         "below_pos": below_pos,
     }
 
-def build_15000_battery_plan(
-    account: Dict[str, Any],
-    mp_id: str,
-    battery_budget: float = 15000.0,
-) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """
-    Build:
-      - donation_summary: per-resource potential (if you donated everything)
-      - battery_plan: 15000 battery greedy plan using best points-per-battery first
-
-    Uses your current inventory for this account and the per-unit MP rewards.
-    """
-    if not account or not mp_id:
-        return None, None
-
-    resources = (account or {}).get("resources") or []
-    if not resources:
-        return None, None
-
-    # 1) Aggregate inventory by token symbol
-    symbol_to_amount: Dict[str, float] = {}
-    for r in resources:
-        sym = None
-        try:
-            # works for both dicts and objects if attr_or_key is defined lower in this file
-            sym = (getattr(r, "symbol", None) or getattr(r, "token", None)
-                   or (r.get("symbol") if isinstance(r, dict) else None))
-        except Exception:
-            sym = None
-
-        if not sym:
-            continue
-
-        try:
-            amt = float(
-                getattr(r, "amount", None)
-                if hasattr(r, "amount")
-                else (r.get("amount") if isinstance(r, dict) else 0.0)
-                or 0.0
-            )
-        except Exception:
-            amt = 0.0
-
-        if amt <= 0:
-            continue
-
-        sym = str(sym).upper()
-        symbol_to_amount[sym] = symbol_to_amount.get(sym, 0.0) + amt
-
-    if not symbol_to_amount:
-        return None, None
-
-    # 2) Per-unit MP rewards for all tokens we actually hold
-    per_unit = get_mp_per_unit_rewards(str(mp_id), list(symbol_to_amount.keys())) or {}
-    points_map = per_unit.get("points") or {}
-    power_map = per_unit.get("power") or {}
-
-    donation_rows: List[Dict[str, Any]] = []
-    candidates: List[Dict[str, Any]] = []
-
-    total_inventory_points = 0.0
-    total_inventory_battery = 0.0
-
-    for sym, amt in symbol_to_amount.items():
-        pts_u = float(points_map.get(sym, 0.0) or 0.0)
-        pow_u = float(power_map.get(sym, 0.0) or 0.0)
-
-        # Skip tokens that don't give MP points or don't cost battery
-        if pts_u <= 0 or pow_u <= 0 or amt <= 0:
-            continue
-
-        potential_points = amt * pts_u
-        potential_battery = amt * pow_u
-        ppb = pts_u / pow_u if pow_u > 0 else 0.0
-
-        donation_rows.append(
-            {
-                "symbol": sym,
-                "available": amt,
-                "points_per_unit": pts_u,
-                "battery_per_unit": pow_u,
-                "points_per_battery": ppb,
-                "max_points": potential_points,
-                "max_battery": potential_battery,
-            }
-        )
-
-        candidates.append(
-            {
-                "symbol": sym,
-                "available": amt,
-                "points_per_unit": pts_u,
-                "battery_per_unit": pow_u,
-                "points_per_battery": ppb,
-            }
-        )
-
-        total_inventory_points += potential_points
-        total_inventory_battery += potential_battery
-
-    if not candidates:
-        donation_summary = {
-            "rows": donation_rows,
-            "total_inventory_points": total_inventory_points,
-            "total_inventory_battery": total_inventory_battery,
-        }
-        return donation_summary, None
-
-    # 3) Greedy 15k battery plan: highest points-per-battery first
-    candidates.sort(key=lambda c: c["points_per_battery"], reverse=True)
-
-    remaining_batt = float(battery_budget)
-    plan_rows: List[Dict[str, Any]] = []
-    total_points = 0.0
-    total_used_battery = 0.0
-
-    for c in candidates:
-        if remaining_batt <= 0:
-            break
-
-        sym = c["symbol"]
-        available = float(c["available"])
-        pts_u = float(c["points_per_unit"])
-        pow_u = float(c["battery_per_unit"])
-
-        if available <= 0 or pts_u <= 0 or pow_u <= 0:
-            continue
-
-        max_by_batt = remaining_batt / pow_u
-        donate_amt = min(available, max_by_batt)
-
-        if donate_amt <= 0:
-            continue
-
-        used_batt = donate_amt * pow_u
-        gained_pts = donate_amt * pts_u
-        remaining_batt -= used_batt
-        total_used_battery += used_batt
-        total_points += gained_pts
-
-        completion_pct = (donate_amt / available) * 100.0 if available > 0 else 0.0
-
-        plan_rows.append(
-            {
-                "symbol": sym,
-                "donate_amount": donate_amt,
-                "available": available,
-                "battery_used": used_batt,
-                "points_gained": gained_pts,
-                "points_per_battery": c["points_per_battery"],
-                "completion_pct": completion_pct,
-            }
-        )
-
-    donation_summary = {
-        "rows": donation_rows,
-        "total_inventory_points": total_inventory_points,
-        "total_inventory_battery": total_inventory_battery,
-    }
-
-    if not plan_rows:
-        return donation_summary, None
-
-    battery_plan = {
-        "battery_budget": float(battery_budget),
-        "total_battery_used": total_used_battery,
-        "remaining_battery": max(0.0, remaining_batt),
-        "total_points": total_points,
-        "rows": plan_rows,
-    }
-
-    return donation_summary, battery_plan
-
-
 def _default_boost_levels() -> dict[str, dict[str, int]]:
     """
     Default per-token mastery/workshop levels (0–10).
@@ -810,17 +636,22 @@ def player_view(uid: str):
     """
     Simple player dashboard:
       - Profile info (name, wallet, ENS, avatar)
-      - Masterpiece position (if mp_id is provided)
-      - Inventory & land plots from fetch_craftworld
-      - MP donation potential + 15k battery plan (if mp_id is provided)
+      - Land plots (event plots first, then standard)
+      - Inventory
+      - Masterpiece position + point detector for the selected MP (if mp_id is provided)
     """
     error: Optional[str] = None
     profile: Optional[Dict[str, Any]] = None
     account: Optional[Dict[str, Any]] = None
     mp: Optional[Dict[str, Any]] = None
     gap: Optional[Dict[str, Any]] = None
+
+    # These are for the template
+    event_plots: List[Dict[str, Any]] = []
+    standard_plots: List[Dict[str, Any]] = []
+    donation_rows: List[Dict[str, Any]] = []
     donation_summary: Optional[Dict[str, Any]] = None
-    battery_plan: Optional[Dict[str, Any]] = None
+    battery_plan_rows: List[Dict[str, Any]] = []
 
     mp_id = (request.args.get("mp_id") or "").strip() or None
 
@@ -839,23 +670,196 @@ def player_view(uid: str):
         else:
             error = f"Error fetching account: {e}"
 
-    # 3) Position + donation plan on a specific masterpiece, if mp_id provided
-    if mp_id and account:
+    # 2a) Split land plots into event vs standard and flatten factories/levels
+    if account:
+        try:
+            from math import isnan  # just in case we ever need it, safe import
+
+            land_plots = attr_or_key(account, "landPlots", []) or []
+            for plot in land_plots:
+                plot_name = attr_or_key(plot, "symbol", "") or str(
+                    attr_or_key(plot, "id", "")
+                )
+                # Heuristic: treat any plot with eventId / isEvent as an event plot
+                is_event_plot = bool(
+                    attr_or_key(plot, "eventId", None)
+                    or attr_or_key(plot, "isEvent", False)
+                )
+
+                areas_raw = attr_or_key(plot, "areas", []) or []
+                areas: List[Dict[str, Any]] = []
+
+                for area in areas_raw:
+                    area_symbol = attr_or_key(area, "symbol", "") or ""
+                    factories_raw = attr_or_key(area, "factories", []) or []
+                    factories_list: List[Dict[str, Any]] = []
+
+                    for facwrap in factories_raw:
+                        fac = attr_or_key(facwrap, "factory", None)
+                        if not fac:
+                            continue
+                        definition = attr_or_key(fac, "definition", {}) or {}
+                        token = attr_or_key(definition, "id", None)
+                        if not token:
+                            continue
+
+                        try:
+                            api_level = int(attr_or_key(fac, "level", 0) or 0)
+                        except Exception:
+                            api_level = 0
+                        csv_level = api_level + 1  # API level is 0-based
+
+                        factories_list.append(
+                            {
+                                "token": str(token),
+                                "level": csv_level,
+                            }
+                        )
+
+                    areas.append(
+                        {
+                            "symbol": area_symbol,
+                            "factories": factories_list,
+                        }
+                    )
+
+                row = {
+                    "name": plot_name,
+                    "is_event": is_event_plot,
+                    "areas": areas,
+                }
+                if is_event_plot:
+                    event_plots.append(row)
+                else:
+                    standard_plots.append(row)
+
+            # Sort plots by name for a clean display
+            event_plots.sort(key=lambda p: p["name"])
+            standard_plots.sort(key=lambda p: p["name"])
+        except Exception as e:
+            if error:
+                error += f" | Error processing land plots: {e}"
+            else:
+                error = f"Error processing land plots: {e}"
+
+    # 3) Position on a specific masterpiece, if mp_id provided
+    if mp_id:
         try:
             mp = fetch_masterpiece_details(mp_id)
             lb = mp.get("leaderboard") or []
             gap = compute_leaderboard_gap_for_highlight(lb, uid)
-
-            # New: 15k battery planner based on your current inventory
-            donation_summary, battery_plan = build_15000_battery_plan(
-                account, mp_id, battery_budget=15000.0
-            )
         except Exception as e:
             if error:
-                error += f" | Error fetching masterpiece stats or donation plan: {e}"
+                error += f" | Error fetching masterpiece stats: {e}"
             else:
-                error = f"Error fetching masterpiece stats or donation plan: {e}"
+                error = f"Error fetching masterpiece stats: {e}"
 
+    # 4) Point detector: compute points / battery from inventory for this MP
+    if mp_id and account:
+        try:
+            resources = attr_or_key(account, "resources", []) or []
+            symbols: List[str] = []
+            for r in resources:
+                sym = (attr_or_key(r, "symbol", "") or "").upper()
+                if sym:
+                    symbols.append(sym)
+
+            per_unit = get_mp_per_unit_rewards(mp_id, symbols)
+            pts_per = per_unit.get("points", {}) or {}
+            power_per = per_unit.get("power", {}) or {}
+
+            total_points_all = 0.0
+            total_battery_all = 0.0
+
+            # Build base rows for each resource that actually gives MP points
+            for r in resources:
+                sym = (attr_or_key(r, "symbol", "") or "").upper()
+                if not sym:
+                    continue
+                try:
+                    amt = float(attr_or_key(r, "amount", 0.0) or 0.0)
+                except Exception:
+                    amt = 0.0
+                if amt <= 0:
+                    continue
+
+                ppu = float(pts_per.get(sym, 0.0) or 0.0)          # points per unit
+                bpu = float(power_per.get(sym, 0.0) or 0.0)        # battery per unit
+                if ppu <= 0 or bpu <= 0:
+                    continue
+
+                total_pts = amt * ppu
+                total_batt = amt * bpu
+                eff = ppu / bpu if bpu > 0 else 0.0  # points per battery
+
+                total_points_all += total_pts
+                total_battery_all += total_batt
+
+                donation_rows.append(
+                    {
+                        "symbol": sym,
+                        "amount": amt,
+                        "points_per_unit": ppu,
+                        "battery_per_unit": bpu,
+                        "efficiency": eff,
+                        "total_points": total_pts,
+                        "total_battery": total_batt,
+                    }
+                )
+
+            # Sort by efficiency (points per battery), best first
+            donation_rows.sort(key=lambda row: row["efficiency"], reverse=True)
+
+            # Now create a simple battery-budget plan for 15,000 battery
+            BATTERY_BUDGET = 15_000.0
+            remaining_batt = BATTERY_BUDGET
+            points_15000 = 0.0
+            battery_used_15000 = 0.0
+
+            for row in donation_rows:
+                if remaining_batt <= 0:
+                    break
+                bpu = row["battery_per_unit"]
+                if bpu <= 0:
+                    continue
+
+                max_batt_for_token = bpu * row["amount"]
+                use_batt = min(remaining_batt, max_batt_for_token)
+                if use_batt <= 0:
+                    continue
+
+                units = use_batt / bpu
+                pts = units * row["points_per_unit"]
+
+                battery_used_15000 += use_batt
+                points_15000 += pts
+                remaining_batt -= use_batt
+
+                battery_plan_rows.append(
+                    {
+                        "symbol": row["symbol"],
+                        "units": units,
+                        "battery": use_batt,
+                        "points": pts,
+                        "efficiency": row["efficiency"],
+                    }
+                )
+
+            if donation_rows:
+                donation_summary = {
+                    "total_points_all": total_points_all,
+                    "total_battery_all": total_battery_all,
+                    "battery_budget": BATTERY_BUDGET,
+                    "battery_used_15000": battery_used_15000,
+                    "points_15000": points_15000,
+                }
+        except Exception as e:
+            if error:
+                error += f" | Error computing donation stats: {e}"
+            else:
+                error = f"Error computing donation stats: {e}"
+
+    # Render inner content
     content_html = render_template_string(
         PLAYER_VIEW_TEMPLATE,
         error=error,
@@ -864,10 +868,14 @@ def player_view(uid: str):
         account=account or {},
         mp=mp,
         gap=gap,
+        event_plots=event_plots,
+        standard_plots=standard_plots,
+        donation_rows=donation_rows,
         donation_summary=donation_summary,
-        battery_plan=battery_plan,
+        battery_plan_rows=battery_plan_rows,
     )
 
+    # Wrap in your base layout
     html = render_template_string(
         BASE_TEMPLATE,
         content=content_html,
@@ -875,7 +883,6 @@ def player_view(uid: str):
         has_uid=has_uid_flag(),
     )
     return html
-
 
 
 def ipfs_to_http(url: str | None) -> str:
@@ -1907,12 +1914,12 @@ def index():
           {% if result.resources %}
             <table>
               <tr><th>Token</th><th>Amount</th></tr>
-          {% for r in resources %}
-            <tr>
-              <td>{{ r.symbol }}</td>
-              <td>{{ "%.6f"|format(r.amount|default(0)) }}</td>
-            </tr>
-          {% endfor %}
+              {% for r in result.resources %}
+                <tr>
+                  <td>{{ r.symbol }}</td>
+                  <td>{{ "%.6f"|format(r.amount) }}</td>
+                </tr>
+              {% endfor %}
             </table>
           {% else %}
             <p class="subtle">No resources found for this account.</p>
@@ -5254,84 +5261,6 @@ PLAYER_VIEW_TEMPLATE = """
       {% endif %}
     </p>
 
-    {% if mp and donation_summary %}
-  <div class="card">
-    <h2>Donation Potential for {{ mp.name or ('Masterpiece #' ~ mp.id) }}</h2>
-    <p class="subtle">
-      Based on your current inventory and this masterpiece's donation table.
-    </p>
-
-    <h3>Per-resource potential (if you donated everything)</h3>
-    {% if donation_summary.rows %}
-      <table>
-        <tr>
-          <th>Resource</th>
-          <th>Available</th>
-          <th>Pts / unit</th>
-          <th>Battery / unit</th>
-          <th>Pts / battery</th>
-          <th>Max points</th>
-          <th>Max battery</th>
-        </tr>
-        {% for r in donation_summary.rows %}
-          <tr>
-            <td>{{ r.symbol }}</td>
-            <td>{{ "%.3f"|format(r.available|default(0)) }}</td>
-            <td>{{ "{:,.0f}".format((r.points_per_unit or 0)) }}</td>
-            <td>{{ "{:,.0f}".format((r.battery_per_unit or 0)) }}</td>
-            <td>{{ "{:,.2f}".format(r.points_per_battery|default(0)) }}</td>
-            <td>{{ "{:,.0f}".format((r.max_points or 0)) }}</td>
-            <td>{{ "{:,.0f}".format((r.max_battery or 0)) }}</td>
-          </tr>
-        {% endfor %}
-
-      </table>
-    {% else %}
-      <p class="subtle">No resources in your inventory currently give points for this masterpiece.</p>
-    {% endif %}
-
-    {% if battery_plan %}
-      <h3 style="margin-top:14px;">🔥 15,000 Battery Plan (best points per battery)</h3>
-      <p class="subtle">
-        Battery budget: {{ "{:,.0f}".format((battery_plan.battery_budget or 0)) }}  
-        &nbsp;•&nbsp;
-        Used: {{ "{:,.0f}".format((battery_plan.total_battery_used or 0)) }}  
-        &nbsp;•&nbsp;
-        Remaining: {{ "{:,.0f}".format((battery_plan.remaining_battery or 0)) }}  
-        &nbsp;•&nbsp;
-        Total points: {{ "{:,.0f}".format((battery_plan.total_points or 0)) }}
-      </p>
-
-      <table>
-        <tr>
-          <th>Resource</th>
-          <th>Donate</th>
-          <th>Available</th>
-          <th>% of that resource used</th>
-          <th>Battery used</th>
-          <th>Points gained</th>
-          <th>Pts / battery</th>
-        </tr>
-        {% for r in battery_plan.rows %}
-          <tr>
-            <td>{{ r.symbol }}</td>
-            <td>{{ "%.3f"|format(r.donate_amount|default(0)) }}</td>
-            <td>{{ "%.3f"|format(r.available|default(0)) }}</td>
-            <td>{{ "{:,.1f}".format((r.completion_pct or 0)) }}%</td>
-            <td>{{ "{:,.0f}".format((r.battery_used or 0)) }}</td>
-            <td>{{ "{:,.0f}".format((r.points_gained or 0)) }}</td>
-            <td>{{ "{:,.2f}".format(r.points_per_battery|default(0)) }}</td>
-          </tr>
-        {% endfor %}
-      </table>
-    {% else %}
-      <p class="subtle">
-        Not enough matching resources in your inventory to build a 15k-battery donation plan.
-      </p>
-    {% endif %}
-  </div>
-{% endif %}
-
     {% if gap %}
       <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;">
         <div class="pill">
@@ -5342,13 +5271,13 @@ PLAYER_VIEW_TEMPLATE = """
         </div>
         {% if gap.above_name and gap.gap_up is not none %}
           <div class="pill">
-            +{{ "{:,.0f}".format((gap.gap_up or 0)) }} pts to pass #{{ gap.above_pos }} ({{ gap.above_name }})
+            +{{ "{:,.0f}".format(gap.gap_up) }} pts to pass #{{ gap.above_pos }} ({{ gap.above_name }})
           </div>
         {% endif %}
         {% if gap.below_name and gap.gap_down is not none %}
           <div class="pill-bad">
             Lead over #{{ gap.below_pos }} ({{ gap.below_name }}):
-            {{ "{:,.0f}".format((gap.gap_down or 0)) }} pts
+            {{ "{:,.0f}".format(gap.gap_down) }} pts
           </div>
         {% endif %}
       </div>
@@ -5450,7 +5379,7 @@ PLAYER_VIEW_TEMPLATE = """
           {% for r in resources %}
             <tr>
               <td>{{ r.symbol }}</td>
-              <td>{{ "%.6f"|format(r.amount|default(0)) }}</td>
+              <td>{{ "%.6f"|format(r.amount) }}</td>
             </tr>
           {% endfor %}
         </table>
@@ -5469,18 +5398,17 @@ PLAYER_VIEW_TEMPLATE = """
         <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;">
           <div class="pill">
             All-in points:
-            {{ "{:,.0f}".format((donation_summary.total_points_all or 0)) }}
+            {{ "{:,.0f}".format(donation_summary.total_points_all) }}
           </div>
           <div class="pill">
             Battery to donate everything:
-            {{ "{:,.0f}".format((donation_summary.total_battery_all or 0)) }}
+            {{ "{:,.0f}".format(donation_summary.total_battery_all) }}
           </div>
           <div class="pill">
             15,000 battery plan:
-            ~{{ "{:,.0f}".format((donation_summary.points_15000 or 0)) }} points
+            ~{{ "{:,.0f}".format(donation_summary.points_15000) }} points
           </div>
         </div>
-
 
         <h3 style="margin-top:10px;">Best resources (points per battery)</h3>
         {% if donation_rows %}
@@ -5497,12 +5425,12 @@ PLAYER_VIEW_TEMPLATE = """
             {% for row in donation_rows %}
               <tr>
                 <td>{{ row.symbol }}</td>
-                <td>{{ "%.3f"|format(row.amount|default(0)) }}</td>
-                <td>{{ "{:,.0f}".format((row.points_per_unit or 0)) }}</td>
-                <td>{{ "{:,.0f}".format((row.battery_per_unit or 0)) }}</td>
-                <td>{{ "%.3f"|format(row.efficiency|default(0)) }}</td>
-                <td>{{ "{:,.0f}".format((row.total_points or 0)) }}</td>
-                <td>{{ "{:,.0f}".format((row.total_battery or 0)) }}</td>
+                <td>{{ "%.3f"|format(row.amount) }}</td>
+                <td>{{ "{:,.0f}".format(row.points_per_unit) }}</td>
+                <td>{{ "{:,.0f}".format(row.battery_per_unit) }}</td>
+                <td>{{ "%.3f"|format(row.efficiency) }}</td>
+                <td>{{ "{:,.0f}".format(row.total_points) }}</td>
+                <td>{{ "{:,.0f}".format(row.total_battery) }}</td>
               </tr>
             {% endfor %}
           </table>
@@ -5525,10 +5453,10 @@ PLAYER_VIEW_TEMPLATE = """
             {% for r in battery_plan_rows %}
               <tr>
                 <td>{{ r.symbol }}</td>
-                <td>{{ "%.3f"|format(r.units|default(0)) }}</td>
-                <td>{{ "{:,.0f}".format((r.battery or 0)) }}</td>
-                <td>{{ "{:,.0f}".format((r.points or 0)) }}</td>
-                <td>{{ "%.3f"|format(r.efficiency|default(0)) }}</td>
+                <td>{{ "%.3f"|format(r.units) }}</td>
+                <td>{{ "{:,.0f}".format(r.battery) }}</td>
+                <td>{{ "{:,.0f}".format(r.points) }}</td>
+                <td>{{ "%.3f"|format(r.efficiency) }}</td>
               </tr>
             {% endfor %}
           </table>
@@ -9285,9 +9213,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
 
 
 
