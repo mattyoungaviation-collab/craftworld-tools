@@ -36,7 +36,7 @@ def call_graphql(query: str, variables: Optional[Dict[str, Any]] = None) -> Dict
         "Authorization": f"Bearer {get_jwt()}",
         "Content-Type": "application/json",
         # IMPORTANT: must be >= minAppVersion from server (currently 1.5.6)
-        "x-app-version": "1.5.7",
+        "x-app-version": "1.5.9",
     }
 
     payload: Dict[str, Any] = {"query": query}
@@ -504,6 +504,7 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
+
 
 
 
