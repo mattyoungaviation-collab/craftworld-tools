@@ -226,6 +226,7 @@ TOKENS_CHART_ORDER = [
     "ENERGY",
     "HYDROGEN",
     "DYNAMITE",
+    "DYNOFISH",
     "COIN",
 ]
 
@@ -1876,9 +1877,13 @@ def index():
           <a href="{{ url_for('profitability') }}" class="pill">🏭 Profitability</a>
           <a href="{{ url_for('flex_planner') }}" class="pill">🧠 Flex Planner</a>
           <a href="{{ url_for('masterpieces_view') }}" class="pill">🎨 Masterpieces</a>
+          <a href="{{ url_for('charts', token='DYNOFISH') }}" class="pill">🐟 Dyno Fish price</a>
         </div>
+        <p class="subtle" style="margin-top:8px;">
+          New to these tools? Click “Dyno Fish price” to jump straight to the live chart, or open <strong>Charts</strong> in the top navigation and pick <strong>DYNOFISH</strong> from the dropdown. Your latest changes are saved here automatically; no extra steps are needed.
+        </p>
       </div>
-
+      
       <div class="two-col">
         <div class="card">
           <h2>Land Plots &amp; Factories</h2>
@@ -9212,6 +9217,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
