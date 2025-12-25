@@ -1,4 +1,4 @@
-from typing import Dict, Optional, List␊
+from typing import Dict, Optional, List
 import time
 
 import requests
@@ -139,8 +139,8 @@ def fetch_exchange_prices_buy_sell() -> Dict[str, Dict[str, float]]:
         amt = item.get("amount")
         rec = (item.get("recommendation") or "").upper()
 
-        if not sym:␊
-            continue␊
+        if not sym:
+            continue
 
         try:
             amt_f = float(amt)
@@ -316,7 +316,7 @@ def fetch_exchange_prices_coin() -> Dict[str, float]:
 
 
 
-def fetch_live_prices_in_coin() -> Dict[str, float]:␊
+def fetch_live_prices_in_coin() -> Dict[str, float]:
     """High-level helper for the app.
 
     Returns a dict:
@@ -378,6 +378,7 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:␊
         prices_coin["WORM"] = float(fish_price) / 270.0
 
     return prices_coin
+
 
 
 
