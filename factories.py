@@ -166,7 +166,7 @@ def _normalize_token(sym_raw: str) -> str:
     return aliases.get(token, token)
 
 
-def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]
+def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]:
     """
     Load factory data from a normalized CSV with columns:
       token, level, duration_min, output_token, output_amount,
@@ -490,6 +490,7 @@ def compute_best_setups_csv(
 
     results.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
     return results[:top_n], combined_speed, worker_factor
+
 
 
 
