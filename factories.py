@@ -184,7 +184,7 @@ def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]:
 
                 token_raw = _normalize_token(row.get("token") or "")
                 if not token_raw:
-                    continue␊
+                    continue
                 token = token_raw
 
                 # Level
@@ -490,6 +490,7 @@ def compute_best_setups_csv(
 
     results.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
     return results[:top_n], combined_speed, worker_factor
+
 
 
 
