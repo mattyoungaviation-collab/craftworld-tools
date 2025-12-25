@@ -218,8 +218,8 @@ def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]:
                     q_key = f"input_amount_{idx}"
 
                     t_raw = _normalize_token(row.get(t_key) or "")
-                    if not t_raw:␊
-                        continue␊
+                    if not t_raw:
+                        continue
                     tok_in = t_raw
 
                     q_raw = row.get(q_key)
@@ -490,6 +490,7 @@ def compute_best_setups_csv(
 
     results.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
     return results[:top_n], combined_speed, worker_factor
+
 
 
 
