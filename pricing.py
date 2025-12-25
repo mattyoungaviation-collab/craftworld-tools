@@ -38,7 +38,6 @@ TOKEN_ADDRESSES: Dict[str, str] = {
     "HYDROGEN":   "0xB7D11863D0D9C39764F981A95AB8AF0AED714C48",
     "DYNAMITE":   "0x2B918938CFDE254CC76B68A4F6992927EE779104",
     "DYNOFISH":     "0x739Ef71e744eE052A7b773C5b7505dA9AD8447c0",
-    "DYNOFISH":     "0x739Ef71e744eE052A7b773C5b7505dA9AD8447c0",
     "FISH":         "0x0ad7edc6482A298b9dfbc31620aCe6A32489eF2B",
     "FISHBONE":     "0xBafb427ce206fA262A5E21646dFef9d219E15A69",
     "FUGU":         "0x04dA7513004C5bdD8452b3bB0AF89A5baA666AE0",
@@ -309,13 +308,6 @@ def fetch_exchange_prices_coin() -> Dict[str, float]:
 
 
 
-def fetch_live_prices_in_coin() -> Dict[str, float]:   
-    """High-level helper for the app.
-
-    Returns a dict:
-      - token -> price in COIN
-      - special key "_COIN_USD" for COIN price in USD (may be 0.0 if Gecko fails)
-    """
     prices_coin = fetch_exchange_prices_coin()
 
     coin_addr = TOKEN_ADDRESSES.get("COIN")
@@ -324,10 +316,37 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
 
     # Derived prices that rely on exchange data
     fish_price = prices_coin.get("FISH")
+
+    # If the exchange list doesn't report FISH, try a direct quote.
+    if not fish_price:
+        quote_fish_coin = _fetch_exact_input_quote("FISH", "COIN", 1.0)
+        if (
+            quote_fish_coin
+            and quote_fish_coin.get("output")
+            and quote_fish_coin.get("input")
+        ):
+            try:
+                out_amt = float(quote_fish_coin["output"]["amount"])
+                in_amt = float(quote_fish_coin["input"]["amount"])
+                if in_amt > 0:
+                    fish_price = out_amt / in_amt
+                    prices_coin["FISH"] = fish_price
+            except Exception:
+                fish_price = None
+
+    # If the exchange list doesn't report FISH, try GeckoTerminal and convert to COIN.
+    if not fish_price:
+        fish_addr = TOKEN_ADDRESSES.get("FISH")
+        fish_usd = _get_usd_price(fish_addr) if fish_addr else None
+        if fish_usd and coin_usd:
+            fish_price = float(fish_usd) / float(coin_usd)
+            prices_coin["FISH"] = fish_price
+
     if fish_price:
         prices_coin["WORM"] = float(fish_price) / 270.0
 
     return prices_coin
+
 
 
 
