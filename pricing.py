@@ -1,4 +1,4 @@
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List␊
 import time
 
 import requests
@@ -40,6 +40,7 @@ TOKEN_ADDRESSES: Dict[str, str] = {
     "DYNOFISH":     "0x739Ef71e744eE052A7b773C5b7505dA9AD8447c0",
     "FISH":         "0x0ad7edc6482A298b9dfbc31620aCe6A32489eF2B",
     "FISHBONE":     "0xBafb427ce206fA262A5E21646dFef9d219E15A69",
+    "BONESOUP":     "0xb69af5Afbb2AEE36ab33Df2050f4352B500A48C2",
     "FUGU":         "0x04dA7513004C5bdD8452b3bB0AF89A5baA666AE0",
     "RAWRVIOLI":    "0x82915DAD2Db2c1A4Bbfd35852372318a103f7D80",
     "SUSHI":        "0xC146e831C137bbB2e1aF91C30844D224F4778017",
@@ -67,6 +68,15 @@ _QUOTE_CACHE: Dict[str, Dict[str, float]] = {}
 _QUOTE_CACHE_TS: Dict[str, float] = {}
 QUOTE_TTL_SECONDS = 60.0  # reuse quotes for 60 seconds per symbol
 
+
+
+def _normalize_symbol(sym_raw: Optional[str]) -> str:
+    """Normalize token symbols from API responses to match app keys."""
+
+    token = (sym_raw or "").strip().upper()
+    if token.startswith("$"):
+        token = token[1:]
+    return token
 
 
 def _get_usd_price(token_address: Optional[str]) -> Optional[float]:
@@ -120,36 +130,34 @@ def fetch_exchange_prices_buy_sell() -> Dict[str, Dict[str, float]]:
 
     data = call_graphql(query, None)
     root = data["exchangePriceList"]
-    base_symbol = root.get("baseSymbol", "COIN")
+    base_symbol = _normalize_symbol(root.get("baseSymbol", "COIN"))
 
     per_symbol: Dict[str, Dict[str, float]] = {}
 
     for item in root.get("prices", []):
-        sym = item.get("referenceSymbol")
+        sym = _normalize_symbol(item.get("referenceSymbol"))
         amt = item.get("amount")
         rec = (item.get("recommendation") or "").upper()
 
-        if not sym:
-            continue
+        if not sym:␊
+            continue␊
 
         try:
             amt_f = float(amt)
         except Exception:
             amt_f = 0.0
 
-        sym_u = sym.upper()
-        if sym_u not in per_symbol:
-            per_symbol[sym_u] = {}
+        if sym not in per_symbol:
+            per_symbol[sym] = {}
 
         key = rec if rec else "UNKNOWN"
-        per_symbol[sym_u][key] = amt_f
+        per_symbol[sym][key] = amt_f
 
     # Ensure base symbol (COIN) is present with a sane default
-    base_u = base_symbol.upper()
-    if base_u not in per_symbol:
-        per_symbol[base_u] = {}
-    per_symbol[base_u].setdefault("SELL", 1.0)
-    per_symbol[base_u].setdefault("BUY", 1.0)
+    if base_symbol not in per_symbol:
+        per_symbol[base_symbol] = {}
+    per_symbol[base_symbol].setdefault("SELL", 1.0)
+    per_symbol[base_symbol].setdefault("BUY", 1.0)
 
     return per_symbol
 
@@ -308,6 +316,13 @@ def fetch_exchange_prices_coin() -> Dict[str, float]:
 
 
 
+def fetch_live_prices_in_coin() -> Dict[str, float]:␊
+    """High-level helper for the app.
+
+    Returns a dict:
+      - token -> price in COIN
+      - special key "_COIN_USD" for COIN price in USD (may be 0.0 if Gecko fails)
+    """
     prices_coin = fetch_exchange_prices_coin()
 
     coin_addr = TOKEN_ADDRESSES.get("COIN")
@@ -330,6 +345,23 @@ def fetch_exchange_prices_coin() -> Dict[str, float]:
                 in_amt = float(quote_fish_coin["input"]["amount"])
                 if in_amt > 0:
                     fish_price = out_amt / in_amt
+                    prices_coin["FISH"] = fish_price
+            except Exception:
+                fish_price = None
+
+    # If selling FISH doesn't return a quote, try buying FISH with COIN.
+    if not fish_price:
+        quote_coin_fish = _fetch_exact_input_quote("COIN", "FISH", 1.0)
+        if (
+            quote_coin_fish
+            and quote_coin_fish.get("output")
+            and quote_coin_fish.get("input")
+        ):
+            try:
+                out_amt = float(quote_coin_fish["output"]["amount"])
+                in_amt = float(quote_coin_fish["input"]["amount"])
+                if out_amt > 0:
+                    fish_price = in_amt / out_amt
                     prices_coin["FISH"] = fish_price
             except Exception:
                 fish_price = None
