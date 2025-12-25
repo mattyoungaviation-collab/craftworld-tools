@@ -38,8 +38,9 @@ TOKEN_ADDRESSES: Dict[str, str] = {
     "HYDROGEN":   "0xB7D11863D0D9C39764F981A95AB8AF0AED714C48",
     "DYNAMITE":   "0x2B918938CFDE254CC76B68A4F6992927EE779104",
     "DYNOFISH":     "0x739Ef71e744eE052A7b773C5b7505dA9AD8447c0",
+    "DYNOFISH":     "0x739Ef71e744eE052A7b773C5b7505dA9AD8447c0",
+    "FISH":         "0x0ad7edc6482A298b9dfbc31620aCe6A32489eF2B",
     "FISHBONE":     "0xBafb427ce206fA262A5E21646dFef9d219E15A69",
-    "BONESOUP":     "0xb69af5Afbb2AEE36ab33Df2050f4352B500A48C2",
     "FUGU":         "0x04dA7513004C5bdD8452b3bB0AF89A5baA666AE0",
     "RAWRVIOLI":    "0x82915DAD2Db2c1A4Bbfd35852372318a103f7D80",
     "SUSHI":        "0xC146e831C137bbB2e1aF91C30844D224F4778017",
@@ -308,7 +309,7 @@ def fetch_exchange_prices_coin() -> Dict[str, float]:
 
 
 
-def fetch_live_prices_in_coin() -> Dict[str, float]:
+def fetch_live_prices_in_coin() -> Dict[str, float]:␊    
     """High-level helper for the app.
 
     Returns a dict:
@@ -321,7 +322,13 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
     coin_usd = _get_usd_price(coin_addr) if coin_addr else None
     prices_coin["_COIN_USD"] = float(coin_usd) if coin_usd else 0.0
 
+    # Derived prices that rely on exchange data
+    fish_price = prices_coin.get("FISH")
+    if fish_price:
+        prices_coin["WORM"] = float(fish_price) / 270.0
+
     return prices_coin
+
 
 
 
