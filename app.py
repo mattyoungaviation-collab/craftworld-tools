@@ -226,7 +226,9 @@ TOKENS_CHART_ORDER = [
     "ENERGY",
     "HYDROGEN",
     "DYNAMITE",
+    "FISH",
     "DYNOFISH",
+    "WORM",
     "COIN",
 ]
 
@@ -9217,6 +9219,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
