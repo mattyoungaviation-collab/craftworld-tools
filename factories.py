@@ -151,6 +151,21 @@ my_factories: List[MyFactory] = [
 # CSV-driven factory data for the Calculate tab
 # ---------------------------------------------
 
+def _normalize_token(sym_raw: str) -> str:
+    """Normalize token symbols from CSV rows to match pricing keys.
+
+    The CSV uses "WORMS" for Dyno Fish inputs, but pricing derives a
+    singular "WORM" price from the $FISH conversion. Normalizing keeps
+    costs from showing as zero in the calculator.
+    """
+
+    token = (sym_raw or "").strip().upper()
+    aliases = {
+        "WORMS": "WORM",
+    }
+    return aliases.get(token, token)
+
+
 def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]:
     """
     Load factory data from a normalized CSV with columns:
@@ -167,10 +182,10 @@ def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]:
                 if not row:
                     continue
 
-                token_raw = (row.get("token") or "").strip()
+                token_raw = _normalize_token(row.get("token") or "")
                 if not token_raw:
                     continue
-                token = token_raw.upper()
+                token = token_raw
 
                 # Level
                 lvl_raw = row.get("level")
@@ -187,8 +202,8 @@ def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]:
                     duration_min = 0.0
 
                 # Output
-                out_token_raw = (row.get("output_token") or token).strip()
-                out_token = out_token_raw.upper() if out_token_raw else token
+                out_token_raw = _normalize_token(row.get("output_token") or token)
+                out_token = out_token_raw if out_token_raw else token
 
                 out_amt_raw = row.get("output_amount")
                 try:
@@ -202,10 +217,10 @@ def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]:
                     t_key = f"input_token_{idx}"
                     q_key = f"input_amount_{idx}"
 
-                    t_raw = (row.get(t_key) or "").strip()
+                    t_raw = _normalize_token(row.get(t_key) or "")
                     if not t_raw:
                         continue
-                    tok_in = t_raw.upper()
+                    tok_in = t_raw
 
                     q_raw = row.get(q_key)
                     if q_raw in (None, ""):
@@ -219,8 +234,8 @@ def load_factories_from_csv(path: str) -> Dict[str, Dict[int, dict]]:
                     inputs[tok_in] = inputs.get(tok_in, 0.0) + qty
 
                 # Upgrade cost (single resource)
-                up_token_raw = (row.get("upgrade_token") or "").strip()
-                upgrade_token = up_token_raw.upper() if up_token_raw else None
+                up_token_raw = _normalize_token(row.get("upgrade_token") or "")
+                upgrade_token = up_token_raw if up_token_raw else None
 
                 up_amt_raw = row.get("upgrade_amount")
                 upgrade_amount: Optional[float] = None

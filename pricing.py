@@ -38,6 +38,7 @@ TOKEN_ADDRESSES: Dict[str, str] = {
     "HYDROGEN":   "0xB7D11863D0D9C39764F981A95AB8AF0AED714C48",
     "DYNAMITE":   "0x2B918938CFDE254CC76B68A4F6992927EE779104",
     "DYNOFISH":     "0x739Ef71e744eE052A7b773C5b7505dA9AD8447c0",
+    "FISH":         "0x0ad7edc6482A298b9dfbc31620aCe6A32489eF2B",
     "FISHBONE":     "0xBafb427ce206fA262A5E21646dFef9d219E15A69",
     "BONESOUP":     "0xb69af5Afbb2AEE36ab33Df2050f4352B500A48C2",
     "FUGU":         "0x04dA7513004C5bdD8452b3bB0AF89A5baA666AE0",
@@ -67,6 +68,15 @@ _QUOTE_CACHE: Dict[str, Dict[str, float]] = {}
 _QUOTE_CACHE_TS: Dict[str, float] = {}
 QUOTE_TTL_SECONDS = 60.0  # reuse quotes for 60 seconds per symbol
 
+
+
+def _normalize_symbol(sym_raw: Optional[str]) -> str:
+    """Normalize token symbols from API responses to match app keys."""
+
+    token = (sym_raw or "").strip().upper()
+    if token.startswith("$"):
+        token = token[1:]
+    return token
 
 
 def _get_usd_price(token_address: Optional[str]) -> Optional[float]:
@@ -120,12 +130,12 @@ def fetch_exchange_prices_buy_sell() -> Dict[str, Dict[str, float]]:
 
     data = call_graphql(query, None)
     root = data["exchangePriceList"]
-    base_symbol = root.get("baseSymbol", "COIN")
+    base_symbol = _normalize_symbol(root.get("baseSymbol", "COIN"))
 
     per_symbol: Dict[str, Dict[str, float]] = {}
 
     for item in root.get("prices", []):
-        sym = item.get("referenceSymbol")
+        sym = _normalize_symbol(item.get("referenceSymbol"))
         amt = item.get("amount")
         rec = (item.get("recommendation") or "").upper()
 
@@ -137,19 +147,17 @@ def fetch_exchange_prices_buy_sell() -> Dict[str, Dict[str, float]]:
         except Exception:
             amt_f = 0.0
 
-        sym_u = sym.upper()
-        if sym_u not in per_symbol:
-            per_symbol[sym_u] = {}
+        if sym not in per_symbol:
+            per_symbol[sym] = {}
 
         key = rec if rec else "UNKNOWN"
-        per_symbol[sym_u][key] = amt_f
+        per_symbol[sym][key] = amt_f
 
     # Ensure base symbol (COIN) is present with a sane default
-    base_u = base_symbol.upper()
-    if base_u not in per_symbol:
-        per_symbol[base_u] = {}
-    per_symbol[base_u].setdefault("SELL", 1.0)
-    per_symbol[base_u].setdefault("BUY", 1.0)
+    if base_symbol not in per_symbol:
+        per_symbol[base_symbol] = {}
+    per_symbol[base_symbol].setdefault("SELL", 1.0)
+    per_symbol[base_symbol].setdefault("BUY", 1.0)
 
     return per_symbol
 
@@ -320,6 +328,54 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
     coin_addr = TOKEN_ADDRESSES.get("COIN")
     coin_usd = _get_usd_price(coin_addr) if coin_addr else None
     prices_coin["_COIN_USD"] = float(coin_usd) if coin_usd else 0.0
+
+    # Derived prices that rely on exchange data
+    fish_price = prices_coin.get("FISH")
+
+    # If the exchange list doesn't report FISH, try a direct quote.
+    if not fish_price:
+        quote_fish_coin = _fetch_exact_input_quote("FISH", "COIN", 1.0)
+        if (
+            quote_fish_coin
+            and quote_fish_coin.get("output")
+            and quote_fish_coin.get("input")
+        ):
+            try:
+                out_amt = float(quote_fish_coin["output"]["amount"])
+                in_amt = float(quote_fish_coin["input"]["amount"])
+                if in_amt > 0:
+                    fish_price = out_amt / in_amt
+                    prices_coin["FISH"] = fish_price
+            except Exception:
+                fish_price = None
+
+    # If selling FISH doesn't return a quote, try buying FISH with COIN.
+    if not fish_price:
+        quote_coin_fish = _fetch_exact_input_quote("COIN", "FISH", 1.0)
+        if (
+            quote_coin_fish
+            and quote_coin_fish.get("output")
+            and quote_coin_fish.get("input")
+        ):
+            try:
+                out_amt = float(quote_coin_fish["output"]["amount"])
+                in_amt = float(quote_coin_fish["input"]["amount"])
+                if out_amt > 0:
+                    fish_price = in_amt / out_amt
+                    prices_coin["FISH"] = fish_price
+            except Exception:
+                fish_price = None
+
+    # If the exchange list doesn't report FISH, try GeckoTerminal and convert to COIN.
+    if not fish_price:
+        fish_addr = TOKEN_ADDRESSES.get("FISH")
+        fish_usd = _get_usd_price(fish_addr) if fish_addr else None
+        if fish_usd and coin_usd:
+            fish_price = float(fish_usd) / float(coin_usd)
+            prices_coin["FISH"] = fish_price
+
+    if fish_price:
+        prices_coin["WORM"] = float(fish_price) / 270.0
 
     return prices_coin
 
