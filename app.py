@@ -5615,6 +5615,26 @@ MASTERPIECES_TEMPLATE = """
       border: 1px solid rgba(148, 163, 184, 0.45);
       box-shadow: 0 8px 22px rgba(0, 0, 0, 0.8);
     }
+
+    .mp-card-link {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .mp-card {
+      flex: 1 1 260px;
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 0.75rem;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+    }
+
+    .mp-card-link:hover .mp-card {
+      border-color: rgba(148, 163, 184, 0.9);
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.6);
+      transform: translateY(-2px);
+    }
   </style>
 
   <!-- ================= OVERVIEW / CURRENT ================= -->
@@ -5623,63 +5643,96 @@ MASTERPIECES_TEMPLATE = """
 
     <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1rem;">
       <!-- General MP card -->
-      <div style="flex:1 1 260px; border:1px solid #444; border-radius:8px; padding:0.75rem;">
-        <h3>General Masterpiece</h3>
-        {% if general_snapshot %}
-          <p>
-            <strong>{{ general_snapshot.mp.name }}</strong>
-            (ID {{ general_snapshot.mp.id }})
-          </p>
-          <p>
-            Rank: <strong>#{{ general_snapshot.position }}</strong><br>
-            Points:
-            <strong>{{ "{:,.0f}".format(general_snapshot.points or 0) }}</strong><br>
-            {% if general_snapshot.tier %}
-              Completion tier: <strong>{{ general_snapshot.tier }}</strong><br>
-            {% else %}
-              Completion tier: <strong>Below Tier 1</strong><br>
-            {% endif %}
-            {% if general_snapshot.leaderboard_rewards %}
-              Bracket rewards: {{ general_snapshot.leaderboard_rewards }}
-            {% endif %}
-          </p>
-        {% elif current_mp and not current_mp.eventId %}
-          <p>
-            <strong>{{ current_mp.name }}</strong> (ID {{ current_mp.id }})<br>
-            <span class="hint">
-              Enter your name or Account ID in the History tab to see your personal snapshot.
-            </span>
-          </p>
-        {% else %}
-          <p>No active general masterpiece found.</p>
-        {% endif %}
+      {% set general_mp_id = None %}
+      {% if general_snapshot and general_snapshot.mp %}
+        {% set general_mp_id = general_snapshot.mp.id %}
+      {% elif current_mp and not current_mp.eventId %}
+        {% set general_mp_id = current_mp.id %}
+      {% endif %}
+      {% if general_mp_id %}
+        <a class="mp-card-link"
+           href="{{ url_for('masterpieces_view', mp_view_id=general_mp_id, tab='history') }}#history">
+      {% endif %}
+      <div class="mp-card">
+          <h3>General Masterpiece</h3>
+          {% if general_snapshot %}
+            <p>
+              <strong>{{ general_snapshot.mp.name }}</strong>
+              (ID {{ general_snapshot.mp.id }})
+            </p>
+            <p>
+              Rank: <strong>#{{ general_snapshot.position }}</strong><br>
+              Points:
+              <strong>{{ "{:,.0f}".format(general_snapshot.points or 0) }}</strong><br>
+              {% if general_snapshot.tier %}
+                Completion tier: <strong>{{ general_snapshot.tier }}</strong><br>
+              {% else %}
+                Completion tier: <strong>Below Tier 1</strong><br>
+              {% endif %}
+              {% if general_snapshot.leaderboard_rewards %}
+                Bracket rewards: {{ general_snapshot.leaderboard_rewards }}
+              {% endif %}
+            </p>
+          {% elif current_mp and not current_mp.eventId %}
+            <p>
+              <strong>{{ current_mp.name }}</strong> (ID {{ current_mp.id }})<br>
+              <span class="hint">
+                Enter your name or Account ID in the History tab to see your personal snapshot.
+              </span>
+            </p>
+          {% else %}
+            <p>No active general masterpiece found.</p>
+          {% endif %}
       </div>
+      {% if general_mp_id %}
+        </a>
+      {% endif %}
 
       <!-- Event MP card -->
-      <div style="flex:1 1 260px; border:1px solid #444; border-radius:8px; padding:0.75rem;">
-        <h3>Event Masterpiece</h3>
-        {% if event_snapshot %}
-          <p>
-            <strong>{{ event_snapshot.mp.name }}</strong>
-            (ID {{ event_snapshot.mp.id }})
-          </p>
-          <p>
-            Rank: <strong>#{{ event_snapshot.position }}</strong><br>
-            Points:
-            <strong>{{ "{:,.0f}".format(event_snapshot.points or 0) }}</strong><br>
-            {% if event_snapshot.tier %}
-              Completion tier: <strong>{{ event_snapshot.tier }}</strong><br>
-            {% else %}
-              Completion tier: <strong>Below Tier 1</strong><br>
-            {% endif %}
-            {% if event_snapshot.leaderboard_rewards %}
-              Bracket rewards: {{ event_snapshot.leaderboard_rewards }}
-            {% endif %}
-          </p>
-        {% else %}
-          <p>No active event masterpiece found.</p>
-        {% endif %}
+      {% set event_mp_id = None %}
+      {% if event_snapshot and event_snapshot.mp %}
+        {% set event_mp_id = event_snapshot.mp.id %}
+      {% elif current_event_mp %}
+        {% set event_mp_id = current_event_mp.id %}
+      {% endif %}
+      {% if event_mp_id %}
+        <a class="mp-card-link"
+           href="{{ url_for('masterpieces_view', mp_view_id=event_mp_id, tab='history') }}#history">
+      {% endif %}
+      <div class="mp-card">
+          <h3>Event Masterpiece</h3>
+          {% if event_snapshot %}
+            <p>
+              <strong>{{ event_snapshot.mp.name }}</strong>
+              (ID {{ event_snapshot.mp.id }})
+            </p>
+            <p>
+              Rank: <strong>#{{ event_snapshot.position }}</strong><br>
+              Points:
+              <strong>{{ "{:,.0f}".format(event_snapshot.points or 0) }}</strong><br>
+              {% if event_snapshot.tier %}
+                Completion tier: <strong>{{ event_snapshot.tier }}</strong><br>
+              {% else %}
+                Completion tier: <strong>Below Tier 1</strong><br>
+              {% endif %}
+              {% if event_snapshot.leaderboard_rewards %}
+                Bracket rewards: {{ event_snapshot.leaderboard_rewards }}
+              {% endif %}
+            </p>
+          {% elif current_event_mp %}
+            <p>
+              <strong>{{ current_event_mp.name }}</strong> (ID {{ current_event_mp.id }})<br>
+              <span class="hint">
+                Enter your name or Account ID in the History tab to see your personal snapshot.
+              </span>
+            </p>
+          {% else %}
+            <p>No active event masterpiece found.</p>
+          {% endif %}
       </div>
+      {% if event_mp_id %}
+        </a>
+      {% endif %}
     </div>
 
     <h2>Live leaderboards (Top {{ top_n }})</h2>
