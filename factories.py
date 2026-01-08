@@ -464,29 +464,32 @@ def compute_best_setups_csv(
         return float(prices_coin.get(tok, 0.0))
 
     for fac_name, levels in factories.items():
-        for lvl, data in levels.items():
-            out_token = data["output_token"]
-            out_amount = data["output_amount"]
-            duration_min = data["duration_min"]
-            base_inputs = data["inputs"] or {}
+        if not levels:
+            continue
+        max_level = max(levels.keys())
+        data = levels[max_level]
+        out_token = data["output_token"]
+        out_amount = data["output_amount"]
+        duration_min = data["duration_min"]
+        base_inputs = data["inputs"] or {}
 
-            eff_dur = duration_min / combined_speed if combined_speed > 0 else duration_min
-            crafts_per_hour = 60.0 / eff_dur if eff_dur > 0 else 0.0
+        eff_dur = duration_min / combined_speed if combined_speed > 0 else duration_min
+        crafts_per_hour = 60.0 / eff_dur if eff_dur > 0 else 0.0
 
-            inputs_adj = {t: q / yield_factor for t, q in base_inputs.items()}
-            cost_coin = sum(q * p(t) for t, q in inputs_adj.items())
-            value_coin = out_amount * p(out_token)
-            profit_coin_per_craft = value_coin - cost_coin
-            profit_coin_per_hour = profit_coin_per_craft * crafts_per_hour
+        inputs_adj = {t: q / yield_factor for t, q in base_inputs.items()}
+        cost_coin = sum(q * p(t) for t, q in inputs_adj.items())
+        value_coin = out_amount * p(out_token)
+        profit_coin_per_craft = value_coin - cost_coin
+        profit_coin_per_hour = profit_coin_per_craft * crafts_per_hour
 
-            results.append(
-                {
-                    "token": fac_name,
-                    "level": lvl,
-                    "profit_coin_per_hour": profit_coin_per_hour,
-                    "profit_coin_per_craft": profit_coin_per_craft,
-                }
-            )
+        results.append(
+            {
+                "token": fac_name,
+                "level": max_level,
+                "profit_coin_per_hour": profit_coin_per_hour,
+                "profit_coin_per_craft": profit_coin_per_craft,
+            }
+        )
 
     results.sort(key=lambda r: r["profit_coin_per_hour"], reverse=True)
     return results[:top_n], combined_speed, worker_factor
