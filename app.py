@@ -2156,6 +2156,8 @@ tr:nth-child(odd) td {
       const REFRESH_TOKEN_KEY = 'cw_refreshToken';
       const EXPIRES_AT_KEY = 'cw_expiresAt';
       const WALLET_KEY = 'cw_wallet';
+      const CW_SESSION_INDEX_KEY = 'cw_sessions';
+      const CW_ACTIVE_WALLET_KEY = 'cw_active_wallet';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
       let refillMs = 0;
       let currentPower = null;
@@ -2169,9 +2171,62 @@ tr:nth-child(odd) td {
         return String(addr || '').trim().toLowerCase();
       }
 
+      function isHexWalletAddress(value) {
+        return /^0x[a-fA-F0-9]{40}$/.test(String(value || '').trim());
+      }
+
+      function parseBooleanConfig(value) {
+        if (typeof value === 'boolean') return value;
+        const normalized = String(value || '').trim().toLowerCase();
+        if (normalized === 'true') return true;
+        if (normalized === 'false') return false;
+        return null;
+      }
+
+      function readActiveWalletConfig() {
+        const hasWindow = typeof window !== 'undefined';
+        const raw = hasWindow && typeof window.CW_ACTIVE_WALLET !== 'undefined'
+          ? window.CW_ACTIVE_WALLET
+          : (hasWindow && typeof window.VITE_CW_ACTIVE_WALLET !== 'undefined' ? window.VITE_CW_ACTIVE_WALLET : '');
+        const parsedBoolean = parseBooleanConfig(raw);
+        if (parsedBoolean !== null) {
+          return {
+            provided: true,
+            enabled: parsedBoolean,
+            wallet: '',
+            invalid: false,
+          };
+        }
+        const normalized = normalizeWalletAddress(raw);
+        if (!normalized) {
+          return {
+            provided: false,
+            enabled: true,
+            wallet: '',
+            invalid: false,
+          };
+        }
+        if (!isHexWalletAddress(normalized)) {
+          return {
+            provided: true,
+            enabled: true,
+            wallet: '',
+            invalid: true,
+          };
+        }
+        return {
+          provided: true,
+          enabled: true,
+          wallet: normalized,
+          invalid: false,
+        };
+      }
+
+      const ACTIVE_WALLET_CONFIG = readActiveWalletConfig();
+
       function readSessionIndex() {
         try {
-          const parsed = JSON.parse(localStorage.getItem(CW_SESSION_INDEX) || '{}');
+          const parsed = JSON.parse(localStorage.getItem(CW_SESSION_INDEX_KEY) || '{}');
           return parsed && typeof parsed === 'object' ? parsed : {};
         } catch (_) {
           return {};
@@ -2179,22 +2234,25 @@ tr:nth-child(odd) td {
       }
 
       function writeSessionIndex(index) {
-        localStorage.setItem(CW_SESSION_INDEX, JSON.stringify(index || {}));
+        localStorage.setItem(CW_SESSION_INDEX_KEY, JSON.stringify(index || {}));
       }
 
       function setActiveWallet(wallet) {
         const normalized = normalizeWalletAddress(wallet);
         if (normalized) {
-          localStorage.setItem(CW_ACTIVE_WALLET, normalized);
+          localStorage.setItem(CW_ACTIVE_WALLET_KEY, normalized);
           localStorage.setItem(WALLET_KEY, normalized);
         } else {
-          localStorage.removeItem(CW_ACTIVE_WALLET);
+          localStorage.removeItem(CW_ACTIVE_WALLET_KEY);
           localStorage.removeItem(WALLET_KEY);
         }
       }
 
       function getActiveWallet() {
-        return normalizeWalletAddress(localStorage.getItem(CW_ACTIVE_WALLET) || '');
+        const stored = normalizeWalletAddress(localStorage.getItem(CW_ACTIVE_WALLET_KEY) || '');
+        if (stored) return stored;
+        if (!ACTIVE_WALLET_CONFIG.enabled) return '';
+        return normalizeWalletAddress(ACTIVE_WALLET_CONFIG.wallet || '');
       }
 
       function getWalletSession(wallet) {
@@ -2701,6 +2759,12 @@ tr:nth-child(odd) td {
         const injectedBtn = document.getElementById('cw-connect-injected');
         const walletConnectBtn = document.getElementById('cw-connect-walletconnect');
         const walletConnectProjectId = {{ walletconnect_project_id|tojson }};
+
+        if (ACTIVE_WALLET_CONFIG.invalid) {
+          showBanner('CW_ACTIVE_WALLET is invalid. Expected 0x + 40 hex characters.');
+        } else if (!ACTIVE_WALLET_CONFIG.enabled) {
+          showBanner('Wallet auto-selection disabled by CW_ACTIVE_WALLET=false.');
+        }
 
         function refreshProviderState() {
           const injected = getInjectedProvider();
@@ -10999,7 +11063,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
