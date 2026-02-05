@@ -2540,17 +2540,16 @@ tr:nth-child(odd) td {
           showBanner('Couldn't fetch boosts. Retry.');
         }
       }
-      function getInjectedProvider() {
-        if (window.ronin && window.ronin.provider && typeof window.ronin.provider.request === 'function') {
-          return window.ronin.provider;
-        }
-        if (window.ronin && typeof window.ronin.request === 'function') {
-          return window.ronin;
-        }
-        if (window.ethereum && typeof window.ethereum.request === 'function') {
-          return window.ethereum;
+      function getEip1193Provider() {
+        const provider = (window.ronin && (window.ronin.provider || window.ronin.ethereum)) || window.ethereum || null;
+        if (provider && typeof provider.request === 'function') {
+          return provider;
         }
         return null;
+      }
+
+      function getInjectedProvider() {
+        return getEip1193Provider();
       }
 
       function getProviderDisplayName(connectionType) {
@@ -2744,7 +2743,25 @@ tr:nth-child(odd) td {
           modal.classList.remove('open');
         }
 
-        if (connectBtn) connectBtn.addEventListener('click', openModal);
+        if (connectBtn) {
+          connectBtn.addEventListener('click', async () => {
+            console.log('[connect] clicked');
+            openModal();
+            const provider = getEip1193Provider();
+            if (!provider) {
+              showBanner('Ronin Wallet not detected');
+              help.textContent = 'Ronin Wallet not detected';
+              return;
+            }
+            try {
+              await runConnect('injected');
+            } catch (err) {
+              const message = String(err && err.message ? err.message : err);
+              showBanner(message);
+              help.textContent = message;
+            }
+          });
+        }
         if (closeBtn) closeBtn.addEventListener('click', closeModal);
         if (modal) {
           modal.addEventListener('click', (ev) => {
@@ -2762,6 +2779,7 @@ tr:nth-child(odd) td {
           } catch (err) {
             const message = String(err && err.message ? err.message : err);
             help.textContent = message;
+            showBanner(message);
             if (connectionType === 'walletconnect') {
               showBanner('WalletConnect failed. Please retry the QR flow.');
             } else if (message.toLowerCase().includes('provider')) {
@@ -11016,7 +11034,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
