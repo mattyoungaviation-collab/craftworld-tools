@@ -2127,10 +2127,15 @@ tr:nth-child(odd) td {
       let currentPower = null;
       let countdownInterval = null;
       let lastErrorRaw = null;
+      let authStatus = 'disconnected';
 
       function emitAccountState(connected, power) {
         window.dispatchEvent(new CustomEvent('cw-account-status', {
-          detail: { connected: Boolean(connected), power: (typeof power === 'number') ? power : null },
+          detail: {
+            status: authStatus,
+            connected: Boolean(connected),
+            power: (typeof power === 'number') ? power : null,
+          },
         }));
       }
 
@@ -2197,7 +2202,16 @@ tr:nth-child(odd) td {
       function setConnectState(connected, wallet) {
         const btn = document.getElementById('cw-connect-btn');
         if (!btn) return;
-        btn.textContent = connected ? `Connected ${shortWallet(wallet)}` : 'Connect Ronin Wallet';
+        if (connected) {
+          btn.textContent = `Connected ${shortWallet(wallet)}`;
+          return;
+        }
+        btn.textContent = (authStatus === 'connecting') ? 'Connecting…' : 'Connect Ronin Wallet';
+      }
+
+      function setAuthStatus(nextStatus, wallet) {
+        authStatus = nextStatus;
+        setConnectState(nextStatus === 'connected', wallet);
       }
 
       function showBanner(summary, rawObj) {
@@ -2239,27 +2253,35 @@ tr:nth-child(odd) td {
       async function fetchAccountStatus() {
         const session = getSession();
         const expired = isSessionExpired(session);
-        setConnectState(Boolean(session.idToken && !expired), session.wallet);
+
+        if (!session.idToken) {
+          setAuthStatus('disconnected', session.wallet);
+          currentPower = null;
+          refillMs = 0;
+          render(undefined, 0, true);
+          showBanner('', null);
+          emitAccountState(false, null);
+          return;
+        }
 
         if (expired) {
+          setAuthStatus('disconnected', session.wallet);
           currentPower = null;
           refillMs = 0;
           render(undefined, 0, true);
           emitAccountState(false, null);
-          if (session.idToken) {
-            showBanner('Session expired, reconnect wallet.', null);
-          } else {
-            showBanner('', null);
-          }
+          showBanner('Session expired, reconnect wallet.', null);
           return;
         }
 
+        setAuthStatus('connecting', session.wallet);
         try {
           const res = await fetch('/api/account_status', {
             headers: { Authorization: `Bearer ${session.idToken}` },
           });
           const data = await res.json();
           if (!data.ok || data.auth !== 'ok') {
+            setAuthStatus('error', session.wallet);
             currentPower = null;
             refillMs = 0;
             render(undefined, 0, true);
@@ -2271,11 +2293,13 @@ tr:nth-child(odd) td {
 
           refillMs = Number(data.msUntilRefill || 0);
           currentPower = Number(data.power);
+          setAuthStatus('connected', session.wallet);
           render(currentPower, refillMs, false);
           emitAccountState(true, currentPower);
           showBanner('', null);
           startCountdown();
         } catch (err) {
+          setAuthStatus('error', session.wallet);
           currentPower = null;
           refillMs = 0;
           render(undefined, 0, true);
@@ -2475,6 +2499,9 @@ tr:nth-child(odd) td {
           refreshProviderState();
         }
 
+        window.cwOpenConnectModal = openModal;
+        window.addEventListener('cw-open-connect-modal', openModal);
+
         function closeModal() {
           if (!modal) return;
           modal.classList.remove('open');
@@ -2491,6 +2518,7 @@ tr:nth-child(odd) td {
         async function runConnect(connectionType) {
           try {
             help.textContent = '';
+            setAuthStatus('connecting', getSession().wallet);
             await connectWalletAndSignin({ connectionType });
             await fetchAccountStatus();
           } catch (err) {
@@ -2521,14 +2549,29 @@ tr:nth-child(odd) td {
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
             clearSession();
+            setAuthStatus('disconnected', '');
             statusEl.textContent = 'Disconnected';
             help.textContent = 'Disconnected.';
             await fetchAccountStatus();
           });
         }
 
-        fetchAccountStatus();
-        setInterval(fetchAccountStatus, 10000);
+        const initialSession = getSession();
+        if (initialSession.idToken) {
+          fetchAccountStatus();
+        } else {
+          setAuthStatus('disconnected', '');
+          render(undefined, 0, true);
+          showBanner('', null);
+          emitAccountState(false, null);
+        }
+
+        setInterval(() => {
+          const session = getSession();
+          if (session.idToken) {
+            fetchAccountStatus();
+          }
+        }, 10000);
       });
     })();
 
@@ -4607,6 +4650,12 @@ def craft_profitability():
         useCurrentPowerBtn?.addEventListener('click', () => {
           if (Number.isFinite(connectedPower)) {
             powerInput.value = connectedPower;
+            return;
+          }
+          if (typeof window.cwOpenConnectModal === 'function') {
+            window.cwOpenConnectModal();
+          } else {
+            window.dispatchEvent(new Event('cw-open-connect-modal'));
           }
         });
 
@@ -10484,8 +10533,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
 
 
 
