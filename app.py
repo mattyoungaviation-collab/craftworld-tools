@@ -2156,6 +2156,11 @@ tr:nth-child(odd) td {
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
+      let statusPollInterval = null;
+      let activeWalletProvider = null;
+      let providerAccountsChangedHandler = null;
+      let providerChainChangedHandler = null;
+      let providerDisconnectHandler = null;
       let lastAccountStatus = null;
       let lastErrorRaw = null;
       let authStatus = 'disconnected';
@@ -2274,54 +2279,108 @@ tr:nth-child(odd) td {
         }, 1000);
       }
 
-      function stopPolling() {
+      function setDisconnectedUIState() {
+        if (countdownInterval) {
+          clearInterval(countdownInterval);
+          countdownInterval = null;
+        }
+        const session = getSession();
+        setAuthStatus('disconnected', session.wallet);
+        currentPower = null;
+        refillMs = 0;
+        render(undefined, 0, true);
+        emitAccountState(false, null);
+      }
+
+      function stopStatusPolling() {
         if (statusPollInterval) {
           clearInterval(statusPollInterval);
           statusPollInterval = null;
         }
       }
 
-      function startPolling() {
-        stopPolling();
-        if (!getCwToken()) return;
-        statusPollInterval = setInterval(() => {
-          if (!getCwToken()) {
-            stopPolling();
-            return;
-          }
-          fetchAccountStatus();
-        }, 10000);
+      function detachWalletProviderListeners() {
+        if (!activeWalletProvider || typeof activeWalletProvider.removeListener !== 'function') return;
+        if (providerAccountsChangedHandler) {
+          activeWalletProvider.removeListener('accountsChanged', providerAccountsChangedHandler);
+        }
+        if (providerChainChangedHandler) {
+          activeWalletProvider.removeListener('chainChanged', providerChainChangedHandler);
+        }
+        if (providerDisconnectHandler) {
+          activeWalletProvider.removeListener('disconnect', providerDisconnectHandler);
+        }
+        activeWalletProvider = null;
+        providerAccountsChangedHandler = null;
+        providerChainChangedHandler = null;
+        providerDisconnectHandler = null;
       }
 
-      async function fetchAccountStatus() {
+      function handleWalletSessionInvalidation(message) {
+        stopStatusPolling();
+        detachWalletProviderListeners();
+        clearSession();
+        setDisconnectedUIState();
+        showBanner(message || 'Wallet disconnected. Reconnect wallet.', null);
+      }
+
+      function attachWalletProviderListeners(provider, walletAddress) {
+        detachWalletProviderListeners();
+        if (!provider || typeof provider.on !== 'function') return;
+
+        const expectedWallet = String(walletAddress || '').toLowerCase();
+        providerAccountsChangedHandler = (accounts) => {
+          const nextWallet = (accounts && accounts[0]) ? String(accounts[0]).toLowerCase() : '';
+          if (!nextWallet || (expectedWallet && nextWallet !== expectedWallet)) {
+            handleWalletSessionInvalidation('Wallet changed. Reconnect wallet.');
+          }
+        };
+        providerChainChangedHandler = () => {
+          handleWalletSessionInvalidation('Network changed. Reconnect wallet.');
+        };
+        providerDisconnectHandler = () => {
+          handleWalletSessionInvalidation('Wallet disconnected. Reconnect wallet.');
+        };
+
+        provider.on('accountsChanged', providerAccountsChangedHandler);
+        provider.on('chainChanged', providerChainChangedHandler);
+        provider.on('disconnect', providerDisconnectHandler);
+        activeWalletProvider = provider;
+      }
+
+      async function startStatusPolling() {
+        stopStatusPolling();
+        const token = getCwToken();
+        if (!token) return;
+        await refreshAccountStatusOnce();
+        statusPollInterval = setInterval(() => {
+          const t = getCwToken();
+          if (!t) {
+            stopStatusPolling();
+            setDisconnectedUIState();
+            return;
+          }
+          refreshAccountStatusOnce().catch(() => {
+            showBanner('Could not refresh account status. Retrying…', null);
+          });
+        }, 60_000);
+      }
+
+      async function refreshAccountStatusOnce() {
         const session = getSession();
         const expired = isSessionExpired(session);
 
         if (!session.cwToken) {
-          if (countdownInterval) {
-            clearInterval(countdownInterval);
-            countdownInterval = null;
-          }
-          setAuthStatus('disconnected', session.wallet);
-          currentPower = null;
-          refillMs = 0;
-          render(undefined, 0, true);
+          stopStatusPolling();
+          setDisconnectedUIState();
           showBanner('', null);
-          emitAccountState(false, null);
           return;
         }
 
         if (expired) {
-          if (countdownInterval) {
-            clearInterval(countdownInterval);
-            countdownInterval = null;
-          }
-          setAuthStatus('disconnected', session.wallet);
-          currentPower = null;
-          refillMs = 0;
-          render(undefined, 0, true);
-          emitAccountState(false, null);
-          showBanner('Session expired, reconnect wallet.', null);
+          stopStatusPolling();
+          setDisconnectedUIState();
+          showBanner('Session expired. Reconnect wallet.', null);
           return;
         }
 
@@ -2337,7 +2396,8 @@ tr:nth-child(odd) td {
             emitAccountState(false, null);
             lastErrorRaw = data;
             if (data && data.auth === 'missing_or_invalid') {
-              showBanner('Not connected. Connect Ronin Wallet.', null);
+              showBanner('Session expired. Reconnect wallet.', null);
+              stopStatusPolling();
             } else {
               showBanner('Could not fetch Craft World account status.', data);
             }
@@ -2353,7 +2413,6 @@ tr:nth-child(odd) td {
           emitAccountState(true, currentPower);
           showBanner('', null);
           startCountdown();
-          startPolling();
         } catch (err) {
           setAuthStatus('error', session.wallet);
           currentPower = null;
@@ -2519,6 +2578,7 @@ tr:nth-child(odd) td {
 
         help.textContent = 'Signed in successfully.';
         statusEl.textContent = `Signed in: ${shortWallet(walletAddress)}`;
+        attachWalletProviderListeners(provider, walletAddress);
       }
 
       window.addEventListener('DOMContentLoaded', () => {
@@ -2577,8 +2637,9 @@ tr:nth-child(odd) td {
           try {
             help.textContent = '';
             setAuthStatus('connecting', getSession().wallet);
+            stopStatusPolling();
             await connectWalletAndSignin({ connectionType });
-            await fetchAccountStatus();
+            await startStatusPolling();
           } catch (err) {
             const message = String(err && err.message ? err.message : err);
             help.textContent = message;
@@ -2606,32 +2667,30 @@ tr:nth-child(odd) td {
 
         if (refreshBtn) {
           refreshBtn.addEventListener('click', async () => {
-            await fetchAccountStatus();
+            await refreshAccountStatusOnce();
           });
         }
 
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
+            stopStatusPolling();
+            detachWalletProviderListeners();
             clearSession();
-            if (countdownInterval) {
-              clearInterval(countdownInterval);
-              countdownInterval = null;
-            }
+            setDisconnectedUIState();
             setAuthStatus('disconnected', '');
             statusEl.textContent = 'Disconnected';
             help.textContent = 'Disconnected.';
-            render(undefined, 0, true);
             showBanner('Not connected. Connect Ronin Wallet.', null);
-            emitAccountState(false, null);
           });
         }
 
         const initialSession = getSession();
         if (initialSession.cwToken) {
-          fetchAccountStatus();
-          startPolling();
+          startStatusPolling().catch(() => {
+            showBanner('Could not refresh account status. Retrying…', null);
+          });
         } else {
-          stopPolling();
+          stopStatusPolling();
           setAuthStatus('disconnected', '');
           render(undefined, 0, true);
           showBanner('Not connected. Connect Ronin Wallet.', null);
@@ -10598,7 +10657,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
