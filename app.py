@@ -128,6 +128,27 @@ def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
     }
     """
 
+
+def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
+    now = time.time()
+    key = _token_cache_key(jwt_token)
+    cached_entry = ACCOUNT_STATUS_CACHE.get(key) or {}
+    cached_payload = cached_entry.get("value")
+    cached_ts = float(cached_entry.get("ts") or 0.0)
+    if cached_payload and (now - cached_ts) < ACCOUNT_STATUS_CACHE_TTL:
+        return dict(cached_payload)
+
+    query = """
+    query AccountStatus {
+      account {
+        power
+        powerMillisecondsUntilRefill
+        powerLastRefill
+        updatedAt
+      }
+    }
+    """
+    response_payload: Dict[str, Any]
     try:
         upstream = _cw_graphql_request(query=query, variables=None, bearer_token=jwt_token)
     except Exception as exc:
@@ -2129,6 +2150,33 @@ tr:nth-child(odd) td {
         if (!addr) return 'unknown wallet';
         if (addr.length < 12) return addr;
         return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+      }
+
+      function parseTokenInput(raw) {
+        const v = String(raw || '').trim();
+        if (!v) return '';
+        const lower = v.toLowerCase();
+        if (lower.startsWith('authorization:')) {
+          const idx = v.indexOf(':');
+          return parseTokenInput(v.slice(idx + 1));
+        }
+        if (lower.startsWith('bearer ')) {
+          return v.slice(7).trim();
+        }
+        return v;
+      }
+
+      function getToken() {
+        return parseTokenInput(localStorage.getItem(TOKEN_KEY) || '');
+      }
+
+      function setToken(token) {
+        const clean = parseTokenInput(token);
+        if (clean) {
+          localStorage.setItem(TOKEN_KEY, clean);
+        } else {
+          localStorage.removeItem(TOKEN_KEY);
+        }
       }
 
       function formatHms(totalSeconds) {
