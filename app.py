@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -20,6 +21,7 @@ from craftworld_api import (
     fetch_profile_by_uid,
     fetch_available_avatars,
     fetch_account_status,
+    call_graphql_with_jwt,
 )
 
 
@@ -52,8 +54,8 @@ DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
 
 
 
-ACCOUNT_STATUS_CACHE: Dict[str, Any] = {"ts": 0.0, "value": None}
-ACCOUNT_STATUS_CACHE_TTL = 8.0
+ACCOUNT_STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
+ACCOUNT_STATUS_CACHE_TTL = 5.0
 
 
 def _format_hms_from_seconds(seconds: int) -> str:
@@ -64,35 +66,95 @@ def _format_hms_from_seconds(seconds: int) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def get_cached_account_status() -> Dict[str, Any]:
-    now = time.time()
-    cached = ACCOUNT_STATUS_CACHE.get("value")
-    ts = float(ACCOUNT_STATUS_CACHE.get("ts") or 0.0)
-    if cached and (now - ts) < ACCOUNT_STATUS_CACHE_TTL:
-        return dict(cached)
+def _token_cache_key(jwt_token: str) -> str:
+    return hashlib.sha256(jwt_token.encode("utf-8")).hexdigest()
 
+
+def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
+    if not authorization_value:
+        return None
+    value = authorization_value.strip()
+    if not value:
+        return None
+    if value.lower().startswith("bearer "):
+        token = value[7:].strip()
+        return token or None
+    return None
+
+
+def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
+    now = time.time()
+    key = _token_cache_key(jwt_token)
+    cached_entry = ACCOUNT_STATUS_CACHE.get(key) or {}
+    cached_payload = cached_entry.get("value")
+    cached_ts = float(cached_entry.get("ts") or 0.0)
+    if cached_payload and (now - cached_ts) < ACCOUNT_STATUS_CACHE_TTL:
+        return dict(cached_payload)
+
+    query = """
+    query AccountStatus {
+      account {
+        power
+        powerMillisecondsUntilRefill
+        powerLastRefill
+        updatedAt
+      }
+    }
+    """
+    response_payload: Dict[str, Any]
     try:
-        raw = fetch_account_status()
-        ms = int(raw.get("powerMillisecondsUntilRefill") or 0)
-        sec = max(0, ms // 1000)
-        payload = {
-            "power": int(raw.get("power") or 0),
-            "msUntilRefill": ms,
-            "refillSeconds": sec,
-            "refillHMS": _format_hms_from_seconds(sec),
-            "powerLastRefill": raw.get("powerLastRefill"),
-            "updatedAt": raw.get("updatedAt"),
-            "incomplete": False,
-        }
-        ACCOUNT_STATUS_CACHE["value"] = payload
-        ACCOUNT_STATUS_CACHE["ts"] = now
-        return dict(payload)
+        body = call_graphql_with_jwt(jwt_token, query, None)
     except Exception as exc:
-        if cached:
-            fallback = dict(cached)
-            fallback["error"] = str(exc)
-            fallback["incomplete"] = True
-            return fallback
+        response_payload = {
+            "ok": False,
+            "auth": "missing_or_invalid",
+            "power": None,
+            "msUntilRefill": None,
+            "refillSeconds": None,
+            "refillHMS": None,
+            "error": str(exc),
+            "rawErrors": [],
+        }
+        ACCOUNT_STATUS_CACHE[key] = {"ts": now, "value": dict(response_payload)}
+        return response_payload
+
+    raw_errors = body.get("errors") if isinstance(body, dict) else None
+    account = ((body.get("data") or {}).get("account") if isinstance(body, dict) else None) or {}
+
+    if raw_errors or (not account):
+        response_payload = {
+            "ok": False,
+            "auth": "missing_or_invalid",
+            "power": None,
+            "msUntilRefill": None,
+            "refillSeconds": None,
+            "refillHMS": None,
+            "error": "Craft World auth failed.",
+            "rawErrors": raw_errors or [],
+        }
+        ACCOUNT_STATUS_CACHE[key] = {"ts": now, "value": dict(response_payload)}
+        return response_payload
+
+    ms = int(account.get("powerMillisecondsUntilRefill") or 0)
+    refill_seconds = max(0, ms // 1000)
+    response_payload = {
+        "ok": True,
+        "auth": "ok",
+        "power": int(account.get("power") or 0),
+        "msUntilRefill": ms,
+        "refillSeconds": refill_seconds,
+        "refillHMS": _format_hms_from_seconds(refill_seconds),
+        "powerLastRefill": account.get("powerLastRefill"),
+        "updatedAt": account.get("updatedAt"),
+    }
+    ACCOUNT_STATUS_CACHE[key] = {"ts": now, "value": dict(response_payload)}
+    return response_payload
+
+
+def get_cached_account_status() -> Dict[str, Any]:
+    try:
+        jwt_token = get_jwt()
+    except Exception as exc:
         return {
             "power": 0,
             "msUntilRefill": 0,
@@ -103,6 +165,21 @@ def get_cached_account_status() -> Dict[str, Any]:
             "error": str(exc),
             "incomplete": True,
         }
+
+    payload = fetch_account_status_for_token(jwt_token)
+    if payload.get("ok"):
+        return payload
+
+    return {
+        "power": 0,
+        "msUntilRefill": 0,
+        "refillSeconds": 0,
+        "refillHMS": "00:00:00",
+        "powerLastRefill": None,
+        "updatedAt": None,
+        "error": payload.get("error") or "Failed to fetch account status",
+        "incomplete": True,
+    }
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -1141,6 +1218,90 @@ body {
   margin-right: 3px;
 }
 
+.cw-connect-btn {
+  border: 1px solid rgba(92, 242, 255, 0.45);
+  background: rgba(30, 41, 59, 0.9);
+  color: #dbeafe;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.cw-connect-btn:hover {
+  background: rgba(37, 99, 235, 0.95);
+  border-color: rgba(191, 219, 254, 0.75);
+}
+
+.cw-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.72);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2200;
+}
+
+.cw-modal.open {
+  display: flex;
+}
+
+.cw-modal-card {
+  width: min(560px, 92vw);
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: #0b1220;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  padding: 16px;
+}
+
+.cw-modal-card h3 {
+  margin: 0 0 8px;
+}
+
+.cw-token-textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.9);
+  color: #e5e7eb;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.cw-modal-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.cw-modal-actions button {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  padding: 7px 11px;
+  color: #e5e7eb;
+  background: rgba(15, 23, 42, 0.95);
+  cursor: pointer;
+}
+
+.cw-modal-actions .primary {
+  background: rgba(37, 99, 235, 0.95);
+  border-color: rgba(191, 219, 254, 0.7);
+}
+
+.cw-token-help {
+  margin-top: 8px;
+  color: #93c5fd;
+  font-size: 12px;
+  min-height: 18px;
+}
+
 .nav-user {
   padding-left: 8px;
   font-size: 13px;
@@ -1740,8 +1901,9 @@ tr:nth-child(odd) td {
       </div>
 
       <div id="account-power-widget" class="account-power-widget">
+        <button type="button" id="cw-connect-btn" class="cw-connect-btn">Connect Craft World</button>
         <span><span class="label">Power:</span><strong id="power-value">—</strong></span>
-        <span><span class="label">Refill in:</span><strong id="refill-value">offline</strong></span>
+        <span><span class="label">Refill in:</span><strong id="refill-value">—</strong></span>
       </div>
 
       <div class="nav-links">
@@ -1837,12 +1999,54 @@ tr:nth-child(odd) td {
     {{ content|safe }}
   </div>
 
+  <div id="cw-token-modal" class="cw-modal" role="dialog" aria-modal="true" aria-labelledby="cw-token-title">
+    <div class="cw-modal-card">
+      <h3 id="cw-token-title">Connect Craft World</h3>
+      <p style="margin-top:0;color:#93c5fd;font-size:12px;">Paste your Craft World JWT (or full Authorization header).</p>
+      <textarea id="cw-token-input" class="cw-token-textarea" placeholder="jwt_... or Authorization: Bearer jwt_..."></textarea>
+      <div id="cw-token-help" class="cw-token-help"></div>
+      <div class="cw-modal-actions">
+        <button type="button" id="cw-token-close">Close</button>
+        <button type="button" id="cw-token-clear">Clear / Disconnect</button>
+        <button type="button" id="cw-token-save" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script>
 
     (function () {
+      const TOKEN_KEY = 'cw_auth_token';
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
+
+      function parseTokenInput(raw) {
+        const v = String(raw || '').trim();
+        if (!v) return '';
+        const lower = v.toLowerCase();
+        if (lower.startsWith('authorization:')) {
+          const idx = v.indexOf(':');
+          return parseTokenInput(v.slice(idx + 1));
+        }
+        if (lower.startsWith('bearer ')) {
+          return v.slice(7).trim();
+        }
+        return v;
+      }
+
+      function getToken() {
+        return parseTokenInput(localStorage.getItem(TOKEN_KEY) || '');
+      }
+
+      function setToken(token) {
+        const clean = parseTokenInput(token);
+        if (clean) {
+          localStorage.setItem(TOKEN_KEY, clean);
+        } else {
+          localStorage.removeItem(TOKEN_KEY);
+        }
+      }
 
       function formatHms(totalSeconds) {
         const sec = Math.max(0, Math.floor(totalSeconds));
@@ -1852,6 +2056,12 @@ tr:nth-child(odd) td {
         return `${h}:${m}:${s}`;
       }
 
+      function setConnectState(connected) {
+        const btn = document.getElementById('cw-connect-btn');
+        if (!btn) return;
+        btn.textContent = connected ? 'Connected Craft World' : 'Connect Craft World';
+      }
+
       function render(power, msUntilRefill, offline) {
         const powerEl = document.getElementById('power-value');
         const refillEl = document.getElementById('refill-value');
@@ -1859,9 +2069,9 @@ tr:nth-child(odd) td {
         const p = (typeof power === 'number') ? power : currentPower;
         powerEl.textContent = (typeof p === 'number') ? p.toLocaleString() : '—';
         if (offline) {
-          refillEl.textContent = 'offline';
+          refillEl.textContent = '—';
         } else {
-          refillEl.textContent = formatHms(msUntilRefill / 1000);
+          refillEl.textContent = formatHms((msUntilRefill || 0) / 1000);
         }
       }
 
@@ -1877,19 +2087,89 @@ tr:nth-child(odd) td {
       }
 
       async function fetchAccountStatus() {
+        const token = getToken();
+        setConnectState(Boolean(token));
+        if (!token) {
+          currentPower = null;
+          refillMs = 0;
+          render(undefined, 0, true);
+          return;
+        }
+
         try {
-          const res = await fetch('/api/account_status');
+          const res = await fetch('/api/account_status', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
           const data = await res.json();
+          if (!data.ok || data.auth !== 'ok') {
+            currentPower = null;
+            refillMs = 0;
+            render(undefined, 0, true);
+            return;
+          }
           refillMs = Number(data.msUntilRefill || 0);
-          currentPower = Number(data.power || 0);
+          currentPower = Number(data.power);
           render(currentPower, refillMs, false);
           startCountdown();
         } catch (err) {
+          currentPower = null;
+          refillMs = 0;
           render(undefined, 0, true);
         }
       }
 
       window.addEventListener('DOMContentLoaded', () => {
+        const modal = document.getElementById('cw-token-modal');
+        const connectBtn = document.getElementById('cw-connect-btn');
+        const input = document.getElementById('cw-token-input');
+        const help = document.getElementById('cw-token-help');
+        const closeBtn = document.getElementById('cw-token-close');
+        const clearBtn = document.getElementById('cw-token-clear');
+        const saveBtn = document.getElementById('cw-token-save');
+
+        function openModal() {
+          if (!modal) return;
+          modal.classList.add('open');
+          input.value = localStorage.getItem(TOKEN_KEY) || '';
+          help.textContent = '';
+        }
+
+        function closeModal() {
+          if (!modal) return;
+          modal.classList.remove('open');
+        }
+
+        if (connectBtn) connectBtn.addEventListener('click', openModal);
+        if (closeBtn) closeBtn.addEventListener('click', closeModal);
+        if (modal) {
+          modal.addEventListener('click', (ev) => {
+            if (ev.target === modal) closeModal();
+          });
+        }
+
+        if (saveBtn) {
+          saveBtn.addEventListener('click', async () => {
+            const token = parseTokenInput(input.value);
+            if (!token) {
+              help.textContent = 'Please paste a valid JWT token.';
+              return;
+            }
+            setToken(token);
+            help.textContent = 'Saved. Checking account status...';
+            await fetchAccountStatus();
+            help.textContent = 'Connected.';
+          });
+        }
+
+        if (clearBtn) {
+          clearBtn.addEventListener('click', async () => {
+            setToken('');
+            input.value = '';
+            help.textContent = 'Disconnected.';
+            await fetchAccountStatus();
+          });
+        }
+
         fetchAccountStatus();
         setInterval(fetchAccountStatus, 10000);
       });
@@ -3574,7 +3854,21 @@ def resource_view(token: str):
 
 @app.route("/api/account_status", methods=["GET"])
 def api_account_status():
-    payload = get_cached_account_status()
+    incoming_auth = request.headers.get("Authorization")
+    jwt_token = _extract_bearer_token(incoming_auth)
+    if not jwt_token:
+        return jsonify({
+            "ok": False,
+            "auth": "missing_or_invalid",
+            "power": None,
+            "msUntilRefill": None,
+            "refillSeconds": None,
+            "refillHMS": None,
+            "error": "Missing Authorization Bearer token.",
+            "rawErrors": [],
+        })
+
+    payload = fetch_account_status_for_token(jwt_token)
     return jsonify(payload)
 
 
@@ -9707,7 +10001,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
