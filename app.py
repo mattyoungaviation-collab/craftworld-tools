@@ -2368,6 +2368,88 @@ tr:nth-child(odd) td {
         return raw;
       }
 
+      async function fetchCraftWorldProficiencies(jwt) {
+        const token = String(jwt || '').trim();
+        if (!token) {
+          throw new Error('Missing Craft World session token.');
+        }
+
+        const res = await fetch('/api/account_proficiencies', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || 'Failed to fetch mastery.');
+        }
+        return Array.isArray(data.proficiencies) ? data.proficiencies : [];
+      }
+
+      async function syncMasteryOnSignin() {
+        const statusEl = document.getElementById('cw-wallet-status');
+        const token = getCwToken();
+        const wallet = getActiveWallet();
+        const boostStorageKey = wallet ? `cw_boosts:${wallet}` : '';
+
+        if (statusEl) {
+          statusEl.textContent = 'Syncing mastery...';
+        }
+
+        try {
+          const proficiencies = await fetchCraftWorldProficiencies(token);
+          const masteryLevels = {};
+          for (const row of proficiencies) {
+            const symbol = String((row && row.symbol) || '').trim().toUpperCase();
+            if (!symbol) continue;
+            const claimed = Number((row && row.claimedLevel) || 0);
+            if (!Number.isFinite(claimed)) continue;
+            masteryLevels[symbol] = Math.max(0, Math.min(10, Math.floor(claimed)));
+          }
+
+          const persistRes = await fetch('/api/boosts/mastery', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ masteryLevels }),
+          });
+          const persistData = await persistRes.json();
+          if (!persistRes.ok || !persistData.ok) {
+            throw new Error(persistData.error || 'Failed to persist mastery levels.');
+          }
+
+          if (boostStorageKey) {
+            try {
+              const cachedRaw = localStorage.getItem(boostStorageKey);
+              const cached = cachedRaw ? JSON.parse(cachedRaw) : {};
+              localStorage.setItem(boostStorageKey, JSON.stringify({
+                workshopLevels: (cached && cached.workshopLevels) || {},
+                masteryLevels,
+                syncedAt: Date.now(),
+              }));
+            } catch (_) {
+              localStorage.setItem(boostStorageKey, JSON.stringify({
+                workshopLevels: {},
+                masteryLevels,
+                syncedAt: Date.now(),
+              }));
+            }
+          }
+
+          window.dispatchEvent(new CustomEvent('cw-mastery-synced', {
+            detail: { masteryLevels, wallet },
+          }));
+
+          if (statusEl) {
+            statusEl.textContent = 'Mastery synced.';
+          }
+          return { ok: true };
+        } catch (err) {
+          if (statusEl) {
+            statusEl.textContent = 'Connected (using saved mastery).';
+          }
+          showBanner("Couldn't sync mastery — using saved values.");
+          return { ok: false, error: String(err && err.message ? err.message : err) };
+        }
+      }
+
       async function authFetch(url, options) {
         const token = getCwToken();
         const nextOptions = options ? { ...options } : {};
@@ -2742,6 +2824,8 @@ tr:nth-child(odd) td {
         localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
+
+        await syncMasteryOnSignin();
 
         help.textContent = 'Signed in successfully.';
         statusEl.textContent = `Connected: ${shortWallet(walletAddress)}`;
@@ -4757,6 +4841,37 @@ def api_account_proficiencies():
         for symbol, values in sorted(profs_map.items())
     ]
     return jsonify({"ok": True, "proficiencies": proficiencies, "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+
+
+@app.route("/api/boosts/mastery", methods=["POST"])
+def api_boosts_mastery():
+    payload = request.get_json(silent=True) or {}
+    raw_levels = payload.get("masteryLevels") if isinstance(payload, dict) else None
+    if not isinstance(raw_levels, dict):
+        return jsonify({"ok": False, "error": "masteryLevels map is required."}), 400
+
+    levels_map = get_boost_levels()
+    updated_count = 0
+
+    for token, level in raw_levels.items():
+        symbol = str(token or "").strip().upper()
+        if symbol not in levels_map:
+            continue
+
+        try:
+            clamped_level = max(0, min(10, int(level)))
+        except (TypeError, ValueError):
+            continue
+
+        levels_map[symbol]["mastery_level"] = clamped_level
+        updated_count += 1
+
+    save_boost_levels(levels_map)
+    return jsonify({
+        "ok": True,
+        "updated": updated_count,
+        "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
 
 
 @app.route("/craft-profitability", methods=["GET"])
@@ -11063,8 +11178,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
 
 
 
