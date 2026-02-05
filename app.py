@@ -2153,12 +2153,111 @@ tr:nth-child(odd) td {
       const EXPIRES_AT_KEY = 'cw_expiresAt';
       const WALLET_KEY = 'cw_wallet';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
+      const CW_SESSION_INDEX = 'cw_sessions';
+      const CW_ACTIVE_WALLET = 'cw_active_wallet';
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
       let lastAccountStatus = null;
-      let lastErrorRaw = null;
       let authStatus = 'disconnected';
+      let statusPollInterval = null;
+
+      function normalizeWalletAddress(addr) {
+        return String(addr || '').trim().toLowerCase();
+      }
+
+      function readSessionIndex() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(CW_SESSION_INDEX) || '{}');
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function writeSessionIndex(index) {
+        localStorage.setItem(CW_SESSION_INDEX, JSON.stringify(index || {}));
+      }
+
+      function setActiveWallet(wallet) {
+        const normalized = normalizeWalletAddress(wallet);
+        if (normalized) {
+          localStorage.setItem(CW_ACTIVE_WALLET, normalized);
+          localStorage.setItem(WALLET_KEY, normalized);
+        } else {
+          localStorage.removeItem(CW_ACTIVE_WALLET);
+          localStorage.removeItem(WALLET_KEY);
+        }
+      }
+
+      function getActiveWallet() {
+        return normalizeWalletAddress(localStorage.getItem(CW_ACTIVE_WALLET) || '');
+      }
+
+      function getWalletSession(wallet) {
+        const normalized = normalizeWalletAddress(wallet);
+        if (!normalized) return null;
+        const sessions = readSessionIndex();
+        const entry = sessions[normalized];
+        if (!entry || typeof entry !== 'object') return null;
+        return entry;
+      }
+
+      function isWalletSessionExpired(entry) {
+        return !entry || !entry.token || !entry.expiresAt || Date.now() >= Number(entry.expiresAt || 0);
+      }
+
+      function upsertWalletSession(wallet, payload) {
+        const normalized = normalizeWalletAddress(wallet);
+        if (!normalized) return;
+        const sessions = readSessionIndex();
+        sessions[normalized] = {
+          token: String(payload.token || ''),
+          expiresAt: Number(payload.expiresAt || 0),
+          refreshToken: String(payload.refreshToken || ''),
+          lastLoginAt: Number(payload.lastLoginAt || Date.now()),
+          idToken: String(payload.idToken || ''),
+        };
+        writeSessionIndex(sessions);
+        setActiveWallet(normalized);
+      }
+
+      function removeWalletSession(wallet) {
+        const normalized = normalizeWalletAddress(wallet);
+        if (!normalized) return;
+        const sessions = readSessionIndex();
+        if (sessions[normalized]) {
+          delete sessions[normalized];
+          writeSessionIndex(sessions);
+        }
+      }
+
+      function syncLegacySessionFromActiveWallet() {
+        const wallet = getActiveWallet();
+        const entry = getWalletSession(wallet);
+        if (!wallet || !entry) {
+          localStorage.removeItem(ID_TOKEN_KEY);
+          localStorage.removeItem(CW_TOKEN_KEY);
+          localStorage.removeItem(REFRESH_TOKEN_KEY);
+          localStorage.removeItem(EXPIRES_AT_KEY);
+          return;
+        }
+        localStorage.setItem(ID_TOKEN_KEY, String(entry.idToken || ''));
+        localStorage.setItem(CW_TOKEN_KEY, String(entry.token || ''));
+        localStorage.setItem(REFRESH_TOKEN_KEY, String(entry.refreshToken || ''));
+        localStorage.setItem(EXPIRES_AT_KEY, String(Number(entry.expiresAt || 0)));
+      }
+
+      async function detectConnectedWalletAddress() {
+        const provider = getInjectedProvider();
+        if (!provider) return '';
+        try {
+          const accounts = await provider.request({ method: 'eth_accounts' });
+          return normalizeWalletAddress((accounts && accounts[0]) ? accounts[0] : '');
+        } catch (_) {
+          return '';
+        }
+      }
 
       function emitAccountState(connected, power) {
         window.dispatchEvent(new CustomEvent('cw-account-status', {
@@ -2166,30 +2265,35 @@ tr:nth-child(odd) td {
             status: authStatus,
             connected: Boolean(connected),
             power: (typeof power === 'number') ? power : null,
+            wallet: getActiveWallet(),
           },
         }));
       }
 
       function getSession() {
-        const idToken = localStorage.getItem(ID_TOKEN_KEY) || '';
-        const cwToken = getCwToken();
-        const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || '';
-        const expiresAt = Number(localStorage.getItem(EXPIRES_AT_KEY) || 0);
-        const wallet = localStorage.getItem(WALLET_KEY) || '';
-        return { idToken, cwToken, refreshToken, expiresAt, wallet };
+        const wallet = getActiveWallet();
+        const entry = getWalletSession(wallet);
+        return {
+          wallet,
+          idToken: String((entry && entry.idToken) || ''),
+          cwToken: String((entry && entry.token) || ''),
+          refreshToken: String((entry && entry.refreshToken) || ''),
+          expiresAt: Number((entry && entry.expiresAt) || 0),
+        };
       }
 
       function clearSession() {
-        localStorage.removeItem(ID_TOKEN_KEY);
-        localStorage.removeItem(CW_TOKEN_KEY);
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
-        localStorage.removeItem(EXPIRES_AT_KEY);
-        localStorage.removeItem(WALLET_KEY);
+        const wallet = getActiveWallet();
+        if (wallet) {
+          removeWalletSession(wallet);
+        }
         localStorage.removeItem(ACCOUNT_STATUS_KEY);
+        setActiveWallet('');
+        syncLegacySessionFromActiveWallet();
       }
 
       function isSessionExpired(session) {
-        return !session.idToken || !session.expiresAt || Date.now() >= session.expiresAt;
+        return !session.idToken || !session.expiresAt || Date.now() >= Number(session.expiresAt || 0);
       }
 
       function shortWallet(addr) {
@@ -2199,7 +2303,9 @@ tr:nth-child(odd) td {
       }
 
       function getCwToken() {
-        const raw = String(localStorage.getItem(CW_TOKEN_KEY) || '').trim();
+        const wallet = getActiveWallet();
+        const sessions = readSessionIndex();
+        const raw = String((sessions[wallet] && sessions[wallet].token) || '').trim();
         if (!raw) return '';
         if (raw.toLowerCase().startsWith('bearer ')) {
           return raw.slice(7).trim();
@@ -2230,7 +2336,7 @@ tr:nth-child(odd) td {
         const btn = document.getElementById('cw-connect-btn');
         if (!btn) return;
         if (connected) {
-          btn.textContent = `Connected ${shortWallet(wallet)}`;
+          btn.textContent = `Connected: ${shortWallet(wallet)}`;
           return;
         }
         btn.textContent = (authStatus === 'connecting') ? 'Connecting…' : 'Connect Ronin Wallet';
@@ -2241,7 +2347,7 @@ tr:nth-child(odd) td {
         setConnectState(nextStatus === 'connected', wallet);
       }
 
-      function showBanner(summary, rawObj) {
+      function showBanner(summary) {
         const banner = document.getElementById('cw-status-banner');
         const summaryEl = document.getElementById('cw-status-summary');
         const detailsEl = document.getElementById('cw-status-details');
@@ -2254,7 +2360,7 @@ tr:nth-child(odd) td {
         }
         banner.style.display = 'block';
         summaryEl.textContent = summary;
-        detailsEl.textContent = rawObj ? JSON.stringify(rawObj, null, 2) : '';
+        detailsEl.textContent = '';
       }
 
       function render(power, msUntilRefill, offline) {
@@ -2297,7 +2403,7 @@ tr:nth-child(odd) td {
         const session = getSession();
         const expired = isSessionExpired(session);
 
-        if (!session.cwToken) {
+        if (!session.wallet || !session.cwToken) {
           if (countdownInterval) {
             clearInterval(countdownInterval);
             countdownInterval = null;
@@ -2306,7 +2412,7 @@ tr:nth-child(odd) td {
           currentPower = null;
           refillMs = 0;
           render(undefined, 0, true);
-          showBanner('', null);
+          showBanner('Not connected. Connect Ronin Wallet.');
           emitAccountState(false, null);
           return;
         }
@@ -2321,7 +2427,7 @@ tr:nth-child(odd) td {
           refillMs = 0;
           render(undefined, 0, true);
           emitAccountState(false, null);
-          showBanner('Session expired, reconnect wallet.', null);
+          showBanner('Session expired. Reconnect.');
           return;
         }
 
@@ -2335,11 +2441,10 @@ tr:nth-child(odd) td {
             refillMs = 0;
             render(undefined, 0, true);
             emitAccountState(false, null);
-            lastErrorRaw = data;
             if (data && data.auth === 'missing_or_invalid') {
-              showBanner('Not connected. Connect Ronin Wallet.', null);
+              showBanner('Not connected. Connect Ronin Wallet.');
             } else {
-              showBanner('Could not fetch Craft World account status.', data);
+              showBanner('Couldn't fetch boosts. Retry.');
             }
             return;
           }
@@ -2351,7 +2456,7 @@ tr:nth-child(odd) td {
           setAuthStatus('connected', session.wallet);
           render(currentPower, refillMs, false);
           emitAccountState(true, currentPower);
-          showBanner('', null);
+          showBanner('');
           startCountdown();
           startPolling();
         } catch (err) {
@@ -2360,10 +2465,9 @@ tr:nth-child(odd) td {
           refillMs = 0;
           render(undefined, 0, true);
           emitAccountState(false, null);
-          showBanner('Network error while loading account status.', { error: String(err) });
+          showBanner('Couldn't fetch boosts. Retry.');
         }
       }
-
       function getInjectedProvider() {
         if (window.ronin && window.ronin.provider && typeof window.ronin.provider.request === 'function') {
           return window.ronin.provider;
@@ -2511,14 +2615,17 @@ tr:nth-child(odd) td {
 
         const expiresIn = Number(signinData.expiresIn || 0);
         const expiresAt = Date.now() + (Math.max(0, expiresIn) * 1000);
-        localStorage.setItem(ID_TOKEN_KEY, signinData.idToken);
-        localStorage.setItem(CW_TOKEN_KEY, `jwt_${signinData.idToken}`);
-        localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
-        localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
-        localStorage.setItem(WALLET_KEY, walletAddress);
+        upsertWalletSession(walletAddress, {
+          token: `jwt_${signinData.idToken}`,
+          idToken: signinData.idToken,
+          refreshToken: signinData.refreshToken || '',
+          expiresAt,
+          lastLoginAt: Date.now(),
+        });
+        syncLegacySessionFromActiveWallet();
 
         help.textContent = 'Signed in successfully.';
-        statusEl.textContent = `Signed in: ${shortWallet(walletAddress)}`;
+        statusEl.textContent = `Connected: ${shortWallet(walletAddress)}`;
       }
 
       window.addEventListener('DOMContentLoaded', () => {
@@ -2583,11 +2690,11 @@ tr:nth-child(odd) td {
             const message = String(err && err.message ? err.message : err);
             help.textContent = message;
             if (connectionType === 'walletconnect') {
-              showBanner('WalletConnect failed. Please retry the QR flow.', { error: message, raw: lastErrorRaw });
+              showBanner('WalletConnect failed. Please retry the QR flow.');
             } else if (message.toLowerCase().includes('provider')) {
-              showBanner('No injected provider found. Use WalletConnect or install Ronin extension.', null);
+              showBanner('No injected provider found. Use WalletConnect or install Ronin extension.');
             } else {
-              showBanner('Wallet sign-in failed.', { error: message, raw: lastErrorRaw });
+              showBanner('Wallet sign-in failed.');
             }
           }
         }
@@ -2621,22 +2728,66 @@ tr:nth-child(odd) td {
             statusEl.textContent = 'Disconnected';
             help.textContent = 'Disconnected.';
             render(undefined, 0, true);
-            showBanner('Not connected. Connect Ronin Wallet.', null);
+            showBanner('Not connected. Connect Ronin Wallet.');
             emitAccountState(false, null);
           });
         }
 
-        const initialSession = getSession();
-        if (initialSession.cwToken) {
-          fetchAccountStatus();
-          startPolling();
-        } else {
-          stopPolling();
-          setAuthStatus('disconnected', '');
-          render(undefined, 0, true);
-          showBanner('Not connected. Connect Ronin Wallet.', null);
-          emitAccountState(false, null);
+        async function initializeWalletSession() {
+          const connectedWallet = await detectConnectedWalletAddress();
+          const activeWallet = getActiveWallet();
+          const targetWallet = connectedWallet || activeWallet;
+
+          if (!targetWallet) {
+            setActiveWallet('');
+            syncLegacySessionFromActiveWallet();
+            return;
+          }
+
+          setActiveWallet(targetWallet);
+          const activeSession = getWalletSession(targetWallet);
+          if (isWalletSessionExpired(activeSession)) {
+            if (activeSession) removeWalletSession(targetWallet);
+            syncLegacySessionFromActiveWallet();
+            showBanner('Session expired. Reconnect.');
+            return;
+          }
+
+          syncLegacySessionFromActiveWallet();
         }
+
+        const provider = getInjectedProvider();
+        if (provider && typeof provider.on === 'function') {
+          provider.on('accountsChanged', async (accounts) => {
+            const nextWallet = normalizeWalletAddress((accounts && accounts[0]) ? accounts[0] : '');
+            setActiveWallet(nextWallet);
+            syncLegacySessionFromActiveWallet();
+            const nextSession = getWalletSession(nextWallet);
+            if (!nextWallet || isWalletSessionExpired(nextSession)) {
+              setAuthStatus('disconnected', nextWallet);
+              render(undefined, 0, true);
+              emitAccountState(false, null);
+              showBanner(nextWallet ? 'Session expired. Reconnect.' : 'Not connected. Connect Ronin Wallet.');
+              stopPolling();
+              return;
+            }
+            await fetchAccountStatus();
+          });
+        }
+
+        initializeWalletSession().then(async () => {
+          const initialSession = getSession();
+          if (initialSession.wallet && initialSession.cwToken && !isSessionExpired(initialSession)) {
+            await fetchAccountStatus();
+            startPolling();
+          } else {
+            stopPolling();
+            setAuthStatus('disconnected', initialSession.wallet || '');
+            render(undefined, 0, true);
+            showBanner(initialSession.wallet ? 'Session expired. Reconnect.' : 'Not connected. Connect Ronin Wallet.');
+            emitAccountState(false, null);
+          }
+        });
       });
     })();
 
@@ -4443,6 +4594,50 @@ def api_account_status():
 
     payload = fetch_account_status_for_token(jwt_token)
     return jsonify(payload)
+
+
+
+
+@app.route("/api/account_workshop", methods=["GET"])
+def api_account_workshop():
+    jwt_token = _extract_bearer_token(request.headers.get("Authorization"))
+    jwt_token = _normalize_cw_token(jwt_token)
+    if not jwt_token:
+        return jsonify({"ok": False, "auth": "missing_or_invalid", "error": "Missing token"})
+
+    try:
+        workshop_map = fetch_workshop_levels(bearer_token=jwt_token)
+    except Exception as exc:
+        return jsonify({"ok": False, "auth": "missing_or_invalid", "error": str(exc)})
+
+    workshop = [
+        {"symbol": symbol, "level": int(level)}
+        for symbol, level in sorted(workshop_map.items())
+    ]
+    return jsonify({"ok": True, "workshop": workshop, "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+
+
+@app.route("/api/account_proficiencies", methods=["GET"])
+def api_account_proficiencies():
+    jwt_token = _extract_bearer_token(request.headers.get("Authorization"))
+    jwt_token = _normalize_cw_token(jwt_token)
+    if not jwt_token:
+        return jsonify({"ok": False, "auth": "missing_or_invalid", "error": "Missing token"})
+
+    try:
+        profs_map = fetch_proficiencies(bearer_token=jwt_token)
+    except Exception as exc:
+        return jsonify({"ok": False, "auth": "missing_or_invalid", "error": str(exc)})
+
+    proficiencies = [
+        {
+            "symbol": symbol,
+            "collectedAmount": float(values.get("collectedAmount") or 0),
+            "claimedLevel": int(values.get("claimedLevel") or 0),
+        }
+        for symbol, values in sorted(profs_map.items())
+    ]
+    return jsonify({"ok": True, "proficiencies": proficiencies, "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
 
 
 @app.route("/craft-profitability", methods=["GET"])
@@ -6498,12 +6693,20 @@ def boosts():
     <div class="card">
       <h1>Mastery &amp; Workshop Boosts (Per Token)</h1>
       <p class="subtle">
-        Set your <strong>account-wide</strong> Mastery &amp; Workshop levels per resource (0–10).<br>
-        These levels are used as defaults in the <strong>Profitability</strong> tab for every factory
-        that produces that token. You can still override a specific factory row there.
+        Auto-fill from your connected Craft World account or edit manually.
       </p>
 
-      <form method="post">
+      <div id="boosts-banner" class="cw-status-banner" style="display:none; margin-bottom:10px;">
+        <div class="summary" id="boosts-banner-text"></div>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+        <button type="button" id="cw-boosts-autofill">Auto-fill from Craft World</button>
+        <button type="button" id="cw-boosts-refresh">Refresh</button>
+        <span class="hint" id="cw-boosts-last-synced">Last synced: never</span>
+      </div>
+
+      <form method="post" id="boosts-form">
         <div style="max-height:500px;overflow:auto;">
           <table>
             <tr>
@@ -6516,24 +6719,18 @@ def boosts():
               <tr>
                 <td>{{ tok }}</td>
                 <td>
-                  <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    name="mastery_{{ tok }}"
-                    value="{{ lvl.get('mastery_level', 0) }}"
-                    style="width:80px;"
-                  >
+                  <select name="mastery_{{ tok }}" class="cw-mastery-input" data-token="{{ tok }}" style="width:100px;">
+                    {% for i in range(0, 11) %}
+                    <option value="{{ i }}" {% if i == (lvl.get('mastery_level', 0)|int) %}selected{% endif %}>{{ i }}</option>
+                    {% endfor %}
+                  </select>
                 </td>
                 <td>
-                  <input
-                    type="number"
-                    min="0"
-                    max="10"
-                    name="workshop_{{ tok }}"
-                    value="{{ lvl.get('workshop_level', 0) }}"
-                    style="width:80px;"
-                  >
+                  <select name="workshop_{{ tok }}" class="cw-workshop-input" data-token="{{ tok }}" style="width:100px;">
+                    {% for i in range(0, 11) %}
+                    <option value="{{ i }}" {% if i == (lvl.get('workshop_level', 0)|int) %}selected{% endif %}>{{ i }}</option>
+                    {% endfor %}
+                  </select>
                 </td>
               </tr>
             {% endfor %}
@@ -6549,8 +6746,157 @@ def boosts():
         </div>
       </form>
     </div>
-    """
 
+    <script>
+      (function () {
+        const CW_SESSION_INDEX = 'cw_sessions';
+        const CW_ACTIVE_WALLET = 'cw_active_wallet';
+
+        function getActiveWallet() {
+          return String(localStorage.getItem(CW_ACTIVE_WALLET) || '').trim().toLowerCase();
+        }
+
+        function readSessions() {
+          try {
+            const parsed = JSON.parse(localStorage.getItem(CW_SESSION_INDEX) || '{}');
+            return parsed && typeof parsed === 'object' ? parsed : {};
+          } catch (_) {
+            return {};
+          }
+        }
+
+        function getActiveToken() {
+          const wallet = getActiveWallet();
+          const sessions = readSessions();
+          return String((sessions[wallet] && sessions[wallet].token) || '');
+        }
+
+        function getBoostStorageKey(wallet) {
+          return `cw_boosts:${wallet}`;
+        }
+
+        function setBanner(text) {
+          const wrap = document.getElementById('boosts-banner');
+          const el = document.getElementById('boosts-banner-text');
+          if (!wrap || !el) return;
+          if (!text) {
+            wrap.style.display = 'none';
+            el.textContent = '';
+            return;
+          }
+          wrap.style.display = 'block';
+          el.textContent = text;
+        }
+
+        function setLastSynced(ts) {
+          const el = document.getElementById('cw-boosts-last-synced');
+          if (!el) return;
+          if (!ts) {
+            el.textContent = 'Last synced: never';
+            return;
+          }
+          el.textContent = `Last synced: ${new Date(Number(ts)).toLocaleString()}`;
+        }
+
+        function hydrateBoostInputs(workshopLevels, masteryLevels) {
+          document.querySelectorAll('.cw-workshop-input[data-token]').forEach((input) => {
+            const tok = String(input.dataset.token || '').toUpperCase();
+            if (!tok) return;
+            if (Object.prototype.hasOwnProperty.call(workshopLevels, tok)) {
+              input.value = String(Math.max(0, Math.min(10, Number(workshopLevels[tok] || 0))));
+            }
+          });
+          document.querySelectorAll('.cw-mastery-input[data-token]').forEach((input) => {
+            const tok = String(input.dataset.token || '').toUpperCase();
+            if (!tok) return;
+            if (Object.prototype.hasOwnProperty.call(masteryLevels, tok)) {
+              input.value = String(Math.max(0, Math.min(10, Number(masteryLevels[tok] || 0))));
+            }
+          });
+        }
+
+        async function syncBoostsFromCraftWorld() {
+          const wallet = getActiveWallet();
+          const token = getActiveToken();
+          if (!wallet || !token) {
+            setBanner('Not connected. Connect Ronin Wallet.');
+            return null;
+          }
+
+          const headers = { Authorization: `Bearer ${token}` };
+          const [wsRes, profRes] = await Promise.all([
+            fetch('/api/account_workshop', { headers }),
+            fetch('/api/account_proficiencies', { headers }),
+          ]);
+
+          const workshopData = await wsRes.json();
+          const profData = await profRes.json();
+
+          if (!workshopData.ok || !profData.ok) {
+            if ((workshopData.auth === 'missing_or_invalid') || (profData.auth === 'missing_or_invalid')) {
+              setBanner('Session expired. Reconnect.');
+            } else {
+              setBanner('Couldn't fetch boosts. Retry.');
+            }
+            return null;
+          }
+
+          const workshopLevels = {};
+          const masteryLevels = {};
+
+          (workshopData.workshop || []).forEach((row) => {
+            const symbol = String(row.symbol || '').toUpperCase();
+            if (symbol) workshopLevels[symbol] = Number(row.level || 0);
+          });
+          (profData.proficiencies || []).forEach((row) => {
+            const symbol = String(row.symbol || '').toUpperCase();
+            if (symbol) masteryLevels[symbol] = Number(row.claimedLevel || 0);
+          });
+
+          const payload = { workshopLevels, masteryLevels, syncedAt: Date.now() };
+          localStorage.setItem(getBoostStorageKey(wallet), JSON.stringify(payload));
+          hydrateBoostInputs(workshopLevels, masteryLevels);
+          setLastSynced(payload.syncedAt);
+          setBanner('');
+          return payload;
+        }
+
+        window.addEventListener('DOMContentLoaded', async function () {
+          const autoBtn = document.getElementById('cw-boosts-autofill');
+          const refreshBtn = document.getElementById('cw-boosts-refresh');
+          const wallet = getActiveWallet();
+
+          if (!wallet || !getActiveToken()) {
+            setBanner('Not connected. Connect Ronin Wallet.');
+          } else {
+            const cachedRaw = localStorage.getItem(getBoostStorageKey(wallet));
+            if (cachedRaw) {
+              try {
+                const cached = JSON.parse(cachedRaw);
+                hydrateBoostInputs(cached.workshopLevels || {}, cached.masteryLevels || {});
+                setLastSynced(cached.syncedAt || 0);
+              } catch (_) {
+                await syncBoostsFromCraftWorld();
+              }
+            } else {
+              await syncBoostsFromCraftWorld();
+            }
+          }
+
+          if (autoBtn) {
+            autoBtn.addEventListener('click', async () => {
+              await syncBoostsFromCraftWorld();
+            });
+          }
+          if (refreshBtn) {
+            refreshBtn.addEventListener('click', async () => {
+              await syncBoostsFromCraftWorld();
+            });
+          }
+        });
+      })();
+    </script>
+    """
     html = render_template_string(
         BASE_TEMPLATE,
         content=render_template_string(
