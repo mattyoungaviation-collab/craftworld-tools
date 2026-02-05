@@ -2274,6 +2274,25 @@ tr:nth-child(odd) td {
         }, 1000);
       }
 
+      function stopPolling() {
+        if (statusPollInterval) {
+          clearInterval(statusPollInterval);
+          statusPollInterval = null;
+        }
+      }
+
+      function startPolling() {
+        stopPolling();
+        if (!getCwToken()) return;
+        statusPollInterval = setInterval(() => {
+          if (!getCwToken()) {
+            stopPolling();
+            return;
+          }
+          fetchAccountStatus();
+        }, 10000);
+      }
+
       async function fetchAccountStatus() {
         const session = getSession();
         const expired = isSessionExpired(session);
@@ -2334,6 +2353,7 @@ tr:nth-child(odd) td {
           emitAccountState(true, currentPower);
           showBanner('', null);
           startCountdown();
+          startPolling();
         } catch (err) {
           setAuthStatus('error', session.wallet);
           currentPower = null;
@@ -2609,7 +2629,9 @@ tr:nth-child(odd) td {
         const initialSession = getSession();
         if (initialSession.cwToken) {
           fetchAccountStatus();
+          startPolling();
         } else {
+          stopPolling();
           setAuthStatus('disconnected', '');
           render(undefined, 0, true);
           showBanner('Not connected. Connect Ronin Wallet.', null);
