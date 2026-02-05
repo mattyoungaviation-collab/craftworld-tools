@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -19,7 +20,6 @@ from craftworld_api import (
     fetch_workshop_levels,
     fetch_profile_by_uid,
     fetch_available_avatars,
-    fetch_account_status,
 )
 
 
@@ -48,12 +48,14 @@ def normalize_avatar_url(raw: Optional[str]) -> Optional[str]:
 
 import os
 DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
+CW_GRAPHQL_URL = "https://craft-world.gg/graphql"
+CW_APP_VERSION = "1.6.2"
+CW_FIREBASE_API_KEY = "AIzaSyDgDDykbRrhbdfWUpm1BUgj4ga7d_-wy_g"
+CW_IDENTITY_SIGNIN_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={CW_FIREBASE_API_KEY}"
 
 
-
-
-ACCOUNT_STATUS_CACHE: Dict[str, Any] = {"ts": 0.0, "value": None}
-ACCOUNT_STATUS_CACHE_TTL = 8.0
+ACCOUNT_STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
+ACCOUNT_STATUS_CACHE_TTL = 5.0
 
 
 def _format_hms_from_seconds(seconds: int) -> str:
@@ -64,35 +66,138 @@ def _format_hms_from_seconds(seconds: int) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def get_cached_account_status() -> Dict[str, Any]:
+def _token_cache_key(jwt_token: str) -> str:
+    return hashlib.sha256(jwt_token.encode("utf-8")).hexdigest()
+
+
+def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
+    if not authorization_value:
+        return None
+    value = authorization_value.strip()
+    if not value:
+        return None
+    if value.lower().startswith("bearer "):
+        token = value[7:].strip()
+        return token or None
+    return None
+
+
+def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, bearer_token: Optional[str] = None) -> Dict[str, Any]:
+    headers = {
+        "Content-Type": "application/json",
+        "x-app-version": CW_APP_VERSION,
+    }
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+
+    payload: Dict[str, Any] = {"query": query}
+    if variables is not None:
+        payload["variables"] = variables
+
+    resp = requests.post(CW_GRAPHQL_URL, json=payload, headers=headers, timeout=20)
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"errors": [{"message": f"Invalid JSON response (HTTP {resp.status_code})"}]}
+
+    return {
+        "status_code": resp.status_code,
+        "ok": resp.ok,
+        "body": body,
+    }
+
+
+def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
     now = time.time()
-    cached = ACCOUNT_STATUS_CACHE.get("value")
-    ts = float(ACCOUNT_STATUS_CACHE.get("ts") or 0.0)
-    if cached and (now - ts) < ACCOUNT_STATUS_CACHE_TTL:
-        return dict(cached)
+    key = _token_cache_key(jwt_token)
+    cached_entry = ACCOUNT_STATUS_CACHE.get(key) or {}
+    cached_payload = cached_entry.get("value")
+    cached_ts = float(cached_entry.get("ts") or 0.0)
+    if cached_payload and (now - cached_ts) < ACCOUNT_STATUS_CACHE_TTL:
+        return dict(cached_payload)
+
+    query = """
+    query AccountStatus {
+      account {
+        power
+        powerMillisecondsUntilRefill
+        powerLastRefill
+        updatedAt
+        wallets { address primary }
+      }
+    }
+    """
 
     try:
-        raw = fetch_account_status()
-        ms = int(raw.get("powerMillisecondsUntilRefill") or 0)
-        sec = max(0, ms // 1000)
-        payload = {
-            "power": int(raw.get("power") or 0),
-            "msUntilRefill": ms,
-            "refillSeconds": sec,
-            "refillHMS": _format_hms_from_seconds(sec),
-            "powerLastRefill": raw.get("powerLastRefill"),
-            "updatedAt": raw.get("updatedAt"),
-            "incomplete": False,
-        }
-        ACCOUNT_STATUS_CACHE["value"] = payload
-        ACCOUNT_STATUS_CACHE["ts"] = now
-        return dict(payload)
+        upstream = _cw_graphql_request(query=query, variables=None, bearer_token=jwt_token)
     except Exception as exc:
-        if cached:
-            fallback = dict(cached)
-            fallback["error"] = str(exc)
-            fallback["incomplete"] = True
-            return fallback
+        response_payload = {
+            "ok": False,
+            "auth": "missing_or_invalid",
+            "power": None,
+            "msUntilRefill": None,
+            "refillSeconds": None,
+            "refillHMS": None,
+            "primaryWallet": None,
+            "powerLastRefill": None,
+            "updatedAt": None,
+            "error": f"Network error calling Craft World: {exc}",
+            "rawErrors": [],
+        }
+        ACCOUNT_STATUS_CACHE[key] = {"ts": now, "value": dict(response_payload)}
+        return response_payload
+
+    body = upstream.get("body") if isinstance(upstream, dict) else {}
+    raw_errors = body.get("errors") if isinstance(body, dict) else None
+    account = ((body.get("data") or {}).get("account") if isinstance(body, dict) else None) or {}
+
+    if (not upstream.get("ok")) or raw_errors or (not account):
+        response_payload = {
+            "ok": False,
+            "auth": "missing_or_invalid",
+            "power": None,
+            "msUntilRefill": None,
+            "refillSeconds": None,
+            "refillHMS": None,
+            "primaryWallet": None,
+            "powerLastRefill": None,
+            "updatedAt": None,
+            "error": "Craft World auth failed.",
+            "rawErrors": raw_errors or [],
+        }
+        ACCOUNT_STATUS_CACHE[key] = {"ts": now, "value": dict(response_payload)}
+        return response_payload
+
+    ms = int(account.get("powerMillisecondsUntilRefill") or 0)
+    refill_seconds = max(0, ms // 1000)
+    wallets = account.get("wallets") or []
+    primary_wallet = None
+    for w in wallets:
+        if w.get("primary"):
+            primary_wallet = w.get("address")
+            break
+    if not primary_wallet and wallets:
+        primary_wallet = wallets[0].get("address")
+
+    response_payload = {
+        "ok": True,
+        "auth": "ok",
+        "power": int(account.get("power") or 0),
+        "msUntilRefill": ms,
+        "refillSeconds": refill_seconds,
+        "refillHMS": _format_hms_from_seconds(refill_seconds),
+        "primaryWallet": primary_wallet,
+        "powerLastRefill": account.get("powerLastRefill"),
+        "updatedAt": account.get("updatedAt"),
+    }
+    ACCOUNT_STATUS_CACHE[key] = {"ts": now, "value": dict(response_payload)}
+    return response_payload
+
+
+def get_cached_account_status() -> Dict[str, Any]:
+    try:
+        jwt_token = get_jwt()
+    except Exception as exc:
         return {
             "power": 0,
             "msUntilRefill": 0,
@@ -103,6 +208,21 @@ def get_cached_account_status() -> Dict[str, Any]:
             "error": str(exc),
             "incomplete": True,
         }
+
+    payload = fetch_account_status_for_token(jwt_token)
+    if payload.get("ok"):
+        return payload
+
+    return {
+        "power": 0,
+        "msUntilRefill": 0,
+        "refillSeconds": 0,
+        "refillHMS": "00:00:00",
+        "powerLastRefill": None,
+        "updatedAt": None,
+        "error": payload.get("error") or "Failed to fetch account status",
+        "incomplete": True,
+    }
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -1141,6 +1261,113 @@ body {
   margin-right: 3px;
 }
 
+.cw-connect-btn {
+  border: 1px solid rgba(92, 242, 255, 0.45);
+  background: rgba(30, 41, 59, 0.9);
+  color: #dbeafe;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.cw-connect-btn:hover {
+  background: rgba(37, 99, 235, 0.95);
+  border-color: rgba(191, 219, 254, 0.75);
+}
+
+.cw-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.72);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2200;
+}
+
+.cw-modal.open {
+  display: flex;
+}
+
+.cw-modal-card {
+  width: min(560px, 92vw);
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: #0b1220;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  padding: 16px;
+}
+
+.cw-modal-card h3 {
+  margin: 0 0 8px;
+}
+
+.cw-wallet-status {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.9);
+  padding: 10px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.cw-modal-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.cw-modal-actions button {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  padding: 7px 11px;
+  color: #e5e7eb;
+  background: rgba(15, 23, 42, 0.95);
+  cursor: pointer;
+}
+
+.cw-modal-actions .primary {
+  background: rgba(37, 99, 235, 0.95);
+  border-color: rgba(191, 219, 254, 0.7);
+}
+
+.cw-token-help {
+  margin-top: 8px;
+  color: #93c5fd;
+  font-size: 12px;
+  min-height: 18px;
+}
+
+.cw-status-banner {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #e5e7eb;
+  max-width: 360px;
+}
+
+.cw-status-banner .summary {
+  padding: 6px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.86);
+}
+
+.cw-status-banner details {
+  margin-top: 6px;
+}
+
+.cw-status-banner pre {
+  white-space: pre-wrap;
+  font-size: 10px;
+  margin: 6px 0 0;
+  padding: 6px;
+  border-radius: 6px;
+  background: rgba(2, 6, 23, 0.9);
+}
+
 .nav-user {
   padding-left: 8px;
   font-size: 13px;
@@ -1739,9 +1966,19 @@ tr:nth-child(odd) td {
         CraftWorld Tools.Live
       </div>
 
-      <div id="account-power-widget" class="account-power-widget">
-        <span><span class="label">Power:</span><strong id="power-value">—</strong></span>
-        <span><span class="label">Refill in:</span><strong id="refill-value">offline</strong></span>
+      <div>
+        <div id="account-power-widget" class="account-power-widget">
+          <button type="button" id="cw-connect-btn" class="cw-connect-btn">Connect Ronin Wallet</button>
+          <span><span class="label">Power:</span><strong id="power-value">—</strong></span>
+          <span><span class="label">Refill in:</span><strong id="refill-value">—</strong></span>
+        </div>
+        <div id="cw-status-banner" class="cw-status-banner" style="display:none;">
+          <div class="summary" id="cw-status-summary"></div>
+          <details>
+            <summary>Details</summary>
+            <pre id="cw-status-details"></pre>
+          </details>
+        </div>
       </div>
 
       <div class="nav-links">
@@ -1837,12 +2074,62 @@ tr:nth-child(odd) td {
     {{ content|safe }}
   </div>
 
+  <div id="cw-token-modal" class="cw-modal" role="dialog" aria-modal="true" aria-labelledby="cw-token-title">
+    <div class="cw-modal-card">
+      <h3 id="cw-token-title">Connect Ronin Wallet</h3>
+      <p style="margin-top:0;color:#93c5fd;font-size:12px;">Sign in with your wallet to get a Craft World Firebase session.</p>
+      <div id="cw-wallet-status" class="cw-wallet-status">Disconnected</div>
+      <div id="cw-token-help" class="cw-token-help"></div>
+      <div class="cw-modal-actions">
+        <button type="button" id="cw-token-close">Close</button>
+        <button type="button" id="cw-token-clear">Disconnect</button>
+        <button type="button" id="cw-token-save" class="primary">Connect + Sign In</button>
+      </div>
+    </div>
+  </div>
+
   <script>
 
     (function () {
+      const ID_TOKEN_KEY = 'cw_idToken';
+      const REFRESH_TOKEN_KEY = 'cw_refreshToken';
+      const EXPIRES_AT_KEY = 'cw_expiresAt';
+      const WALLET_KEY = 'cw_wallet';
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
+      let lastErrorRaw = null;
+
+      function emitAccountState(connected, power) {
+        window.dispatchEvent(new CustomEvent('cw-account-status', {
+          detail: { connected: Boolean(connected), power: (typeof power === 'number') ? power : null },
+        }));
+      }
+
+      function getSession() {
+        const idToken = localStorage.getItem(ID_TOKEN_KEY) || '';
+        const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || '';
+        const expiresAt = Number(localStorage.getItem(EXPIRES_AT_KEY) || 0);
+        const wallet = localStorage.getItem(WALLET_KEY) || '';
+        return { idToken, refreshToken, expiresAt, wallet };
+      }
+
+      function clearSession() {
+        localStorage.removeItem(ID_TOKEN_KEY);
+        localStorage.removeItem(REFRESH_TOKEN_KEY);
+        localStorage.removeItem(EXPIRES_AT_KEY);
+        localStorage.removeItem(WALLET_KEY);
+      }
+
+      function isSessionExpired(session) {
+        return !session.idToken || !session.expiresAt || Date.now() >= session.expiresAt;
+      }
+
+      function shortWallet(addr) {
+        if (!addr) return 'unknown wallet';
+        if (addr.length < 12) return addr;
+        return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+      }
 
       function formatHms(totalSeconds) {
         const sec = Math.max(0, Math.floor(totalSeconds));
@@ -1852,17 +2139,35 @@ tr:nth-child(odd) td {
         return `${h}:${m}:${s}`;
       }
 
+      function setConnectState(connected, wallet) {
+        const btn = document.getElementById('cw-connect-btn');
+        if (!btn) return;
+        btn.textContent = connected ? `Connected ${shortWallet(wallet)}` : 'Connect Ronin Wallet';
+      }
+
+      function showBanner(summary, rawObj) {
+        const banner = document.getElementById('cw-status-banner');
+        const summaryEl = document.getElementById('cw-status-summary');
+        const detailsEl = document.getElementById('cw-status-details');
+        if (!banner || !summaryEl || !detailsEl) return;
+        if (!summary) {
+          banner.style.display = 'none';
+          summaryEl.textContent = '';
+          detailsEl.textContent = '';
+          return;
+        }
+        banner.style.display = 'block';
+        summaryEl.textContent = summary;
+        detailsEl.textContent = rawObj ? JSON.stringify(rawObj, null, 2) : '';
+      }
+
       function render(power, msUntilRefill, offline) {
         const powerEl = document.getElementById('power-value');
         const refillEl = document.getElementById('refill-value');
         if (!powerEl || !refillEl) return;
         const p = (typeof power === 'number') ? power : currentPower;
         powerEl.textContent = (typeof p === 'number') ? p.toLocaleString() : '—';
-        if (offline) {
-          refillEl.textContent = 'offline';
-        } else {
-          refillEl.textContent = formatHms(msUntilRefill / 1000);
-        }
+        refillEl.textContent = offline ? '—' : formatHms((msUntilRefill || 0) / 1000);
       }
 
       function startCountdown() {
@@ -1877,19 +2182,181 @@ tr:nth-child(odd) td {
       }
 
       async function fetchAccountStatus() {
+        const session = getSession();
+        const expired = isSessionExpired(session);
+        setConnectState(Boolean(session.idToken && !expired), session.wallet);
+
+        if (expired) {
+          currentPower = null;
+          refillMs = 0;
+          render(undefined, 0, true);
+          emitAccountState(false, null);
+          if (session.idToken) {
+            showBanner('Session expired, reconnect wallet.', null);
+          } else {
+            showBanner('', null);
+          }
+          return;
+        }
+
         try {
-          const res = await fetch('/api/account_status');
+          const res = await fetch('/api/account_status', {
+            headers: { Authorization: `Bearer ${session.idToken}` },
+          });
           const data = await res.json();
+          if (!data.ok || data.auth !== 'ok') {
+            currentPower = null;
+            refillMs = 0;
+            render(undefined, 0, true);
+            emitAccountState(false, null);
+            lastErrorRaw = data;
+            showBanner('Could not fetch Craft World account status.', data);
+            return;
+          }
+
           refillMs = Number(data.msUntilRefill || 0);
-          currentPower = Number(data.power || 0);
+          currentPower = Number(data.power);
           render(currentPower, refillMs, false);
+          emitAccountState(true, currentPower);
+          showBanner('', null);
           startCountdown();
         } catch (err) {
+          currentPower = null;
+          refillMs = 0;
           render(undefined, 0, true);
+          emitAccountState(false, null);
+          showBanner('Network error while loading account status.', { error: String(err) });
         }
       }
 
+      async function connectWalletAndSignin() {
+        const statusEl = document.getElementById('cw-wallet-status');
+        const help = document.getElementById('cw-token-help');
+        const provider = window.ronin || window.ethereum;
+        if (!provider || !provider.request) {
+          throw new Error('Ronin-compatible wallet provider not found. Install/open Ronin Wallet and try again.');
+        }
+
+        statusEl.textContent = 'Requesting wallet connection...';
+        const accounts = await provider.request({ method: 'eth_requestAccounts' });
+        const walletAddress = (accounts && accounts[0]) ? String(accounts[0]).toLowerCase() : '';
+        if (!walletAddress) {
+          throw new Error('No wallet address returned by provider.');
+        }
+
+        statusEl.textContent = `Connected ${shortWallet(walletAddress)}. Requesting nonce...`;
+        const nonceRes = await fetch('/api/cw/get_nonce', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress }),
+        });
+        const nonceData = await nonceRes.json();
+        if (!nonceData.ok || !nonceData.nonce) {
+          throw new Error(nonceData.error || 'Failed to get nonce.');
+        }
+
+        statusEl.textContent = 'Please sign nonce in wallet...';
+        const signature = await provider.request({
+          method: 'personal_sign',
+          params: [nonceData.nonce, walletAddress],
+        });
+        if (!signature) {
+          throw new Error('Wallet signature was not returned.');
+        }
+
+        statusEl.textContent = 'Exchanging signature for custom token...';
+        const customRes = await fetch('/api/cw/login_for_custom_token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress, signature }),
+        });
+        const customData = await customRes.json();
+        if (!customData.ok || !customData.customToken) {
+          throw new Error(customData.error || 'Failed to exchange signature for custom token.');
+        }
+
+        statusEl.textContent = 'Signing in with Firebase custom token...';
+        const signinRes = await fetch('/api/cw/signin_with_custom_token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ customToken: customData.customToken }),
+        });
+        const signinData = await signinRes.json();
+        if (!signinData.ok || !signinData.idToken) {
+          throw new Error(signinData.error || 'Failed Firebase sign-in.');
+        }
+
+        const expiresIn = Number(signinData.expiresIn || 0);
+        const expiresAt = Date.now() + (Math.max(0, expiresIn) * 1000);
+        localStorage.setItem(ID_TOKEN_KEY, signinData.idToken);
+        localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
+        localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
+        localStorage.setItem(WALLET_KEY, walletAddress);
+
+        help.textContent = 'Signed in successfully.';
+        statusEl.textContent = `Signed in: ${shortWallet(walletAddress)}`;
+      }
+
       window.addEventListener('DOMContentLoaded', () => {
+        const modal = document.getElementById('cw-token-modal');
+        const connectBtn = document.getElementById('cw-connect-btn');
+        const statusEl = document.getElementById('cw-wallet-status');
+        const help = document.getElementById('cw-token-help');
+        const closeBtn = document.getElementById('cw-token-close');
+        const clearBtn = document.getElementById('cw-token-clear');
+        const saveBtn = document.getElementById('cw-token-save');
+
+        function openModal() {
+          if (!modal) return;
+          modal.classList.add('open');
+          const session = getSession();
+          const expired = isSessionExpired(session);
+          if (session.wallet && !expired) {
+            statusEl.textContent = `Connected ${shortWallet(session.wallet)}`;
+          } else if (session.wallet && expired) {
+            statusEl.textContent = `Session expired for ${shortWallet(session.wallet)}`;
+          } else {
+            statusEl.textContent = 'Disconnected';
+          }
+          help.textContent = '';
+        }
+
+        function closeModal() {
+          if (!modal) return;
+          modal.classList.remove('open');
+        }
+
+        if (connectBtn) connectBtn.addEventListener('click', openModal);
+        if (closeBtn) closeBtn.addEventListener('click', closeModal);
+        if (modal) {
+          modal.addEventListener('click', (ev) => {
+            if (ev.target === modal) closeModal();
+          });
+        }
+
+        if (saveBtn) {
+          saveBtn.addEventListener('click', async () => {
+            try {
+              help.textContent = '';
+              await connectWalletAndSignin();
+              await fetchAccountStatus();
+            } catch (err) {
+              const message = String(err && err.message ? err.message : err);
+              help.textContent = message;
+              showBanner('Wallet sign-in failed.', { error: message, raw: lastErrorRaw });
+            }
+          });
+        }
+
+        if (clearBtn) {
+          clearBtn.addEventListener('click', async () => {
+            clearSession();
+            statusEl.textContent = 'Disconnected';
+            help.textContent = 'Disconnected.';
+            await fetchAccountStatus();
+          });
+        }
+
         fetchAccountStatus();
         setInterval(fetchAccountStatus, 10000);
       });
@@ -3571,10 +4038,127 @@ def resource_view(token: str):
     return html
 
 
+@app.route("/api/cw/get_nonce", methods=["POST"])
+def api_cw_get_nonce():
+    payload = request.get_json(silent=True) or {}
+    wallet_address = (payload.get("walletAddress") or "").strip()
+    if not wallet_address:
+        return jsonify({"ok": False, "error": "walletAddress is required."}), 400
+
+    query = """
+    query($walletAddress: String!) {
+      getNonce(walletAddress: $walletAddress) { nonce }
+    }
+    """
+
+    try:
+        upstream = _cw_graphql_request(query=query, variables={"walletAddress": wallet_address})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to fetch nonce: {exc}", "rawErrors": []}), 502
+
+    body = upstream.get("body") if isinstance(upstream, dict) else {}
+    raw_errors = body.get("errors") if isinstance(body, dict) else None
+    nonce = (((body.get("data") or {}).get("getNonce") or {}).get("nonce") if isinstance(body, dict) else None)
+    if (not upstream.get("ok")) or raw_errors or (not nonce):
+        return jsonify({
+            "ok": False,
+            "error": "Failed to fetch nonce.",
+            "rawErrors": raw_errors or [],
+        }), 400
+
+    return jsonify({"ok": True, "walletAddress": wallet_address, "nonce": nonce})
+
+
+@app.route("/api/cw/login_for_custom_token", methods=["POST"])
+def api_cw_login_for_custom_token():
+    payload = request.get_json(silent=True) or {}
+    wallet_address = (payload.get("walletAddress") or "").strip()
+    signature = (payload.get("signature") or "").strip()
+    if not wallet_address or not signature:
+        return jsonify({"ok": False, "error": "walletAddress and signature are required."}), 400
+
+    mutation = """
+    mutation LoginForCustomToken($signature: String!, $walletAddress: String!) {
+      loginForCustomToken(signature: $signature, walletAddress: $walletAddress) {
+        customToken
+      }
+    }
+    """
+
+    try:
+        upstream = _cw_graphql_request(
+            query=mutation,
+            variables={"signature": signature, "walletAddress": wallet_address},
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to log in: {exc}", "rawErrors": []}), 502
+
+    body = upstream.get("body") if isinstance(upstream, dict) else {}
+    raw_errors = body.get("errors") if isinstance(body, dict) else None
+    custom_token = ((((body.get("data") or {}).get("loginForCustomToken") or {}).get("customToken")) if isinstance(body, dict) else None)
+    if (not upstream.get("ok")) or raw_errors or (not custom_token):
+        return jsonify({
+            "ok": False,
+            "error": "Failed to exchange signature.",
+            "rawErrors": raw_errors or [],
+        }), 400
+
+    return jsonify({"ok": True, "walletAddress": wallet_address, "customToken": custom_token})
+
+
+@app.route("/api/cw/signin_with_custom_token", methods=["POST"])
+def api_cw_signin_with_custom_token():
+    payload = request.get_json(silent=True) or {}
+    custom_token = (payload.get("customToken") or "").strip()
+    if not custom_token:
+        return jsonify({"ok": False, "error": "customToken is required."}), 400
+
+    try:
+        resp = requests.post(
+            CW_IDENTITY_SIGNIN_URL,
+            json={"token": custom_token, "returnSecureToken": True},
+            headers={"Content-Type": "application/json"},
+            timeout=20,
+        )
+        body = resp.json()
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"IdentityToolkit request failed: {exc}", "rawErrors": []}), 502
+
+    if not resp.ok or body.get("error"):
+        return jsonify({
+            "ok": False,
+            "error": "Failed to sign in with custom token.",
+            "rawErrors": [body.get("error")] if body.get("error") else [],
+        }), 400
+
+    return jsonify({
+        "ok": True,
+        "idToken": body.get("idToken"),
+        "refreshToken": body.get("refreshToken"),
+        "expiresIn": int(body.get("expiresIn") or 0),
+    })
+
 
 @app.route("/api/account_status", methods=["GET"])
 def api_account_status():
-    payload = get_cached_account_status()
+    incoming_auth = request.headers.get("Authorization")
+    jwt_token = _extract_bearer_token(incoming_auth)
+    if not jwt_token:
+        jwt_token = (request.args.get("cw_idToken") or "").strip() or None
+    if not jwt_token:
+        return jsonify({
+            "ok": False,
+            "auth": "missing_or_invalid",
+            "power": None,
+            "msUntilRefill": None,
+            "refillSeconds": None,
+            "refillHMS": None,
+            "primaryWallet": None,
+            "error": "Missing Authorization Bearer token.",
+            "rawErrors": [],
+        })
+
+    payload = fetch_account_status_for_token(jwt_token)
     return jsonify(payload)
 
 
@@ -3816,13 +4400,20 @@ def craft_profitability():
         const chipButtons = document.querySelectorAll('#start-bases-chips .cp-chip');
         const powerInput = document.getElementById('power-budget');
         const useCurrentPowerBtn = document.getElementById('use-current-power');
-        const accountPower = {{ (status.get('power') or 0)|int }};
+        let connectedPower = null;
 
         function syncBases() {
           const active = Array.from(chipButtons)
             .filter((btn) => btn.classList.contains('is-active'))
             .map((btn) => btn.dataset.base);
           hiddenBases.value = active.join(',');
+        }
+
+        function syncPowerButton() {
+          if (!useCurrentPowerBtn) return;
+          const enabled = Number.isFinite(connectedPower);
+          useCurrentPowerBtn.disabled = !enabled;
+          useCurrentPowerBtn.title = enabled ? 'Use connected account power' : 'Connect Ronin wallet first';
         }
 
         chipButtons.forEach((btn) => {
@@ -3832,9 +4423,19 @@ def craft_profitability():
           });
         });
 
-        useCurrentPowerBtn?.addEventListener('click', () => {
-          powerInput.value = accountPower;
+        window.addEventListener('cw-account-status', (event) => {
+          const detail = event.detail || {};
+          connectedPower = (detail.connected && typeof detail.power === 'number') ? Number(detail.power) : null;
+          syncPowerButton();
         });
+
+        useCurrentPowerBtn?.addEventListener('click', () => {
+          if (Number.isFinite(connectedPower)) {
+            powerInput.value = connectedPower;
+          }
+        });
+
+        syncPowerButton();
       })();
     </script>
     """
@@ -9707,7 +10308,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
