@@ -218,6 +218,30 @@ def fetch_workshop_levels() -> dict[str, int]:
     return result
 
 
+
+
+def fetch_account_status() -> Dict[str, Any]:
+    """Fetch account power/refill status for the currently authenticated user."""
+    query = """
+    query AccountStatus {
+      account {
+        power
+        powerMillisecondsUntilRefill
+        powerLastRefill
+        updatedAt
+      }
+    }
+    """
+
+    data = call_graphql(query, None)
+    account = data.get("account") or {}
+    return {
+        "power": int(account.get("power") or 0),
+        "powerMillisecondsUntilRefill": int(account.get("powerMillisecondsUntilRefill") or 0),
+        "powerLastRefill": account.get("powerLastRefill"),
+        "updatedAt": account.get("updatedAt"),
+    }
+
 def fetch_craftworld(uid: str) -> Dict[str, Any]:
     """
     Fetch full Craft World account data by Voya UID.
