@@ -1281,6 +1281,20 @@ body {
   border-color: rgba(191, 219, 254, 0.75);
 }
 
+.cw-refresh-btn {
+  border: 1px solid rgba(92, 242, 255, 0.35);
+  background: rgba(15, 23, 42, 0.9);
+  color: #dbeafe;
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.cw-refresh-btn:hover {
+  background: rgba(37, 99, 235, 0.95);
+}
+
 .cw-modal {
   position: fixed;
   inset: 0;
@@ -2008,6 +2022,7 @@ tr:nth-child(odd) td {
           <button type="button" id="cw-connect-btn" class="cw-connect-btn">Connect Ronin Wallet</button>
           <span><span class="label">Power:</span><strong id="power-value">—</strong></span>
           <span><span class="label">Refill in:</span><strong id="refill-value">—</strong></span>
+          <button type="button" id="cw-refresh-btn" class="cw-refresh-btn">Refresh</button>
         </div>
         <div id="cw-status-banner" class="cw-status-banner" style="display:none;">
           <div class="summary" id="cw-status-summary"></div>
@@ -2137,10 +2152,11 @@ tr:nth-child(odd) td {
       const REFRESH_TOKEN_KEY = 'cw_refreshToken';
       const EXPIRES_AT_KEY = 'cw_expiresAt';
       const WALLET_KEY = 'cw_wallet';
+      const ACCOUNT_STATUS_KEY = 'cw_account_status';
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
-      let statusPollInterval = null;
+      let lastAccountStatus = null;
       let lastErrorRaw = null;
       let authStatus = 'disconnected';
 
@@ -2169,6 +2185,7 @@ tr:nth-child(odd) td {
         localStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(EXPIRES_AT_KEY);
         localStorage.removeItem(WALLET_KEY);
+        localStorage.removeItem(ACCOUNT_STATUS_KEY);
       }
 
       function isSessionExpired(session) {
@@ -2254,9 +2271,6 @@ tr:nth-child(odd) td {
         countdownInterval = setInterval(() => {
           refillMs = Math.max(0, refillMs - 1000);
           render(currentPower, refillMs, false);
-          if (refillMs <= 0 && getCwToken()) {
-            fetchAccountStatus();
-          }
         }, 1000);
       }
 
@@ -2284,7 +2298,10 @@ tr:nth-child(odd) td {
         const expired = isSessionExpired(session);
 
         if (!session.cwToken) {
-          stopPolling();
+          if (countdownInterval) {
+            clearInterval(countdownInterval);
+            countdownInterval = null;
+          }
           setAuthStatus('disconnected', session.wallet);
           currentPower = null;
           refillMs = 0;
@@ -2295,7 +2312,10 @@ tr:nth-child(odd) td {
         }
 
         if (expired) {
-          stopPolling();
+          if (countdownInterval) {
+            clearInterval(countdownInterval);
+            countdownInterval = null;
+          }
           setAuthStatus('disconnected', session.wallet);
           currentPower = null;
           refillMs = 0;
@@ -2326,6 +2346,8 @@ tr:nth-child(odd) td {
 
           refillMs = Number(data.msUntilRefill || 0);
           currentPower = Number(data.power);
+          lastAccountStatus = data;
+          localStorage.setItem(ACCOUNT_STATUS_KEY, JSON.stringify(data));
           setAuthStatus('connected', session.wallet);
           render(currentPower, refillMs, false);
           emitAccountState(true, currentPower);
@@ -2507,6 +2529,7 @@ tr:nth-child(odd) td {
         const providerHint = document.getElementById('cw-provider-hint');
         const closeBtn = document.getElementById('cw-token-close');
         const clearBtn = document.getElementById('cw-token-clear');
+        const refreshBtn = document.getElementById('cw-refresh-btn');
         const injectedBtn = document.getElementById('cw-connect-injected');
         const walletConnectBtn = document.getElementById('cw-connect-walletconnect');
 
@@ -2581,10 +2604,15 @@ tr:nth-child(odd) td {
           });
         }
 
+        if (refreshBtn) {
+          refreshBtn.addEventListener('click', async () => {
+            await fetchAccountStatus();
+          });
+        }
+
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
             clearSession();
-            stopPolling();
             if (countdownInterval) {
               clearInterval(countdownInterval);
               countdownInterval = null;
