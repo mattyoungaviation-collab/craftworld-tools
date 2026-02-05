@@ -3,8 +3,9 @@ from typing import Dict, Any, List, Optional
 import json
 import math
 import sqlite3
+import time
 import requests
-from flask import Flask, request, render_template_string, session, url_for, redirect
+from flask import Flask, request, render_template_string, session, url_for, redirect, jsonify
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -18,6 +19,7 @@ from craftworld_api import (
     fetch_workshop_levels,
     fetch_profile_by_uid,
     fetch_available_avatars,
+    fetch_account_status,
 )
 
 
@@ -48,6 +50,59 @@ import os
 DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
 
 
+
+
+ACCOUNT_STATUS_CACHE: Dict[str, Any] = {"ts": 0.0, "value": None}
+ACCOUNT_STATUS_CACHE_TTL = 8.0
+
+
+def _format_hms_from_seconds(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def get_cached_account_status() -> Dict[str, Any]:
+    now = time.time()
+    cached = ACCOUNT_STATUS_CACHE.get("value")
+    ts = float(ACCOUNT_STATUS_CACHE.get("ts") or 0.0)
+    if cached and (now - ts) < ACCOUNT_STATUS_CACHE_TTL:
+        return dict(cached)
+
+    try:
+        raw = fetch_account_status()
+        ms = int(raw.get("powerMillisecondsUntilRefill") or 0)
+        sec = max(0, ms // 1000)
+        payload = {
+            "power": int(raw.get("power") or 0),
+            "msUntilRefill": ms,
+            "refillSeconds": sec,
+            "refillHMS": _format_hms_from_seconds(sec),
+            "powerLastRefill": raw.get("powerLastRefill"),
+            "updatedAt": raw.get("updatedAt"),
+            "incomplete": False,
+        }
+        ACCOUNT_STATUS_CACHE["value"] = payload
+        ACCOUNT_STATUS_CACHE["ts"] = now
+        return dict(payload)
+    except Exception as exc:
+        if cached:
+            fallback = dict(cached)
+            fallback["error"] = str(exc)
+            fallback["incomplete"] = True
+            return fallback
+        return {
+            "power": 0,
+            "msUntilRefill": 0,
+            "refillSeconds": 0,
+            "refillHMS": "00:00:00",
+            "powerLastRefill": None,
+            "updatedAt": None,
+            "error": str(exc),
+            "incomplete": True,
+        }
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -232,6 +287,8 @@ TOKENS_CHART_ORDER = [
     "COIN",
 ]
 
+
+from crafting_planner import rank_opportunities, plan_craft, Modifiers
 
 from factories import (
     my_factories,
@@ -1067,6 +1124,23 @@ body {
       background: rgba(15, 23, 42, 0.9) !important;
     }
 
+
+.account-power-widget {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(92, 242, 255, 0.35);
+  font-size: 12px;
+  color: var(--text-main);
+}
+.account-power-widget .label {
+  color: var(--text-soft);
+  margin-right: 3px;
+}
+
 .nav-user {
   padding-left: 8px;
   font-size: 13px;
@@ -1665,6 +1739,11 @@ tr:nth-child(odd) td {
         CraftWorld Tools.Live
       </div>
 
+      <div id="account-power-widget" class="account-power-widget">
+        <span><span class="label">Power:</span><strong id="power-value">—</strong></span>
+        <span><span class="label">Refill in:</span><strong id="refill-value">offline</strong></span>
+      </div>
+
       <div class="nav-links">
         <a href="{{ url_for('index') }}" class="{{ 'active' if active_page=='overview' else '' }}">Overview</a>
 
@@ -1678,9 +1757,11 @@ tr:nth-child(odd) td {
 
         {% if has_uid %}
           <a href="{{ url_for('profitability') }}" class="{{ 'active' if active_page=='profit' else '' }}">Profitability</a>
+          <a href="{{ url_for('craft_profitability') }}" class="{{ 'active' if active_page=='craft_profit' else '' }}">Craft Profitability</a>
           <a href="{{ url_for('flex_planner') }}" class="{{ 'active' if active_page=='flex' else '' }}">Flex Planner</a>
         {% else %}
           <span class="nav-disabled">Profitability</span>
+          <span class="nav-disabled">Craft Profitability</span>
           <span class="nav-disabled">Flex Planner</span>
         {% endif %}
 
@@ -1757,6 +1838,63 @@ tr:nth-child(odd) td {
   </div>
 
   <script>
+
+    (function () {
+      let refillMs = 0;
+      let currentPower = null;
+      let countdownInterval = null;
+
+      function formatHms(totalSeconds) {
+        const sec = Math.max(0, Math.floor(totalSeconds));
+        const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+        const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+        const s = String(sec % 60).padStart(2, '0');
+        return `${h}:${m}:${s}`;
+      }
+
+      function render(power, msUntilRefill, offline) {
+        const powerEl = document.getElementById('power-value');
+        const refillEl = document.getElementById('refill-value');
+        if (!powerEl || !refillEl) return;
+        const p = (typeof power === 'number') ? power : currentPower;
+        powerEl.textContent = (typeof p === 'number') ? p.toLocaleString() : '—';
+        if (offline) {
+          refillEl.textContent = 'offline';
+        } else {
+          refillEl.textContent = formatHms(msUntilRefill / 1000);
+        }
+      }
+
+      function startCountdown() {
+        if (countdownInterval) clearInterval(countdownInterval);
+        countdownInterval = setInterval(() => {
+          refillMs = Math.max(0, refillMs - 1000);
+          render(currentPower, refillMs, false);
+          if (refillMs <= 0) {
+            fetchAccountStatus();
+          }
+        }, 1000);
+      }
+
+      async function fetchAccountStatus() {
+        try {
+          const res = await fetch('/api/account_status');
+          const data = await res.json();
+          refillMs = Number(data.msUntilRefill || 0);
+          currentPower = Number(data.power || 0);
+          render(currentPower, refillMs, false);
+          startCountdown();
+        } catch (err) {
+          render(undefined, 0, true);
+        }
+      }
+
+      window.addEventListener('DOMContentLoaded', () => {
+        fetchAccountStatus();
+        setInterval(fetchAccountStatus, 10000);
+      });
+    })();
+
     (function () {
       const WALLET_ADDR = '0xeED0491B506C78EA7fD10988B1E98A3C88e1C630';
 
@@ -3431,6 +3569,144 @@ def resource_view(token: str):
         has_uid=has_uid_flag(),
     )
     return html
+
+
+
+@app.route("/api/account_status", methods=["GET"])
+def api_account_status():
+    payload = get_cached_account_status()
+    return jsonify(payload)
+
+
+@app.route("/craft-profitability", methods=["GET"])
+def craft_profitability():
+    error = None
+    prices: Dict[str, float] = {}
+    try:
+        prices = fetch_live_prices_in_coin()
+    except Exception as exc:
+        error = f"Failed to fetch prices: {exc}"
+
+    status = get_cached_account_status()
+
+    mode = (request.args.get("mode") or "market").strip().lower()
+    if mode not in {"market", "craft"}:
+        mode = "market"
+    objective = (request.args.get("objective") or "profit_per_power").strip()
+    target_qty = float(request.args.get("target_qty") or 1)
+    power_budget = float(request.args.get("power_budget") or status.get("power") or 0)
+    time_budget_hours_raw = request.args.get("time_budget_hours")
+    time_budget_seconds = None
+    if time_budget_hours_raw:
+        try:
+            time_budget_seconds = max(0.0, float(time_budget_hours_raw) * 3600.0)
+        except Exception:
+            time_budget_seconds = None
+
+    start_base_raw = request.args.get("start_bases") or "EARTH,WATER,FIRE"
+    start_bases = [s.strip().upper() for s in start_base_raw.split(",") if s.strip()]
+
+    modifiers = Modifiers(masteryLevelsBySymbol={}, workshopLevelsByFactoryOrTier={}, globalSpeedMultiplier=1.0)
+
+    ranked = rank_opportunities(
+        prices=prices,
+        mode=("market" if mode == "market" else "craft"),
+        objective=objective,
+        power_budget=power_budget,
+        time_budget_seconds=time_budget_seconds,
+        target_amount=target_qty,
+        modifiers=modifiers,
+        available_bases=start_bases,
+    )[:10]
+
+    selected = (request.args.get("selected") or (ranked[0]["targetSymbol"] if ranked else "")).upper()
+    plan = None
+    if selected:
+        plan = plan_craft(
+            selected,
+            target_qty,
+            prices,
+            mode=("market" if mode == "market" else "craft"),
+            modifiers=modifiers,
+            available_bases=start_bases,
+            power_now=status.get("power"),
+            refill_seconds=status.get("refillSeconds"),
+        )
+
+    content = """
+    <div class="card">
+      <h1>🧠 Craft Profitability</h1>
+      <p class="subtle">CSV-driven planner with market/craft-from-base modes, power budget checks, multi-input merge handling, and cumulative path profitability.</p>
+      <form method="GET" action="{{ url_for('craft_profitability') }}" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;">
+        <div><label>Mode</label><select name="mode"><option value="market" {{ 'selected' if mode=='market' else '' }}>Market Inputs</option><option value="craft" {{ 'selected' if mode=='craft' else '' }}>Craft From Base</option></select></div>
+        <div><label>Objective</label><select name="objective"><option value="profit_per_power" {{ 'selected' if objective=='profit_per_power' else '' }}>profit/power</option><option value="profit_per_hour" {{ 'selected' if objective=='profit_per_hour' else '' }}>profit/hour</option><option value="total_profit" {{ 'selected' if objective=='total_profit' else '' }}>total profit</option></select></div>
+        <div><label>Start base set (comma-separated)</label><input type="text" name="start_bases" value="{{ start_bases_csv }}"></div>
+        <div><label>Power budget</label><input type="number" step="1" name="power_budget" value="{{ power_budget }}"></div>
+        <div><label>Time horizon (hours, optional)</label><input type="number" step="0.1" name="time_budget_hours" value="{{ time_budget_hours or '' }}"></div>
+        <div><label>Target quantity</label><input type="number" step="1" min="1" name="target_qty" value="{{ target_qty }}"></div>
+        <div><label>Inspect target symbol</label><input type="text" name="selected" value="{{ selected }}"></div>
+        <div style="align-self:end;"><button type="submit">Run explorer</button></div>
+      </form>
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
+      {% if status.error %}<div class="error">Account status warning: {{ status.error }}</div>{% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Top 10 chains right now</h2>
+      <table>
+        <tr><th>Target</th><th>Profit/Power</th><th>Profit/Hour</th><th>Power</th><th>Time (s)</th><th>Gross Profit</th></tr>
+        {% for p in ranked %}
+          <tr>
+            <td><a href="{{ url_for('craft_profitability', mode=mode, objective=objective, start_bases=start_bases_csv, power_budget=power_budget, time_budget_hours=time_budget_hours, target_qty=target_qty, selected=p.targetSymbol) }}">{{ p.targetSymbol }}</a></td>
+            <td>{{ '%.6f'|format(p.totals.profitPerPower) }}</td>
+            <td>{{ '%.6f'|format(p.totals.profitPerHour) }}</td>
+            <td>{{ '%.2f'|format(p.totals.power) }}</td>
+            <td>{{ '%.0f'|format(p.totals.seconds) }}</td>
+            <td>{{ '%+.6f'|format(p.totals.grossProfit) }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
+
+    {% if plan %}
+      <div class="card">
+        <h2>Plan for {{ plan.targetSymbol }} × {{ plan.targetAmount|int }}</h2>
+        <p class="subtle">Can afford now: {{ 'yes' if plan.constraints.canAffordNow else 'no' }} | Power deficit: {{ '%.2f'|format(plan.constraints.powerDeficit) }} | ETA: {{ plan.constraints.etaToAffordHMS }}</p>
+        <table>
+          <tr><th>Output</th><th>Crafts</th><th>Power</th><th>Seconds</th><th>Coin Cost</th><th>Coin Value</th></tr>
+          {% for st in plan.steps %}
+            <tr><td>{{ st.outputSymbol }}</td><td>{{ st.times }}</td><td>{{ '%.2f'|format(st.powerCost) }}</td><td>{{ '%.0f'|format(st.timeCost) }}</td><td>{{ '%.6f'|format(st.coinCost) }}</td><td>{{ '%.6f'|format(st.coinValue) }}</td></tr>
+          {% endfor %}
+        </table>
+        <p><strong>Totals:</strong> Profit {{ '%+.6f'|format(plan.totals.grossProfit) }} | Profit/Power {{ '%.6f'|format(plan.totals.profitPerPower) }} | Profit/Hour {{ '%.6f'|format(plan.totals.profitPerHour) }} | ROI {{ '%.6f'|format(plan.totals.ROI) }}</p>
+        {% if plan.missing.prices or plan.missing.recipes %}
+          <div class="error">Incomplete data. Missing prices: {{ plan.missing.prices|join(', ') or 'none' }}. Missing recipes: {{ plan.missing.recipes|join(', ') or 'none' }}.</div>
+        {% endif %}
+      </div>
+    {% endif %}
+    """
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=render_template_string(
+            content,
+            ranked=ranked,
+            plan=plan,
+            mode=mode,
+            objective=objective,
+            selected=selected,
+            target_qty=target_qty,
+            power_budget=power_budget,
+            time_budget_hours=time_budget_hours_raw,
+            start_bases_csv=",".join(start_bases),
+            status=status,
+            error=error,
+        ),
+        active_page="craft_profit",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
 
 
 
