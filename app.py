@@ -2153,17 +2153,11 @@ tr:nth-child(odd) td {
       const EXPIRES_AT_KEY = 'cw_expiresAt';
       const WALLET_KEY = 'cw_wallet';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
-      const CW_SESSION_INDEX = 'cw_sessions';
-      const CW_ACTIVE_WALLET = 'cw_active_wallet';
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
-      let statusPollInterval = null;
-      let activeWalletProvider = null;
-      let providerAccountsChangedHandler = null;
-      let providerChainChangedHandler = null;
-      let providerDisconnectHandler = null;
       let lastAccountStatus = null;
+      let lastErrorRaw = null;
       let authStatus = 'disconnected';
       let statusPollInterval = null;
 
@@ -2276,25 +2270,21 @@ tr:nth-child(odd) td {
       }
 
       function getSession() {
-        const wallet = getActiveWallet();
-        const entry = getWalletSession(wallet);
-        return {
-          wallet,
-          idToken: String((entry && entry.idToken) || ''),
-          cwToken: String((entry && entry.token) || ''),
-          refreshToken: String((entry && entry.refreshToken) || ''),
-          expiresAt: Number((entry && entry.expiresAt) || 0),
-        };
+        const idToken = localStorage.getItem(ID_TOKEN_KEY) || '';
+        const cwToken = getCwToken();
+        const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || '';
+        const expiresAt = Number(localStorage.getItem(EXPIRES_AT_KEY) || 0);
+        const wallet = localStorage.getItem(WALLET_KEY) || '';
+        return { idToken, cwToken, refreshToken, expiresAt, wallet };
       }
 
       function clearSession() {
-        const wallet = getActiveWallet();
-        if (wallet) {
-          removeWalletSession(wallet);
-        }
+        localStorage.removeItem(ID_TOKEN_KEY);
+        localStorage.removeItem(CW_TOKEN_KEY);
+        localStorage.removeItem(REFRESH_TOKEN_KEY);
+        localStorage.removeItem(EXPIRES_AT_KEY);
+        localStorage.removeItem(WALLET_KEY);
         localStorage.removeItem(ACCOUNT_STATUS_KEY);
-        setActiveWallet('');
-        syncLegacySessionFromActiveWallet();
       }
 
       function isSessionExpired(session) {
@@ -2308,9 +2298,7 @@ tr:nth-child(odd) td {
       }
 
       function getCwToken() {
-        const wallet = getActiveWallet();
-        const sessions = readSessionIndex();
-        const raw = String((sessions[wallet] && sessions[wallet].token) || '').trim();
+        const raw = String(localStorage.getItem(CW_TOKEN_KEY) || '').trim();
         if (!raw) return '';
         if (raw.toLowerCase().startsWith('bearer ')) {
           return raw.slice(7).trim();
@@ -2476,7 +2464,7 @@ tr:nth-child(odd) td {
         const session = getSession();
         const expired = isSessionExpired(session);
 
-        if (!session.wallet || !session.cwToken) {
+        if (!session.cwToken) {
           if (countdownInterval) {
             clearInterval(countdownInterval);
             countdownInterval = null;
@@ -2514,10 +2502,11 @@ tr:nth-child(odd) td {
             refillMs = 0;
             render(undefined, 0, true);
             emitAccountState(false, null);
+            lastErrorRaw = data;
             if (data && data.auth === 'missing_or_invalid') {
-              showBanner('Not connected. Connect Ronin Wallet.');
+              showBanner('Not connected. Connect Ronin Wallet.', null);
             } else {
-              showBanner('Couldn't fetch boosts. Retry.');
+              showBanner('Could not fetch Craft World account status.', data);
             }
             return;
           }
@@ -2686,14 +2675,11 @@ tr:nth-child(odd) td {
 
         const expiresIn = Number(signinData.expiresIn || 0);
         const expiresAt = Date.now() + (Math.max(0, expiresIn) * 1000);
-        upsertWalletSession(walletAddress, {
-          token: `jwt_${signinData.idToken}`,
-          idToken: signinData.idToken,
-          refreshToken: signinData.refreshToken || '',
-          expiresAt,
-          lastLoginAt: Date.now(),
-        });
-        syncLegacySessionFromActiveWallet();
+        localStorage.setItem(ID_TOKEN_KEY, signinData.idToken);
+        localStorage.setItem(CW_TOKEN_KEY, `jwt_${signinData.idToken}`);
+        localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
+        localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
+        localStorage.setItem(WALLET_KEY, walletAddress);
 
         help.textContent = 'Signed in successfully.';
         statusEl.textContent = `Connected: ${shortWallet(walletAddress)}`;
@@ -2804,7 +2790,7 @@ tr:nth-child(odd) td {
 
         if (refreshBtn) {
           refreshBtn.addEventListener('click', async () => {
-            await refreshAccountStatusOnce();
+            await fetchAccountStatus();
           });
         }
 
@@ -2813,71 +2799,28 @@ tr:nth-child(odd) td {
             stopStatusPolling();
             detachWalletProviderListeners();
             clearSession();
-            setDisconnectedUIState();
+            if (countdownInterval) {
+              clearInterval(countdownInterval);
+              countdownInterval = null;
+            }
             setAuthStatus('disconnected', '');
             statusEl.textContent = 'Disconnected';
             help.textContent = 'Disconnected.';
             render(undefined, 0, true);
-            showBanner('Not connected. Connect Ronin Wallet.');
+            showBanner('Not connected. Connect Ronin Wallet.', null);
             emitAccountState(false, null);
           });
         }
 
-        async function initializeWalletSession() {
-          const connectedWallet = await detectConnectedWalletAddress();
-          const activeWallet = getActiveWallet();
-          const targetWallet = connectedWallet || activeWallet;
-
-          if (!targetWallet) {
-            setActiveWallet('');
-            syncLegacySessionFromActiveWallet();
-            return;
-          }
-
-          setActiveWallet(targetWallet);
-          const activeSession = getWalletSession(targetWallet);
-          if (isWalletSessionExpired(activeSession)) {
-            if (activeSession) removeWalletSession(targetWallet);
-            syncLegacySessionFromActiveWallet();
-            showBanner('Session expired. Reconnect.');
-            return;
-          }
-
-          syncLegacySessionFromActiveWallet();
+        const initialSession = getSession();
+        if (initialSession.cwToken) {
+          fetchAccountStatus();
+        } else {
+          setAuthStatus('disconnected', '');
+          render(undefined, 0, true);
+          showBanner('Not connected. Connect Ronin Wallet.', null);
+          emitAccountState(false, null);
         }
-
-        const provider = getInjectedProvider();
-        if (provider && typeof provider.on === 'function') {
-          provider.on('accountsChanged', async (accounts) => {
-            const nextWallet = normalizeWalletAddress((accounts && accounts[0]) ? accounts[0] : '');
-            setActiveWallet(nextWallet);
-            syncLegacySessionFromActiveWallet();
-            const nextSession = getWalletSession(nextWallet);
-            if (!nextWallet || isWalletSessionExpired(nextSession)) {
-              setAuthStatus('disconnected', nextWallet);
-              render(undefined, 0, true);
-              emitAccountState(false, null);
-              showBanner(nextWallet ? 'Session expired. Reconnect.' : 'Not connected. Connect Ronin Wallet.');
-              stopPolling();
-              return;
-            }
-            await fetchAccountStatus();
-          });
-        }
-
-        initializeWalletSession().then(async () => {
-          const initialSession = getSession();
-          if (initialSession.wallet && initialSession.cwToken && !isSessionExpired(initialSession)) {
-            await fetchAccountStatus();
-            startPolling();
-          } else {
-            stopPolling();
-            setAuthStatus('disconnected', initialSession.wallet || '');
-            render(undefined, 0, true);
-            showBanner(initialSession.wallet ? 'Session expired. Reconnect.' : 'Not connected. Connect Ronin Wallet.');
-            emitAccountState(false, null);
-          }
-        });
       });
     })();
 
@@ -11034,6 +10977,8 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
 
 
 
