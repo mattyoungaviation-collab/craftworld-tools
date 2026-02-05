@@ -86,9 +86,20 @@ def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
 def _get_request_cw_token() -> Optional[str]:
     token = _extract_bearer_token(request.headers.get("Authorization"))
     if token:
-        return token
+        return _normalize_cw_token(token)
     fallback = (request.args.get("cw_idToken") or "").strip()
-    return fallback or None
+    return _normalize_cw_token(fallback)
+
+
+def _normalize_cw_token(token: Optional[str]) -> Optional[str]:
+    value = (token or "").strip()
+    if not value:
+        return None
+    if value.startswith("jwt_"):
+        return value
+    if value.count(".") >= 2:
+        return f"jwt_{value}"
+    return value
 
 
 def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, bearer_token: Optional[str] = None) -> Dict[str, Any]:
@@ -96,8 +107,9 @@ def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, 
         "Content-Type": "application/json",
         "x-app-version": CW_APP_VERSION,
     }
-    if bearer_token:
-        headers["Authorization"] = f"Bearer {bearer_token}"
+    normalized_token = _normalize_cw_token(bearer_token)
+    if normalized_token:
+        headers["Authorization"] = f"Bearer {normalized_token}"
 
     payload: Dict[str, Any] = {"query": query}
     if variables is not None:
@@ -125,6 +137,7 @@ def _mask_token(token: Optional[str]) -> str:
 
 
 def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
+    jwt_token = _normalize_cw_token(jwt_token) or ""
     now = time.time()
     key = _token_cache_key(jwt_token)
     cached_entry = ACCOUNT_STATUS_CACHE.get(key) or {}
@@ -2120,12 +2133,14 @@ tr:nth-child(odd) td {
 
     (function () {
       const ID_TOKEN_KEY = 'cw_idToken';
+      const CW_TOKEN_KEY = 'cw_token';
       const REFRESH_TOKEN_KEY = 'cw_refreshToken';
       const EXPIRES_AT_KEY = 'cw_expiresAt';
       const WALLET_KEY = 'cw_wallet';
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
+      let statusPollInterval = null;
       let lastErrorRaw = null;
       let authStatus = 'disconnected';
 
@@ -2141,14 +2156,16 @@ tr:nth-child(odd) td {
 
       function getSession() {
         const idToken = localStorage.getItem(ID_TOKEN_KEY) || '';
+        const cwToken = getCwToken();
         const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || '';
         const expiresAt = Number(localStorage.getItem(EXPIRES_AT_KEY) || 0);
         const wallet = localStorage.getItem(WALLET_KEY) || '';
-        return { idToken, refreshToken, expiresAt, wallet };
+        return { idToken, cwToken, refreshToken, expiresAt, wallet };
       }
 
       function clearSession() {
         localStorage.removeItem(ID_TOKEN_KEY);
+        localStorage.removeItem(CW_TOKEN_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(EXPIRES_AT_KEY);
         localStorage.removeItem(WALLET_KEY);
@@ -2164,31 +2181,24 @@ tr:nth-child(odd) td {
         return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
       }
 
-      function parseTokenInput(raw) {
-        const v = String(raw || '').trim();
-        if (!v) return '';
-        const lower = v.toLowerCase();
-        if (lower.startsWith('authorization:')) {
-          const idx = v.indexOf(':');
-          return parseTokenInput(v.slice(idx + 1));
+      function getCwToken() {
+        const raw = String(localStorage.getItem(CW_TOKEN_KEY) || '').trim();
+        if (!raw) return '';
+        if (raw.toLowerCase().startsWith('bearer ')) {
+          return raw.slice(7).trim();
         }
-        if (lower.startsWith('bearer ')) {
-          return v.slice(7).trim();
-        }
-        return v;
+        return raw;
       }
 
-      function getToken() {
-        return parseTokenInput(localStorage.getItem(TOKEN_KEY) || '');
-      }
-
-      function setToken(token) {
-        const clean = parseTokenInput(token);
-        if (clean) {
-          localStorage.setItem(TOKEN_KEY, clean);
-        } else {
-          localStorage.removeItem(TOKEN_KEY);
+      async function authFetch(url, options) {
+        const token = getCwToken();
+        const nextOptions = options ? { ...options } : {};
+        const headers = new Headers(nextOptions.headers || {});
+        if (token) {
+          headers.set('Authorization', `Bearer ${token}`);
         }
+        nextOptions.headers = headers;
+        return fetch(url, nextOptions);
       }
 
       function formatHms(totalSeconds) {
@@ -2244,17 +2254,37 @@ tr:nth-child(odd) td {
         countdownInterval = setInterval(() => {
           refillMs = Math.max(0, refillMs - 1000);
           render(currentPower, refillMs, false);
-          if (refillMs <= 0) {
+          if (refillMs <= 0 && getCwToken()) {
             fetchAccountStatus();
           }
         }, 1000);
+      }
+
+      function stopPolling() {
+        if (statusPollInterval) {
+          clearInterval(statusPollInterval);
+          statusPollInterval = null;
+        }
+      }
+
+      function startPolling() {
+        stopPolling();
+        if (!getCwToken()) return;
+        statusPollInterval = setInterval(() => {
+          if (!getCwToken()) {
+            stopPolling();
+            return;
+          }
+          fetchAccountStatus();
+        }, 10000);
       }
 
       async function fetchAccountStatus() {
         const session = getSession();
         const expired = isSessionExpired(session);
 
-        if (!session.idToken) {
+        if (!session.cwToken) {
+          stopPolling();
           setAuthStatus('disconnected', session.wallet);
           currentPower = null;
           refillMs = 0;
@@ -2265,6 +2295,7 @@ tr:nth-child(odd) td {
         }
 
         if (expired) {
+          stopPolling();
           setAuthStatus('disconnected', session.wallet);
           currentPower = null;
           refillMs = 0;
@@ -2276,9 +2307,7 @@ tr:nth-child(odd) td {
 
         setAuthStatus('connecting', session.wallet);
         try {
-          const res = await fetch('/api/account_status', {
-            headers: { Authorization: `Bearer ${session.idToken}` },
-          });
+          const res = await authFetch('/api/account_status');
           const data = await res.json();
           if (!data.ok || data.auth !== 'ok') {
             setAuthStatus('error', session.wallet);
@@ -2287,7 +2316,11 @@ tr:nth-child(odd) td {
             render(undefined, 0, true);
             emitAccountState(false, null);
             lastErrorRaw = data;
-            showBanner('Could not fetch Craft World account status.', data);
+            if (data && data.auth === 'missing_or_invalid') {
+              showBanner('Not connected. Connect Ronin Wallet.', null);
+            } else {
+              showBanner('Could not fetch Craft World account status.', data);
+            }
             return;
           }
 
@@ -2298,6 +2331,7 @@ tr:nth-child(odd) td {
           emitAccountState(true, currentPower);
           showBanner('', null);
           startCountdown();
+          startPolling();
         } catch (err) {
           setAuthStatus('error', session.wallet);
           currentPower = null;
@@ -2456,6 +2490,7 @@ tr:nth-child(odd) td {
         const expiresIn = Number(signinData.expiresIn || 0);
         const expiresAt = Date.now() + (Math.max(0, expiresIn) * 1000);
         localStorage.setItem(ID_TOKEN_KEY, signinData.idToken);
+        localStorage.setItem(CW_TOKEN_KEY, `jwt_${signinData.idToken}`);
         localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
@@ -2549,29 +2584,31 @@ tr:nth-child(odd) td {
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
             clearSession();
+            stopPolling();
+            if (countdownInterval) {
+              clearInterval(countdownInterval);
+              countdownInterval = null;
+            }
             setAuthStatus('disconnected', '');
             statusEl.textContent = 'Disconnected';
             help.textContent = 'Disconnected.';
-            await fetchAccountStatus();
+            render(undefined, 0, true);
+            showBanner('Not connected. Connect Ronin Wallet.', null);
+            emitAccountState(false, null);
           });
         }
 
         const initialSession = getSession();
-        if (initialSession.idToken) {
+        if (initialSession.cwToken) {
           fetchAccountStatus();
+          startPolling();
         } else {
+          stopPolling();
           setAuthStatus('disconnected', '');
           render(undefined, 0, true);
-          showBanner('', null);
+          showBanner('Not connected. Connect Ronin Wallet.', null);
           emitAccountState(false, null);
         }
-
-        setInterval(() => {
-          const session = getSession();
-          if (session.idToken) {
-            fetchAccountStatus();
-          }
-        }, 10000);
       });
     })();
 
@@ -10533,7 +10570,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 

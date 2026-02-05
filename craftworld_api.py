@@ -17,13 +17,26 @@ def _mask_token(token: Optional[str]) -> str:
     return f"{token[:10]}...{token[-6:]}"
 
 
+
+
+def _normalize_cw_token(token: Optional[str]) -> str:
+    value = (token or "").strip()
+    if not value:
+        return value
+    if value.startswith("jwt_"):
+        return value
+    if value.count(".") >= 2:
+        return f"jwt_{value}"
+    return value
+
 def call_graphql_with_jwt(jwt_token: str, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Low-level helper to call Craft World's GraphQL API with a provided JWT.
     Returns the full decoded response JSON.
     """
+    normalized_token = _normalize_cw_token(jwt_token)
     headers = {
-        "Authorization": f"Bearer {jwt_token}",
+        "Authorization": f"Bearer {normalized_token}",
         "Content-Type": "application/json",
         # IMPORTANT: must be >= minAppVersion from server (currently 1.6.2)
         "x-app-version": "1.6.2",
@@ -86,7 +99,7 @@ def call_graphql(
     Low-level helper to call Craft World's GraphQL API with the JWT.
     Returns the `data` field or raises RuntimeError on errors.
     """
-    jwt_token = bearer_token if bearer_token else get_jwt()
+    jwt_token = _normalize_cw_token(bearer_token) if bearer_token else _normalize_cw_token(get_jwt())
     if bearer_token:
         LOGGER.debug(
             "call_graphql using per-user bearer token (len=%s, token=%s)",
