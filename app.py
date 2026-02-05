@@ -831,6 +831,9 @@ def inject_nav_user():
     return {
         "nav_profile": prof,
         "nav_avatar_url": avatar_url,
+        "walletconnect_project_id": os.getenv("WALLETCONNECT_PROJECT_ID", "").strip(),
+        "ronin_rpc_url": os.getenv("RONIN_RPC_URL", "https://api.roninchain.com/rpc").strip() or "https://api.roninchain.com/rpc",
+        "ronin_chain_id": int(os.getenv("RONIN_CHAIN_ID", "2020") or 2020),
     }
 @app.route("/player/<uid>")
 def player_view(uid: str):
@@ -1114,6 +1117,7 @@ BASE_TEMPLATE = """
   <title>CraftWorld Tools.Live</title>
   <!-- Make it mobile friendly -->
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://unpkg.com/@walletconnect/ethereum-provider@2.17.1/dist/index.umd.js"></script>
   <style>
     :root {
       --bg-main: #050712;
@@ -1358,6 +1362,39 @@ body {
 .cw-token-help {
   margin-top: 8px;
   color: #93c5fd;
+  font-size: 12px;
+  min-height: 18px;
+}
+
+.cw-provider-actions {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.cw-provider-btn {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  padding: 10px 12px;
+  color: #e5e7eb;
+  background: rgba(15, 23, 42, 0.95);
+  cursor: pointer;
+  text-align: left;
+}
+
+.cw-provider-btn.primary {
+  background: rgba(37, 99, 235, 0.95);
+  border-color: rgba(191, 219, 254, 0.7);
+}
+
+.cw-provider-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.cw-provider-hint {
+  color: #fbbf24;
   font-size: 12px;
   min-height: 18px;
 }
@@ -2100,11 +2137,15 @@ tr:nth-child(odd) td {
       <h3 id="cw-token-title">Connect Ronin Wallet</h3>
       <p style="margin-top:0;color:#93c5fd;font-size:12px;">Sign in with your wallet to get a Craft World Firebase session.</p>
       <div id="cw-wallet-status" class="cw-wallet-status">Disconnected</div>
+      <div class="cw-provider-actions">
+        <button type="button" id="cw-connect-injected" class="cw-provider-btn primary">Connect Ronin Extension</button>
+        <button type="button" id="cw-connect-walletconnect" class="cw-provider-btn">Connect WalletConnect</button>
+      </div>
+      <div id="cw-provider-hint" class="cw-provider-hint"></div>
       <div id="cw-token-help" class="cw-token-help"></div>
       <div class="cw-modal-actions">
         <button type="button" id="cw-token-close">Close</button>
         <button type="button" id="cw-token-clear">Disconnect</button>
-        <button type="button" id="cw-token-save" class="primary">Connect + Sign In</button>
       </div>
     </div>
   </div>
@@ -2277,21 +2318,109 @@ tr:nth-child(odd) td {
         }
       }
 
-      async function connectWalletAndSignin() {
-        const statusEl = document.getElementById('cw-wallet-status');
-        const help = document.getElementById('cw-token-help');
-        const provider = window.ronin || window.ethereum;
-        if (!provider || !provider.request) {
-          throw new Error('Ronin-compatible wallet provider not found. Install/open Ronin Wallet and try again.');
+      function getInjectedProvider() {
+        if (window.ronin && window.ronin.provider && typeof window.ronin.provider.request === 'function') {
+          return window.ronin.provider;
+        }
+        if (window.ronin && typeof window.ronin.request === 'function') {
+          return window.ronin;
+        }
+        if (window.ethereum && typeof window.ethereum.request === 'function') {
+          return window.ethereum;
+        }
+        return null;
+      }
+
+      function getProviderDisplayName(connectionType) {
+        if (connectionType === 'walletconnect') return 'WalletConnect';
+        return 'wallet extension';
+      }
+
+      function buildRoninChain() {
+        const chainId = Number({{ ronin_chain_id|tojson }} || 2020);
+        const rpcUrl = {{ ronin_rpc_url|tojson }} || 'https://api.roninchain.com/rpc';
+        return {
+          chainId,
+          chainName: chainId === 2020 ? 'Ronin Mainnet' : `Ronin ${chainId}`,
+          nativeCurrency: { name: 'Ronin', symbol: 'RON', decimals: 18 },
+          rpcUrls: [rpcUrl],
+          blockExplorerUrls: [chainId === 2020 ? 'https://app.roninchain.com' : 'https://saigon-app.roninchain.com'],
+        };
+      }
+
+      async function ensureRoninChain(provider) {
+        const chain = buildRoninChain();
+        const targetHex = `0x${Number(chain.chainId).toString(16)}`;
+        try {
+          const current = await provider.request({ method: 'eth_chainId' });
+          if (String(current).toLowerCase() === targetHex.toLowerCase()) return;
+        } catch (_) {
+          // Continue and attempt switch.
         }
 
-        statusEl.textContent = 'Requesting wallet connection...';
+        try {
+          await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: targetHex }] });
+        } catch (switchErr) {
+          const code = Number((switchErr && switchErr.code) || 0);
+          if (code === 4902 || code === -32603) {
+            await provider.request({ method: 'wallet_addEthereumChain', params: [{
+              chainId: targetHex,
+              chainName: chain.chainName,
+              nativeCurrency: chain.nativeCurrency,
+              rpcUrls: chain.rpcUrls,
+              blockExplorerUrls: chain.blockExplorerUrls,
+            }]});
+          } else {
+            throw switchErr;
+          }
+        }
+      }
+
+      async function getWalletConnectProvider() {
+        const projectId = {{ walletconnect_project_id|tojson }};
+        if (!projectId) {
+          throw new Error('WalletConnect is not configured. Set WALLETCONNECT_PROJECT_ID and retry.');
+        }
+        const EthereumProvider = window.WalletConnectEthereumProvider;
+        if (!EthereumProvider || typeof EthereumProvider.init !== 'function') {
+          throw new Error('WalletConnect client failed to load. Refresh and try again.');
+        }
+        const chain = buildRoninChain();
+        const provider = await EthereumProvider.init({
+          projectId,
+          chains: [chain.chainId],
+          optionalChains: [chain.chainId],
+          showQrModal: true,
+          methods: ['eth_sendTransaction', 'personal_sign', 'eth_signTypedData', 'eth_signTypedData_v4'],
+          rpcMap: { [chain.chainId]: chain.rpcUrls[0] },
+        });
+        return provider;
+      }
+
+      async function connectWalletAndSignin(options) {
+        const statusEl = document.getElementById('cw-wallet-status');
+        const help = document.getElementById('cw-token-help');
+        const connectionType = (options && options.connectionType) || 'injected';
+        let provider = null;
+
+        if (connectionType === 'walletconnect') {
+          statusEl.textContent = 'Opening WalletConnect...';
+          provider = await getWalletConnectProvider();
+        } else {
+          provider = getInjectedProvider();
+          if (!provider) {
+            throw new Error('No injected wallet provider found. Install Ronin extension or use WalletConnect.');
+          }
+        }
+
+        statusEl.textContent = `Connecting via ${getProviderDisplayName(connectionType)}...`;
         const accounts = await provider.request({ method: 'eth_requestAccounts' });
         const walletAddress = (accounts && accounts[0]) ? String(accounts[0]).toLowerCase() : '';
         if (!walletAddress) {
           throw new Error('No wallet address returned by provider.');
         }
 
+        await ensureRoninChain(provider);
         statusEl.textContent = `Connected ${shortWallet(walletAddress)}. Requesting nonce...`;
         const nonceRes = await fetch('/api/cw/get_nonce', {
           method: 'POST',
@@ -2350,9 +2479,19 @@ tr:nth-child(odd) td {
         const connectBtn = document.getElementById('cw-connect-btn');
         const statusEl = document.getElementById('cw-wallet-status');
         const help = document.getElementById('cw-token-help');
+        const providerHint = document.getElementById('cw-provider-hint');
         const closeBtn = document.getElementById('cw-token-close');
         const clearBtn = document.getElementById('cw-token-clear');
-        const saveBtn = document.getElementById('cw-token-save');
+        const injectedBtn = document.getElementById('cw-connect-injected');
+        const walletConnectBtn = document.getElementById('cw-connect-walletconnect');
+
+        function refreshProviderState() {
+          const injected = getInjectedProvider();
+          if (injectedBtn) injectedBtn.disabled = !injected;
+          if (providerHint) {
+            providerHint.textContent = injected ? '' : 'Install Ronin extension or use WalletConnect.';
+          }
+        }
 
         function openModal() {
           if (!modal) return;
@@ -2367,6 +2506,7 @@ tr:nth-child(odd) td {
             statusEl.textContent = 'Disconnected';
           }
           help.textContent = '';
+          refreshProviderState();
         }
 
         function closeModal() {
@@ -2382,17 +2522,33 @@ tr:nth-child(odd) td {
           });
         }
 
-        if (saveBtn) {
-          saveBtn.addEventListener('click', async () => {
-            try {
-              help.textContent = '';
-              await connectWalletAndSignin();
-              await fetchAccountStatus();
-            } catch (err) {
-              const message = String(err && err.message ? err.message : err);
-              help.textContent = message;
+        async function runConnect(connectionType) {
+          try {
+            help.textContent = '';
+            await connectWalletAndSignin({ connectionType });
+            await fetchAccountStatus();
+          } catch (err) {
+            const message = String(err && err.message ? err.message : err);
+            help.textContent = message;
+            if (connectionType === 'walletconnect') {
+              showBanner('WalletConnect failed. Please retry the QR flow.', { error: message, raw: lastErrorRaw });
+            } else if (message.toLowerCase().includes('provider')) {
+              showBanner('No injected provider found. Use WalletConnect or install Ronin extension.', null);
+            } else {
               showBanner('Wallet sign-in failed.', { error: message, raw: lastErrorRaw });
             }
+          }
+        }
+
+        if (injectedBtn) {
+          injectedBtn.addEventListener('click', async () => {
+            await runConnect('injected');
+          });
+        }
+
+        if (walletConnectBtn) {
+          walletConnectBtn.addEventListener('click', async () => {
+            await runConnect('walletconnect');
           });
         }
 
@@ -10356,7 +10512,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
