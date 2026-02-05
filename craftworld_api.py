@@ -7,6 +7,46 @@ import requests
 GRAPHQL_URL = "https://craft-world.gg/graphql"
 
 
+def call_graphql_with_jwt(jwt_token: str, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Low-level helper to call Craft World's GraphQL API with a provided JWT.
+    Returns the full decoded response JSON.
+    """
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Content-Type": "application/json",
+        # IMPORTANT: must be >= minAppVersion from server (currently 1.6.2)
+        "x-app-version": "1.6.2",
+    }
+
+    payload: Dict[str, Any] = {"query": query}
+    if variables is not None:
+        payload["variables"] = variables
+
+    try:
+        resp = requests.post(GRAPHQL_URL, json=payload, headers=headers, timeout=20)
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e_http:
+        try:
+            err_json = resp.json()
+            raise RuntimeError(
+                f"HTTP {resp.status_code} from Craft World: {e_http}\n"
+                f"Response: {json.dumps(err_json, indent=2)}"
+            ) from e_http
+        except Exception:
+            raise RuntimeError(
+                f"HTTP {resp.status_code} from Craft World: {e_http}\n"
+                f"Raw response: {resp.text}"
+            ) from e_http
+    except Exception as e:
+        raise RuntimeError(f"Network error calling Craft World GraphQL: {e}") from e
+
+    try:
+        return resp.json()
+    except Exception as e_json:
+        raise RuntimeError(f"Invalid JSON from Craft World: {e_json}\nResponse: {resp.text}") from e_json
+
+
 def get_jwt() -> str:
     """
     Read CRAFTWORLD_JWT from the environment.
@@ -32,40 +72,7 @@ def call_graphql(query: str, variables: Optional[Dict[str, Any]] = None) -> Dict
     Low-level helper to call Craft World's GraphQL API with the JWT.
     Returns the `data` field or raises RuntimeError on errors.
     """
-    headers = {
-        "Authorization": f"Bearer {get_jwt()}",
-        "Content-Type": "application/json",
-        # IMPORTANT: must be >= minAppVersion from server (currently 1.6.2)
-        "x-app-version": "1.6.2",
-    }
-
-    payload: Dict[str, Any] = {"query": query}
-    if variables is not None:
-        payload["variables"] = variables
-
-    try:
-        resp = requests.post(GRAPHQL_URL, json=payload, headers=headers, timeout=20)
-        resp.raise_for_status()
-    except requests.exceptions.HTTPError as e_http:
-        # Try to include JSON error details if present
-        try:
-            err_json = resp.json()
-            raise RuntimeError(
-                f"HTTP {resp.status_code} from Craft World: {e_http}\n"
-                f"Response: {json.dumps(err_json, indent=2)}"
-            ) from e_http
-        except Exception:
-            raise RuntimeError(
-                f"HTTP {resp.status_code} from Craft World: {e_http}\n"
-                f"Raw response: {resp.text}"
-            ) from e_http
-    except Exception as e:
-        raise RuntimeError(f"Network error calling Craft World GraphQL: {e}") from e
-
-    try:
-        data = resp.json()
-    except Exception as e_json:
-        raise RuntimeError(f"Invalid JSON from Craft World: {e_json}\nResponse: {resp.text}") from e_json
+    data = call_graphql_with_jwt(get_jwt(), query, variables)
 
     if "errors" in data and data["errors"]:
         raise RuntimeError(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
