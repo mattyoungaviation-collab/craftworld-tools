@@ -130,13 +130,9 @@ def fetch_proficiencies(bearer_token: Optional[str] = None) -> dict[str, dict]:
       }
     """
     query = """
-    query AccountProficiencies {
+    query {
       account {
-        proficiencies {
-          symbol
-          collectedAmount
-          claimedLevel
-        }
+        proficiencies { symbol collectedAmount claimedLevel }
       }
     }
     """
@@ -222,12 +218,9 @@ def fetch_workshop_levels(bearer_token: Optional[str] = None) -> dict[str, int]:
       }
     """
     query = """
-    query AccountWorkshop {
+    query {
       account {
-        workshop {
-          symbol
-          level
-        }
+        workshop { symbol level }
       }
     }
     """
@@ -540,7 +533,6 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
-
 
 
 
