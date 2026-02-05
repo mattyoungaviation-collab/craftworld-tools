@@ -1096,6 +1096,10 @@ BASE_TEMPLATE = """
   <title>CraftWorld Tools.Live</title>
   <!-- Make it mobile friendly -->
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    // WalletConnect's UMD bundle expects a browser-safe `process` global in some environments.
+    window.process = window.process || { env: {}, browser: true };
+  </script>
   <script src="https://unpkg.com/@walletconnect/ethereum-provider@2.17.1/dist/index.umd.js"></script>
   <style>
     :root {
@@ -2526,7 +2530,7 @@ tr:nth-child(odd) td {
           refillMs = 0;
           render(undefined, 0, true);
           emitAccountState(false, null);
-          showBanner('Couldn't fetch boosts. Retry.');
+          showBanner("Couldn't fetch boosts. Retry.");
         }
       }
       function getEip1193Provider() {
@@ -2696,12 +2700,24 @@ tr:nth-child(odd) td {
         const refreshBtn = document.getElementById('cw-refresh-btn');
         const injectedBtn = document.getElementById('cw-connect-injected');
         const walletConnectBtn = document.getElementById('cw-connect-walletconnect');
+        const walletConnectProjectId = {{ walletconnect_project_id|tojson }};
 
         function refreshProviderState() {
           const injected = getInjectedProvider();
           if (injectedBtn) injectedBtn.disabled = !injected;
+          if (walletConnectBtn) {
+            const configured = Boolean(walletConnectProjectId);
+            walletConnectBtn.disabled = !configured;
+            walletConnectBtn.title = configured ? '' : 'WalletConnect is unavailable: WALLETCONNECT_PROJECT_ID is not configured.';
+            if (!configured && help) {
+              help.textContent = 'WalletConnect is unavailable. Set WALLETCONNECT_PROJECT_ID in Render environment variables.';
+            }
+          }
           if (providerHint) {
             providerHint.textContent = injected ? '' : 'Install Ronin extension or use WalletConnect.';
+            if (!walletConnectProjectId) {
+              providerHint.textContent = 'WalletConnect disabled: missing WALLETCONNECT_PROJECT_ID.';
+            }
           }
         }
 
@@ -2784,6 +2800,12 @@ tr:nth-child(odd) td {
 
         if (walletConnectBtn) {
           walletConnectBtn.addEventListener('click', async () => {
+            if (!walletConnectProjectId) {
+              const message = 'WalletConnect is unavailable. Set WALLETCONNECT_PROJECT_ID and redeploy.';
+              help.textContent = message;
+              showBanner(message);
+              return;
+            }
             await runConnect('walletconnect');
           });
         }
@@ -10977,7 +10999,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
