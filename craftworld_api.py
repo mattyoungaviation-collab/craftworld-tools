@@ -1,10 +1,20 @@
 import os
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 import requests
 
 GRAPHQL_URL = "https://craft-world.gg/graphql"
+LOGGER = logging.getLogger(__name__)
+
+
+def _mask_token(token: Optional[str]) -> str:
+    if not token:
+        return "<missing>"
+    if len(token) <= 16:
+        return token[:4] + "..."
+    return f"{token[:10]}...{token[-6:]}"
 
 
 def call_graphql_with_jwt(jwt_token: str, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -67,14 +77,26 @@ def get_jwt() -> str:
     return token
 
 
-def call_graphql(query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def call_graphql(
+    query: str,
+    variables: Optional[Dict[str, Any]] = None,
+    bearer_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Low-level helper to call Craft World's GraphQL API with the JWT.
     Returns the `data` field or raises RuntimeError on errors.
     """
-    data = call_graphql_with_jwt(get_jwt(), query, variables)
+    jwt_token = bearer_token if bearer_token else get_jwt()
+    if bearer_token:
+        LOGGER.debug(
+            "call_graphql using per-user bearer token (len=%s, token=%s)",
+            len(bearer_token),
+            _mask_token(bearer_token),
+        )
+    data = call_graphql_with_jwt(jwt_token, query, variables)
 
     if "errors" in data and data["errors"]:
+        LOGGER.warning("GraphQL upstream errors: %s", json.dumps(data["errors"], ensure_ascii=False))
         raise RuntimeError(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
 
     if "data" not in data:
@@ -83,7 +105,7 @@ def call_graphql(query: str, variables: Optional[Dict[str, Any]] = None) -> Dict
     return data["data"]
 
 
-def fetch_proficiencies() -> dict[str, dict]:
+def fetch_proficiencies(bearer_token: Optional[str] = None) -> dict[str, dict]:
     """
     Fetch account proficiencies (mastery) for all symbols.
 
@@ -106,7 +128,7 @@ def fetch_proficiencies() -> dict[str, dict]:
     }
     """
 
-    data = call_graphql(query, None)
+    data = call_graphql(query, None, bearer_token=bearer_token)
     account = data.get("account") or {}
     profs = account.get("proficiencies") or []
 
@@ -148,7 +170,7 @@ def fetch_profile_by_uid(uid: str) -> Dict[str, Any]:
 
 
 # 👇👇 ADD THIS BLOCK *RIGHT HERE* 👇👇
-def fetch_available_avatars() -> List[Dict[str, Any]]:
+def fetch_available_avatars(bearer_token: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Fetch the list of avatars available for the current account.
 
@@ -168,13 +190,13 @@ def fetch_available_avatars() -> List[Dict[str, Any]]:
       }
     }
     """
-    data = call_graphql(query, None)
+    data = call_graphql(query, None, bearer_token=bearer_token)
     account = data.get("account") or {}
     return account.get("availableAvatars") or []
 # 👆👆 END NEW BLOCK 👆👆
 
 
-def fetch_workshop_levels() -> dict[str, int]:
+def fetch_workshop_levels(bearer_token: Optional[str] = None) -> dict[str, int]:
     """
     Fetch workshop levels for all workshop-enabled resources.
 
@@ -197,7 +219,7 @@ def fetch_workshop_levels() -> dict[str, int]:
     }
     """
 
-    data = call_graphql(query, None)
+    data = call_graphql(query, None, bearer_token=bearer_token)
     account = data.get("account") or {}
     ws_list = account.get("workshop") or []
 
@@ -211,23 +233,7 @@ def fetch_workshop_levels() -> dict[str, int]:
     return result
 
 
-    data = call_graphql(query, None)
-    account = data.get("account") or {}
-    ws_list = account.get("workshop") or []
-
-    result: dict[str, int] = {}
-    for w in ws_list:
-        symbol = (w.get("symbol") or "").upper()
-        if not symbol:
-            continue
-        level = int(w.get("level") or 0)
-        result[symbol] = level
-    return result
-
-
-
-
-def fetch_account_status() -> Dict[str, Any]:
+def fetch_account_status(bearer_token: Optional[str] = None) -> Dict[str, Any]:
     """Fetch account power/refill status for the currently authenticated user."""
     query = """
     query AccountStatus {
@@ -240,7 +246,7 @@ def fetch_account_status() -> Dict[str, Any]:
     }
     """
 
-    data = call_graphql(query, None)
+    data = call_graphql(query, None, bearer_token=bearer_token)
     account = data.get("account") or {}
     return {
         "power": int(account.get("power") or 0),
@@ -474,20 +480,6 @@ MASTERPIECE_DETAILS_QUERY = """
                 }
             }
             startedAt
-            profileByUserId(userId: "GfUeRBCZv8OwuUKq7Tu9JVpA70l1") {
-                position
-                masterpiecePoints
-                profile {
-                    uid
-                    walletAddress
-                    avatarUrl
-                    displayName
-                }
-            }
-            resourcesByUserId(userId: "GfUeRBCZv8OwuUKq7Tu9JVpA70l1") {
-                symbol
-                amount
-            }
         }
     }
 """
@@ -535,7 +527,6 @@ def predict_reward(masterpiece_id: int | str, resources: List[Dict[str, Any]]) -
     mp = data.get("masterpiece") or {}
     pr = mp.get("predictReward") or {}
     return pr
-
 
 
 

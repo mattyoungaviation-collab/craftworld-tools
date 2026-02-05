@@ -20,6 +20,7 @@ from craftworld_api import (
     fetch_workshop_levels,
     fetch_profile_by_uid,
     fetch_available_avatars,
+    fetch_account_status,
 )
 
 
@@ -82,6 +83,14 @@ def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
     return None
 
 
+def _get_request_cw_token() -> Optional[str]:
+    token = _extract_bearer_token(request.headers.get("Authorization"))
+    if token:
+        return token
+    fallback = (request.args.get("cw_idToken") or "").strip()
+    return fallback or None
+
+
 def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, bearer_token: Optional[str] = None) -> Dict[str, Any]:
     headers = {
         "Content-Type": "application/json",
@@ -107,26 +116,12 @@ def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, 
     }
 
 
-def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
-    now = time.time()
-    key = _token_cache_key(jwt_token)
-    cached_entry = ACCOUNT_STATUS_CACHE.get(key) or {}
-    cached_payload = cached_entry.get("value")
-    cached_ts = float(cached_entry.get("ts") or 0.0)
-    if cached_payload and (now - cached_ts) < ACCOUNT_STATUS_CACHE_TTL:
-        return dict(cached_payload)
-
-    query = """
-    query AccountStatus {
-      account {
-        power
-        powerMillisecondsUntilRefill
-        powerLastRefill
-        updatedAt
-        wallets { address primary }
-      }
-    }
-    """
+def _mask_token(token: Optional[str]) -> str:
+    if not token:
+        return "<missing>"
+    if len(token) <= 16:
+        return token[:4] + "..."
+    return f"{token[:10]}...{token[-6:]}"
 
 
 def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
@@ -138,20 +133,20 @@ def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
     if cached_payload and (now - cached_ts) < ACCOUNT_STATUS_CACHE_TTL:
         return dict(cached_payload)
 
-    query = """
-    query AccountStatus {
-      account {
-        power
-        powerMillisecondsUntilRefill
-        powerLastRefill
-        updatedAt
-      }
-    }
-    """
+    app.logger.debug(
+        "Account status token present=%s len=%s token=%s",
+        bool(jwt_token),
+        len(jwt_token or ""),
+        _mask_token(jwt_token),
+    )
+
     response_payload: Dict[str, Any]
     try:
-        upstream = _cw_graphql_request(query=query, variables=None, bearer_token=jwt_token)
+        account = fetch_account_status(bearer_token=jwt_token)
     except Exception as exc:
+        err_text = str(exc)
+        if "GraphQL errors:" in err_text:
+            app.logger.warning("Craft World GraphQL error for /api/account_status: %s", err_text)
         response_payload = {
             "ok": False,
             "auth": "missing_or_invalid",
@@ -162,43 +157,14 @@ def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
             "primaryWallet": None,
             "powerLastRefill": None,
             "updatedAt": None,
-            "error": f"Network error calling Craft World: {exc}",
+            "error": f"Craft World auth failed: {err_text}",
             "rawErrors": [],
-        }
-        ACCOUNT_STATUS_CACHE[key] = {"ts": now, "value": dict(response_payload)}
-        return response_payload
-
-    body = upstream.get("body") if isinstance(upstream, dict) else {}
-    raw_errors = body.get("errors") if isinstance(body, dict) else None
-    account = ((body.get("data") or {}).get("account") if isinstance(body, dict) else None) or {}
-
-    if (not upstream.get("ok")) or raw_errors or (not account):
-        response_payload = {
-            "ok": False,
-            "auth": "missing_or_invalid",
-            "power": None,
-            "msUntilRefill": None,
-            "refillSeconds": None,
-            "refillHMS": None,
-            "primaryWallet": None,
-            "powerLastRefill": None,
-            "updatedAt": None,
-            "error": "Craft World auth failed.",
-            "rawErrors": raw_errors or [],
         }
         ACCOUNT_STATUS_CACHE[key] = {"ts": now, "value": dict(response_payload)}
         return response_payload
 
     ms = int(account.get("powerMillisecondsUntilRefill") or 0)
     refill_seconds = max(0, ms // 1000)
-    wallets = account.get("wallets") or []
-    primary_wallet = None
-    for w in wallets:
-        if w.get("primary"):
-            primary_wallet = w.get("address")
-            break
-    if not primary_wallet and wallets:
-        primary_wallet = wallets[0].get("address")
 
     response_payload = {
         "ok": True,
@@ -207,7 +173,7 @@ def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
         "msUntilRefill": ms,
         "refillSeconds": refill_seconds,
         "refillHMS": _format_hms_from_seconds(refill_seconds),
-        "primaryWallet": primary_wallet,
+        "primaryWallet": None,
         "powerLastRefill": account.get("powerLastRefill"),
         "updatedAt": account.get("updatedAt"),
     }
@@ -4345,10 +4311,15 @@ def api_cw_signin_with_custom_token():
 
 @app.route("/api/account_status", methods=["GET"])
 def api_account_status():
-    incoming_auth = request.headers.get("Authorization")
-    jwt_token = _extract_bearer_token(incoming_auth)
-    if not jwt_token:
-        jwt_token = (request.args.get("cw_idToken") or "").strip() or None
+    jwt_token = _get_request_cw_token()
+
+    app.logger.debug(
+        "/api/account_status token present=%s len=%s token=%s",
+        bool(jwt_token),
+        len(jwt_token or ""),
+        _mask_token(jwt_token),
+    )
+
     if not jwt_token:
         return jsonify({
             "ok": False,
@@ -4358,7 +4329,7 @@ def api_account_status():
             "refillSeconds": None,
             "refillHMS": None,
             "primaryWallet": None,
-            "error": "Missing Authorization Bearer token.",
+            "error": "Missing idToken",
             "rawErrors": [],
         })
 
@@ -6095,8 +6066,9 @@ def mastery_view():
     rows: List[dict] = []
 
     try:
-        profs = fetch_proficiencies()       # { "MUD": {"collectedAmount": ..., "claimedLevel": ...}, ... }
-        ws_levels = fetch_workshop_levels() # { "MUD": 2, "CLAY": 5, ... }
+        bearer_token = _get_request_cw_token()
+        profs = fetch_proficiencies(bearer_token=bearer_token)       # { "MUD": {"collectedAmount": ..., "claimedLevel": ...}, ... }
+        ws_levels = fetch_workshop_levels(bearer_token=bearer_token) # { "MUD": 2, "CLAY": 5, ... }
 
         symbols = sorted(set(list(profs.keys()) + list(ws_levels.keys())))
 
