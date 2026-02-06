@@ -2159,6 +2159,7 @@ tr:nth-child(odd) td {
       const CW_SESSION_INDEX_KEY = 'cw_sessions';
       const CW_ACTIVE_WALLET_KEY = 'cw_active_wallet';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
+      const CONNECTION_TYPE_KEY = 'cw_connection_type';
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
@@ -2319,7 +2320,11 @@ tr:nth-child(odd) td {
         try {
           const accounts = await provider.request({ method: 'eth_accounts' });
           return normalizeWalletAddress((accounts && accounts[0]) ? accounts[0] : '');
-        } catch (_) {
+        } catch (err) {
+          const message = String(err && err.message ? err.message : err || '').toLowerCase();
+          if (message.includes('receiving end does not exist') || message.includes('runtime.lasterror')) {
+            return '';
+          }
           return '';
         }
       }
@@ -2358,19 +2363,19 @@ tr:nth-child(odd) td {
       }
 
       async function disconnectActiveWalletProvider() {
-        if (!activeWalletProvider) {
-          clearWalletConnectCache();
-          return;
-        }
+        const connectionType = String(localStorage.getItem(CONNECTION_TYPE_KEY) || '').trim().toLowerCase();
+        const provider = activeWalletProvider;
 
-        try {
-          if (typeof activeWalletProvider.disconnect === 'function') {
-            await activeWalletProvider.disconnect();
-          } else if (typeof activeWalletProvider.close === 'function') {
-            await activeWalletProvider.close();
+        if (provider && connectionType === 'walletconnect') {
+          try {
+            if (typeof provider.disconnect === 'function') {
+              await provider.disconnect();
+            } else if (typeof provider.close === 'function') {
+              await provider.close();
+            }
+          } catch (_) {
+            // Ignore provider-level disconnect failures and continue local cleanup.
           }
-        } catch (_) {
-          // Ignore provider-level disconnect failures and continue local cleanup.
         }
 
         clearWalletConnectCache();
@@ -2389,6 +2394,7 @@ tr:nth-child(odd) td {
         localStorage.removeItem(CW_ACTIVE_WALLET_KEY);
         localStorage.removeItem(CW_SESSION_INDEX_KEY);
         localStorage.removeItem(ACCOUNT_STATUS_KEY);
+        localStorage.removeItem(CONNECTION_TYPE_KEY);
       }
 
       function isSessionExpired(session) {
@@ -2894,6 +2900,7 @@ tr:nth-child(odd) td {
         localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
+        localStorage.setItem(CONNECTION_TYPE_KEY, connectionType);
 
         await syncBoostsOnSignin(walletAddress);
 
