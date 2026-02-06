@@ -2673,6 +2673,11 @@ tr:nth-child(odd) td {
           showBanner("Couldn't fetch boosts. Retry.");
         }
       }
+
+      async function fetchAccountStatus() {
+        return refreshAccountStatusOnce();
+      }
+
       function getEip1193Provider() {
         const provider = (window.ronin && (window.ronin.provider || window.ronin.ethereum)) || window.ethereum || null;
         if (provider && typeof provider.request === 'function') {
@@ -2820,7 +2825,7 @@ tr:nth-child(odd) td {
         const expiresIn = Number(signinData.expiresIn || 0);
         const expiresAt = Date.now() + (Math.max(0, expiresIn) * 1000);
         localStorage.setItem(ID_TOKEN_KEY, signinData.idToken);
-        localStorage.setItem(CW_TOKEN_KEY, `jwt_${signinData.idToken}`);
+        localStorage.setItem(CW_TOKEN_KEY, signinData.idToken);
         localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
@@ -7070,7 +7075,7 @@ def boosts():
             if ((workshopData.auth === 'missing_or_invalid') || (profData.auth === 'missing_or_invalid')) {
               setBanner('Session expired. Reconnect.');
             } else {
-              setBanner('Couldn't fetch boosts. Retry.');
+              setBanner("Couldn't fetch boosts. Retry.");
             }
             return null;
           }
