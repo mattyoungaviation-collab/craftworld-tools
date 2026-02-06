@@ -9,6 +9,12 @@ from factories import FACTORIES_FROM_CSV, MASTERY_BONUSES, WORKSHOP_MODIFIERS
 
 BASE_SYMBOLS = {"EARTH", "WATER", "FIRE", "COIN"}
 
+CRAFTING_CHAINS: Dict[str, List[str]] = {
+    "EARTH ➜ SCREWS": ["EARTH", "MUD", "CLAY", "SAND", "COPPER", "STEEL", "SCREWS"],
+    "WATER ➜ OIL": ["WATER", "SEAWATER", "ALGAE", "OXYGEN", "GAS", "FUEL", "OIL"],
+    "FIRE ➜ LAVA": ["FIRE", "HEAT", "LAVA"],
+}
+
 CANONICAL_GRAPH: Dict[str, List[str]] = {
     "MUD": ["EARTH"],
     "CLAY": ["MUD"],
@@ -338,3 +344,116 @@ def rank_opportunities(
     }
     sort_key = key_map.get(objective, key_map["profit_per_power"])
     return sorted(plans, key=sort_key, reverse=True)
+
+
+def build_chain_report(
+    chain_name: str,
+    chain_symbols: List[str],
+    prices: Dict[str, float],
+    modifiers: Optional[Modifiers] = None,
+    start_amount: float = 1.0,
+    input_prices: Optional[Dict[str, float]] = None,
+    output_prices: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+    modifiers = modifiers or DEFAULT_MODIFIERS
+    recipe_index, _ = build_recipe_index()
+    input_prices = input_prices or prices
+    output_prices = output_prices or prices
+
+    if len(chain_symbols) < 2:
+        return {"name": chain_name, "stages": [], "error": "Chain must contain at least two symbols."}
+
+    current_symbol = chain_symbols[0].upper()
+    current_amount = max(float(start_amount), 1e-9)
+    current_book_cost = current_amount * float(input_prices.get(current_symbol, prices.get(current_symbol, 0.0)) or 0.0)
+
+    stages: List[Dict[str, Any]] = []
+    total_seconds = 0.0
+    total_power = 0.0
+
+    for next_symbol_raw in chain_symbols[1:]:
+        next_symbol = next_symbol_raw.upper()
+        recipe = recipe_index.get(next_symbol)
+        if not recipe:
+            return {"name": chain_name, "stages": stages, "error": f"Missing recipe for {next_symbol}."}
+
+        eff = get_effective_recipe(recipe, modifiers)
+        prev_input = next((inp for inp in eff.inputs if inp.symbol == current_symbol), None)
+        if prev_input is None or prev_input.qty <= 0:
+            return {
+                "name": chain_name,
+                "stages": stages,
+                "error": f"{next_symbol} does not directly consume {current_symbol}.",
+            }
+
+        crafts = current_amount / prev_input.qty
+        output_amount = crafts * eff.outputQty
+
+        other_inputs_cost = 0.0
+        for inp in eff.inputs:
+            if inp.symbol == current_symbol:
+                continue
+            other_inputs_cost += inp.qty * crafts * float(input_prices.get(inp.symbol, prices.get(inp.symbol, 0.0)) or 0.0)
+
+        input_price = float(input_prices.get(current_symbol, prices.get(current_symbol, 0.0)) or 0.0)
+        stage_input_cost = current_amount * input_price + other_inputs_cost
+        output_price = float(output_prices.get(next_symbol, prices.get(next_symbol, 0.0)) or 0.0)
+        output_value = output_amount * output_price
+        stage_profit = output_value - stage_input_cost
+        stage_roi = stage_profit / stage_input_cost if stage_input_cost > 0 else 0.0
+
+        current_book_cost += other_inputs_cost
+        cumulative_profit = output_value - current_book_cost
+        cumulative_roi = cumulative_profit / current_book_cost if current_book_cost > 0 else 0.0
+
+        stage_seconds = crafts * eff.craftSeconds
+        stage_power = crafts * eff.powerCost
+        total_seconds += stage_seconds
+        total_power += stage_power
+
+        stages.append(
+            {
+                "from": current_symbol,
+                "to": next_symbol,
+                "input_amount": current_amount,
+                "input_price": input_price,
+                "input_cost": current_amount * input_price,
+                "other_input_cost": other_inputs_cost,
+                "total_stage_input_cost": stage_input_cost,
+                "output_amount": output_amount,
+                "output_price": output_price,
+                "output_value": output_value,
+                "stage_profit": stage_profit,
+                "stage_roi": stage_roi,
+                "cumulative_cost": current_book_cost,
+                "cumulative_profit": cumulative_profit,
+                "cumulative_roi": cumulative_roi,
+                "crafts": crafts,
+                "seconds": stage_seconds,
+                "power": stage_power,
+            }
+        )
+
+        current_symbol = next_symbol
+        current_amount = output_amount
+
+    final_value = current_amount * float(output_prices.get(current_symbol, prices.get(current_symbol, 0.0)) or 0.0)
+    total_profit = final_value - current_book_cost
+    total_roi = total_profit / current_book_cost if current_book_cost > 0 else 0.0
+
+    return {
+        "name": chain_name,
+        "symbols": [s.upper() for s in chain_symbols],
+        "start_symbol": chain_symbols[0].upper(),
+        "start_amount": start_amount,
+        "end_symbol": current_symbol,
+        "end_amount": current_amount,
+        "total_cost": current_book_cost,
+        "total_value": final_value,
+        "total_profit": total_profit,
+        "total_roi": total_roi,
+        "total_seconds": total_seconds,
+        "total_power": total_power,
+        "stages": stages,
+        "error": None,
+    }
