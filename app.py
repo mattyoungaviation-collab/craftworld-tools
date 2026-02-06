@@ -5044,9 +5044,36 @@ def craft_profitability():
         globalSpeedMultiplier=1.0,
     )
 
+    chain_symbols = sorted({sym.upper() for chain in CRAFTING_CHAINS.values() for sym in chain})
+    quote_map: Dict[str, Dict[str, float]] = {}
+    try:
+        quote_map = fetch_buy_sell_for_profitability(chain_symbols)
+    except Exception:
+        quote_map = {}
+
+    input_price_book: Dict[str, float] = {}
+    output_price_book: Dict[str, float] = {}
+    for sym in chain_symbols:
+        rec = quote_map.get(sym, {})
+        sell_px = rec.get("SELL")
+        buy_px = rec.get("BUY")
+        fallback = prices.get(sym, 0.0)
+        output_price_book[sym] = float(sell_px if sell_px is not None else (buy_px if buy_px is not None else fallback))
+        input_price_book[sym] = float(buy_px if buy_px is not None else (sell_px if sell_px is not None else fallback))
+
     reports = []
     for name in selected_chains:
-        reports.append(build_chain_report(name, CRAFTING_CHAINS[name], prices, modifiers=modifiers, start_amount=start_amount))
+        reports.append(
+            build_chain_report(
+                name,
+                CRAFTING_CHAINS[name],
+                prices,
+                modifiers=modifiers,
+                start_amount=start_amount,
+                input_prices=input_price_book,
+                output_prices=output_price_book,
+            )
+        )
 
     leaderboard = sorted(
         [r for r in reports if not r.get("error")],
@@ -5093,7 +5120,7 @@ def craft_profitability():
 
     <div class="card cc-card">
       <h1>🔗 Crafting Chains</h1>
-      <p class="subtle">Track each stage in your 1-resource chain with input price, output price, stage ROI, and total chain ROI using live prices plus your saved Mastery/Workshop boosts.</p>
+      <p class="subtle">Track each stage in your 1-resource chain with live BUY-driven input costs and SELL-driven output values (same quote model as Profitability), plus your saved Mastery/Workshop boosts.</p>
       <form method="GET" action="{{ url_for('craft_profitability') }}">
         <div class="cc-controls">
           <div>

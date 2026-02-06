@@ -352,16 +352,20 @@ def build_chain_report(
     prices: Dict[str, float],
     modifiers: Optional[Modifiers] = None,
     start_amount: float = 1.0,
+    input_prices: Optional[Dict[str, float]] = None,
+    output_prices: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     modifiers = modifiers or DEFAULT_MODIFIERS
     recipe_index, _ = build_recipe_index()
+    input_prices = input_prices or prices
+    output_prices = output_prices or prices
 
     if len(chain_symbols) < 2:
         return {"name": chain_name, "stages": [], "error": "Chain must contain at least two symbols."}
 
     current_symbol = chain_symbols[0].upper()
     current_amount = max(float(start_amount), 1e-9)
-    current_book_cost = current_amount * float(prices.get(current_symbol, 0.0) or 0.0)
+    current_book_cost = current_amount * float(input_prices.get(current_symbol, prices.get(current_symbol, 0.0)) or 0.0)
 
     stages: List[Dict[str, Any]] = []
     total_seconds = 0.0
@@ -389,10 +393,11 @@ def build_chain_report(
         for inp in eff.inputs:
             if inp.symbol == current_symbol:
                 continue
-            other_inputs_cost += inp.qty * crafts * float(prices.get(inp.symbol, 0.0) or 0.0)
+            other_inputs_cost += inp.qty * crafts * float(input_prices.get(inp.symbol, prices.get(inp.symbol, 0.0)) or 0.0)
 
-        stage_input_cost = current_amount * float(prices.get(current_symbol, 0.0) or 0.0) + other_inputs_cost
-        output_price = float(prices.get(next_symbol, 0.0) or 0.0)
+        input_price = float(input_prices.get(current_symbol, prices.get(current_symbol, 0.0)) or 0.0)
+        stage_input_cost = current_amount * input_price + other_inputs_cost
+        output_price = float(output_prices.get(next_symbol, prices.get(next_symbol, 0.0)) or 0.0)
         output_value = output_amount * output_price
         stage_profit = output_value - stage_input_cost
         stage_roi = stage_profit / stage_input_cost if stage_input_cost > 0 else 0.0
@@ -411,8 +416,8 @@ def build_chain_report(
                 "from": current_symbol,
                 "to": next_symbol,
                 "input_amount": current_amount,
-                "input_price": float(prices.get(current_symbol, 0.0) or 0.0),
-                "input_cost": current_amount * float(prices.get(current_symbol, 0.0) or 0.0),
+                "input_price": input_price,
+                "input_cost": current_amount * input_price,
                 "other_input_cost": other_inputs_cost,
                 "total_stage_input_cost": stage_input_cost,
                 "output_amount": output_amount,
@@ -432,7 +437,7 @@ def build_chain_report(
         current_symbol = next_symbol
         current_amount = output_amount
 
-    final_value = current_amount * float(prices.get(current_symbol, 0.0) or 0.0)
+    final_value = current_amount * float(output_prices.get(current_symbol, prices.get(current_symbol, 0.0)) or 0.0)
     total_profit = final_value - current_book_cost
     total_roi = total_profit / current_book_cost if current_book_cost > 0 else 0.0
 
