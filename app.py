@@ -5018,9 +5018,15 @@ def craft_profitability():
     target_qty = float(request.args.get("target_qty") or 1)
     power_budget_raw = request.args.get("power_budget")
     if power_budget_raw is None or str(power_budget_raw).strip() == "":
-        power_budget = float(status.get("power") or 0)
+        if status.get("auth") == "ok":
+            power_budget = float(status.get("power") or 0)
+            power_budget_input = str(int(power_budget)) if float(power_budget).is_integer() else str(power_budget)
+        else:
+            power_budget = None
+            power_budget_input = ""
     else:
         power_budget = float(power_budget_raw)
+        power_budget_input = str(power_budget_raw)
     time_budget_hours_raw = request.args.get("time_budget_hours")
     time_budget_seconds = None
     if time_budget_hours_raw:
@@ -5047,6 +5053,8 @@ def craft_profitability():
     )[:10]
 
     selected = (request.args.get("selected") or (ranked[0]["targetSymbol"] if ranked else "")).upper()
+    selected_aliases = {"SCREW": "SCREWS"}
+    selected = selected_aliases.get(selected, selected)
     plan = None
     if selected:
         plan = plan_craft(
@@ -5162,7 +5170,7 @@ def craft_profitability():
           <div>
             <label>Power budget</label>
             <div class="cp-power-input">
-              <input type="number" step="1" min="0" name="power_budget" id="power-budget" value="{{ power_budget|int }}">
+              <input type="number" step="1" min="0" name="power_budget" id="power-budget" value="{{ power_budget }}">
               <button type="button" id="use-current-power">Use current power</button>
             </div>
           </div>
@@ -5294,7 +5302,7 @@ def craft_profitability():
             objective=objective,
             selected=selected,
             target_qty=target_qty,
-            power_budget=power_budget,
+            power_budget=power_budget_input,
             time_budget_hours=time_budget_hours_raw,
             start_bases_csv=",".join(start_bases),
             start_bases=start_bases,
@@ -7206,8 +7214,7 @@ def boosts():
 
         async function syncBoostsFromCraftWorld(walletHint) {
           const storedWallet = getStoredActiveWallet();
-          const detectedWallet = await detectConnectedWallet();
-          const wallet = normalizeWallet(walletHint || storedWallet || detectedWallet);
+          const wallet = normalizeWallet(walletHint || storedWallet);
           const token = getTokenForWalletOrLegacy(wallet);
           if (!token) {
             setBanner('Not connected. Connect Ronin Wallet.');
@@ -7274,8 +7281,7 @@ def boosts():
           const autoBtn = document.getElementById('cw-boosts-autofill');
           const refreshBtn = document.getElementById('cw-boosts-refresh');
           const storedWallet = getStoredActiveWallet();
-          const detectedWallet = await detectConnectedWallet();
-          const wallet = normalizeWallet(storedWallet || detectedWallet);
+          const wallet = normalizeWallet(storedWallet);
           const token = getTokenForWalletOrLegacy(wallet);
 
           if (!token) {
