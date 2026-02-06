@@ -81,13 +81,13 @@ def build_recipe_index() -> Tuple[Dict[str, Recipe], List[str]]:
         lvl = min(levels.keys())
         row = levels[lvl]
         inputs = [RecipeInput(symbol=sym.upper(), qty=_safe_float(qty, 0.0)) for sym, qty in (row.get("inputs") or {}).items()]
+        required_power = _safe_float(row.get("required_power"), 0.0)
         recipe = Recipe(
             outputSymbol=(row.get("output_token") or token).upper(),
             outputQty=max(_safe_float(row.get("output_amount"), 1.0), 1e-9),
             inputs=inputs,
             craftSeconds=max(_safe_float(row.get("duration_min"), 0.0) * 60.0, 0.0),
-            # CSV has no explicit power, use stable placeholder and mark incomplete via warnings.
-            powerCost=max(sum(i.qty for i in inputs), 1.0),
+            powerCost=(required_power if required_power > 0 else max(sum(i.qty for i in inputs), 1.0)),
             level=int(lvl),
         )
         index[recipe.outputSymbol] = recipe
@@ -320,9 +320,14 @@ def rank_opportunities(
             refill_seconds=0,
         )
         totals = plan["totals"]
-        if power_budget is not None and totals["power"] > power_budget and objective == "total_profit":
+        missing = plan.get("missing") or {}
+        if (missing.get("prices") or missing.get("recipes")):
             continue
-        if time_budget_seconds is not None and totals["seconds"] > time_budget_seconds and objective == "total_profit":
+        if float(prices.get(symbol.upper(), 0.0) or 0.0) <= 0:
+            continue
+        if power_budget is not None and totals["power"] > power_budget:
+            continue
+        if time_budget_seconds is not None and totals["seconds"] > time_budget_seconds:
             continue
         plans.append(plan)
 
