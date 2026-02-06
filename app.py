@@ -7075,7 +7075,7 @@ def boosts():
             if ((workshopData.auth === 'missing_or_invalid') || (profData.auth === 'missing_or_invalid')) {
               setBanner('Session expired. Reconnect.');
             } else {
-              setBanner('Couldn't fetch boosts. Retry.');
+              setBanner("Couldn't fetch boosts. Retry.");
             }
             return null;
           }
