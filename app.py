@@ -408,7 +408,7 @@ TOKENS_CHART_ORDER = [
 ]
 
 
-from crafting_planner import rank_opportunities, plan_craft, Modifiers
+from crafting_planner import CRAFTING_CHAINS, build_chain_report, rank_opportunities, plan_craft, Modifiers
 
 from factories import (
     my_factories,
@@ -2050,11 +2050,11 @@ tr:nth-child(odd) td {
 
         {% if has_uid %}
           <a href="{{ url_for('profitability') }}" class="{{ 'active' if active_page=='profit' else '' }}">Profitability</a>
-          <a href="{{ url_for('craft_profitability') }}" class="{{ 'active' if active_page=='craft_profit' else '' }}">Craft Profitability</a>
+          <a href="{{ url_for('craft_profitability') }}" class="{{ 'active' if active_page=='craft_profit' else '' }}">Crafting Chains</a>
           <a href="{{ url_for('flex_planner') }}" class="{{ 'active' if active_page=='flex' else '' }}">Flex Planner</a>
         {% else %}
           <span class="nav-disabled">Profitability</span>
-          <span class="nav-disabled">Craft Profitability</span>
+          <span class="nav-disabled">Crafting Chains</span>
           <span class="nav-disabled">Flex Planner</span>
         {% endif %}
 
@@ -5010,77 +5010,59 @@ def craft_profitability():
         error = f"Failed to fetch prices: {exc}"
 
     status = get_cached_account_status()
+    boosts = get_boost_levels() or {}
 
-    mode = (request.args.get("mode") or "craft").strip().lower()
-    if mode not in {"market", "craft"}:
-        mode = "craft"
-    objective = (request.args.get("objective") or "profit_per_power").strip()
-    target_qty = float(request.args.get("target_qty") or 1)
-    power_budget_raw = request.args.get("power_budget")
-    if power_budget_raw is None or str(power_budget_raw).strip() == "":
-        if status.get("auth") == "ok":
-            power_budget = float(status.get("power") or 0)
-            power_budget_input = str(int(power_budget)) if float(power_budget).is_integer() else str(power_budget)
-        else:
-            power_budget = None
-            power_budget_input = ""
-    else:
-        power_budget = float(power_budget_raw)
-        power_budget_input = str(power_budget_raw)
-    time_budget_hours_raw = request.args.get("time_budget_hours")
-    time_budget_seconds = None
-    if time_budget_hours_raw:
+    start_amount_raw = request.args.get("start_amount") or "1"
+    try:
+        start_amount = max(0.000001, float(start_amount_raw))
+    except Exception:
+        start_amount = 1.0
+
+    selected_raw = request.args.get("chains") or ",".join(CRAFTING_CHAINS.keys())
+    selected_chains = [c.strip() for c in selected_raw.split(",") if c.strip() in CRAFTING_CHAINS]
+    if not selected_chains:
+        selected_chains = list(CRAFTING_CHAINS.keys())
+
+    mastery_levels: Dict[str, int] = {}
+    workshop_levels: Dict[str, int] = {}
+    for token, levels in boosts.items():
+        token_u = str(token or "").upper()
+        if token_u not in CRAFTING_CHAINS["EARTH ➜ SCREWS"] + CRAFTING_CHAINS["WATER ➜ OIL"] + CRAFTING_CHAINS["FIRE ➜ LAVA"]:
+            continue
         try:
-            time_budget_seconds = max(0.0, float(time_budget_hours_raw) * 3600.0)
+            mastery_levels[token_u] = max(0, min(10, int((levels or {}).get("mastery_level", 0))))
         except Exception:
-            time_budget_seconds = None
+            mastery_levels[token_u] = 0
+        try:
+            workshop_levels[token_u] = max(0, min(10, int((levels or {}).get("workshop_level", 0))))
+        except Exception:
+            workshop_levels[token_u] = 0
 
-    start_base_raw = request.args.get("start_bases") or "EARTH,WATER,FIRE"
-    start_bases = [s.strip().upper() for s in start_base_raw.split(",") if s.strip()]
-    start_bases = [b for b in start_bases if b in {"EARTH", "WATER", "FIRE"}] or ["EARTH", "WATER", "FIRE"]
+    modifiers = Modifiers(
+        masteryLevelsBySymbol=mastery_levels,
+        workshopLevelsByFactoryOrTier=workshop_levels,
+        globalSpeedMultiplier=1.0,
+    )
 
-    modifiers = Modifiers(masteryLevelsBySymbol={}, workshopLevelsByFactoryOrTier={}, globalSpeedMultiplier=1.0)
+    reports = []
+    for name in selected_chains:
+        reports.append(build_chain_report(name, CRAFTING_CHAINS[name], prices, modifiers=modifiers, start_amount=start_amount))
 
-    ranked = rank_opportunities(
-        prices=prices,
-        mode=("market" if mode == "market" else "craft"),
-        objective=objective,
-        power_budget=power_budget,
-        time_budget_seconds=time_budget_seconds,
-        target_amount=target_qty,
-        modifiers=modifiers,
-        available_bases=start_bases,
-    )[:10]
-
-    selected = (request.args.get("selected") or (ranked[0]["targetSymbol"] if ranked else "")).upper()
-    selected_aliases = {"SCREW": "SCREWS"}
-    selected = selected_aliases.get(selected, selected)
-    plan = None
-    if selected:
-        plan = plan_craft(
-            selected,
-            target_qty,
-            prices,
-            mode=("market" if mode == "market" else "craft"),
-            modifiers=modifiers,
-            available_bases=start_bases,
-            power_now=status.get("power"),
-            refill_seconds=status.get("refillSeconds"),
-        )
-
-    all_targets = sorted({p["targetSymbol"].upper() for p in ranked})
-    if selected and selected not in all_targets:
-        all_targets.append(selected)
+    leaderboard = sorted(
+        [r for r in reports if not r.get("error")],
+        key=lambda r: r.get("total_roi", 0.0),
+        reverse=True,
+    )
 
     def format_coin(value: Any, places: int = 6, signed: bool = False) -> str:
         num = float(value or 0)
         return f"{num:+,.{places}f}" if signed else f"{num:,.{places}f}"
 
-    def format_number(value: Any, places: int = 2) -> str:
+    def format_number(value: Any, places: int = 4) -> str:
         return f"{float(value or 0):,.{places}f}"
 
-    def format_seconds(value: Any) -> str:
-        return f"{int(float(value or 0)):,}"
+    def format_pct(value: Any, places: int = 2) -> str:
+        return f"{float(value or 0) * 100:,.{places}f}%"
 
     def format_hms(value: Any) -> str:
         total_seconds = max(0, int(float(value or 0)))
@@ -5091,203 +5073,130 @@ def craft_profitability():
 
     content = """
     <style>
-      .cp-controls-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:12px; }
-      .cp-field-full { grid-column: span 2; }
-      .cp-actions { display:flex; justify-content:flex-end; align-items:flex-end; }
-      .cp-segmented { display:flex; gap:6px; background:rgba(15,23,42,.55); border:1px solid rgba(148,163,184,.35); border-radius:12px; padding:4px; }
-      .cp-segmented label { margin:0; flex:1; text-transform:none; letter-spacing:.02em; font-size:12px; }
-      .cp-segmented input { display:none; }
-      .cp-segmented span { display:block; text-align:center; padding:6px 8px; border-radius:8px; color:var(--text-soft); cursor:pointer; }
-      .cp-segmented input:checked + span { color:var(--text-main); background:rgba(37,99,235,.75); }
-      .cp-chip-row { display:flex; flex-wrap:wrap; gap:8px; }
-      .cp-chip { border:1px solid rgba(148,163,184,.35); border-radius:999px; background:rgba(15,23,42,.7); color:var(--text-soft); padding:6px 10px; font-size:12px; cursor:pointer; }
-      .cp-chip.is-active { border-color: rgba(92,242,255,.55); color: var(--text-main); background: rgba(30,64,175,.5); }
-      .cp-inline-alert { margin-top:10px; padding:8px 10px; border-radius:10px; border:1px solid rgba(250,204,21,.45); background:rgba(120,53,15,.35); font-size:12px; }
-      .cp-inline-alert details { margin-top:6px; }
-      .cp-inline-alert pre { overflow:auto; max-height:160px; background:rgba(15,23,42,.65); padding:8px; border-radius:8px; }
-      .cp-power-input { display:flex; gap:8px; align-items:center; }
-      .cp-power-input input { flex:1; }
-      .cp-power-input button { margin-top:0; padding:7px 10px; text-transform:none; font-size:12px; }
-      .cp-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin:8px 0 12px; }
-      .cp-summary-item { background:rgba(15,23,42,.5); border:1px solid rgba(148,163,184,.25); border-radius:10px; padding:8px; }
-      .cp-summary-item .k { display:block; color:var(--text-soft); font-size:11px; margin-bottom:4px; }
-      .cp-summary-item .v { font-weight:600; font-size:13px; }
-      .num { text-align:right; font-variant-numeric: tabular-nums; }
-      .profit-pos { color: var(--success); }
-      .profit-neg { color: #fca5a5; }
-      .cp-table th, .cp-table td { border-bottom:1px solid rgba(148,163,184,.12); }
-      .cp-table tbody tr:nth-child(even) td { background:rgba(15,23,42,.82); }
-      .cp-table tbody tr:nth-child(odd) td { background:rgba(15,23,42,.74); }
-      @media (max-width: 980px) { .cp-controls-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .cp-field-full { grid-column: span 2; } .cp-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-      @media (max-width: 640px) { .cp-controls-grid { grid-template-columns:minmax(0,1fr); } .cp-field-full { grid-column: auto; } .cp-summary { grid-template-columns:minmax(0,1fr); } .cp-actions { justify-content:stretch; } .cp-actions button { width:100%; } }
+      .cc-controls { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+      .cc-controls .field-full { grid-column: span 2; }
+      .cc-card { margin-bottom:14px; }
+      .cc-chip-row { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+      .cc-chip { border:1px solid rgba(148,163,184,.35); border-radius:999px; background:rgba(15,23,42,.7); color:var(--text-soft); padding:6px 10px; font-size:12px; cursor:pointer; }
+      .cc-chip.active { border-color: rgba(92,242,255,.55); color: var(--text-main); background: rgba(30,64,175,.5); }
+      .cc-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:10px; }
+      .cc-summary .item { background:rgba(15,23,42,.5); border:1px solid rgba(148,163,184,.22); border-radius:10px; padding:8px; }
+      .cc-summary .k { display:block; font-size:11px; color:var(--text-soft); }
+      .cc-summary .v { font-weight:700; }
+      .cc-table th, .cc-table td { border-bottom:1px solid rgba(148,163,184,.12); }
+      .num { text-align:right; font-variant-numeric:tabular-nums; }
+      .profit-pos { color:var(--success); }
+      .profit-neg { color:#fca5a5; }
+      @media (max-width:980px){ .cc-controls,.cc-summary{grid-template-columns:1fr 1fr;} }
+      @media (max-width:680px){ .cc-controls,.cc-summary{grid-template-columns:1fr;} }
     </style>
 
-    <div class="card">
-      <h1>🧠 Craft Profitability</h1>
-      <p class="subtle">CSV-driven planner with market/craft-from-base modes, power budget checks, multi-input merge handling, and cumulative path profitability.</p>
+    <div class="card cc-card">
+      <h1>🔗 Crafting Chains</h1>
+      <p class="subtle">Track each stage in your 1-resource chain with input price, output price, stage ROI, and total chain ROI using live prices plus your saved Mastery/Workshop boosts.</p>
       <form method="GET" action="{{ url_for('craft_profitability') }}">
-        <input type="hidden" id="start-bases-hidden" name="start_bases" value="{{ start_bases_csv }}">
-        <div class="cp-controls-grid">
+        <div class="cc-controls">
           <div>
-            <label>Mode</label>
-            <div class="cp-segmented">
-              <label><input type="radio" name="mode" value="market" {{ 'checked' if mode=='market' else '' }}><span>Market Inputs</span></label>
-              <label><input type="radio" name="mode" value="craft" {{ 'checked' if mode=='craft' else '' }}><span>Craft From Base</span></label>
-            </div>
+            <label>Starting amount</label>
+            <input type="number" step="0.0001" min="0.0001" name="start_amount" value="{{ start_amount }}" />
           </div>
-          <div>
-            <label>Objective</label>
-            <div class="cp-segmented">
-              <label><input type="radio" name="objective" value="profit_per_power" {{ 'checked' if objective=='profit_per_power' else '' }}><span>Profit / power</span></label>
-              <label><input type="radio" name="objective" value="profit_per_hour" {{ 'checked' if objective=='profit_per_hour' else '' }}><span>Profit / hour</span></label>
-              <label><input type="radio" name="objective" value="total_profit" {{ 'checked' if objective=='total_profit' else '' }}><span>Total profit</span></label>
-            </div>
-          </div>
-          <div>
-            <label>Target quantity</label>
-            <input type="number" step="1" min="1" name="target_qty" value="{{ target_qty|int }}">
-          </div>
-          <div>
-            <label>Time horizon (hours)</label>
-            <input type="number" step="0.1" min="0" name="time_budget_hours" value="{{ time_budget_hours or '' }}" placeholder="Optional">
-          </div>
-
-          <div class="cp-field-full">
-            <label>Start bases</label>
-            <div class="cp-chip-row" id="start-bases-chips">
-              {% for base in ['EARTH', 'WATER', 'FIRE'] %}
-                <button type="button" class="cp-chip {{ 'is-active' if base in start_bases else '' }}" data-base="{{ base }}">{{ base }}</button>
+          <div class="field-full">
+            <label>Enabled chains</label>
+            <div class="cc-chip-row" id="cc-chain-chips">
+              {% for name, chain in chains.items() %}
+                <button type="button" class="cc-chip {{ 'active' if name in selected_chains else '' }}" data-chain="{{ name }}">{{ name }}</button>
               {% endfor %}
             </div>
+            <input type="hidden" name="chains" id="chains-input" value="{{ selected_chains_csv }}" />
           </div>
           <div>
-            <label>Inspect / target symbol</label>
-            <input name="selected" list="target-symbols" value="{{ selected }}" placeholder="Search symbol">
-            <datalist id="target-symbols">
-              {% for sym in all_targets %}<option value="{{ sym }}"></option>{% endfor %}
-            </datalist>
+            <label>Account power</label>
+            <input type="text" value="{{ format_number(status.power or 0, 0) if status.auth=='ok' else 'Not connected' }}" disabled />
           </div>
           <div>
-            <label>Power budget</label>
-            <div class="cp-power-input">
-              <input type="number" step="1" min="0" name="power_budget" id="power-budget" value="{{ power_budget }}">
-              <button type="button" id="use-current-power">Use current power</button>
-            </div>
-          </div>
-          <div class="cp-actions">
-            <button type="submit">Run Explorer</button>
+            <label>&nbsp;</label>
+            <button type="submit">Recalculate Chains</button>
           </div>
         </div>
       </form>
-      {% if error %}<div class="cp-inline-alert">{{ error }}</div>{% endif %}
-      {% if status.error %}
-        <div class="cp-inline-alert">
-          Account not connected. Power-based affordability will be disabled.
-          <details>
-            <summary>Details</summary>
-            <pre>{{ status|tojson(indent=2) }}</pre>
-          </details>
-        </div>
-      {% endif %}
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
     </div>
 
-    <div class="card">
-      <h2>Top 10 chains right now</h2>
-      <table class="cp-table">
-        <tr><th>Target</th><th>Profit/Power</th><th>Profit/Hour</th><th>Power</th><th>Time (s)</th><th>Gross Profit</th></tr>
-        {% for p in ranked %}
+    <div class="card cc-card">
+      <h2>Chain ROI ranking</h2>
+      <table class="cc-table">
+        <thead><tr><th>Chain</th><th class="num">Total Cost (COIN)</th><th class="num">Final Value (COIN)</th><th class="num">Profit (COIN)</th><th class="num">Total ROI</th><th class="num">Power</th><th class="num">Time</th></tr></thead>
+        <tbody>
+          {% for row in leaderboard %}
           <tr>
-            <td><a href="{{ url_for('craft_profitability', mode=mode, objective=objective, start_bases=start_bases_csv, power_budget=power_budget, time_budget_hours=time_budget_hours, target_qty=target_qty, selected=p.targetSymbol) }}">{{ p.targetSymbol }}</a></td>
-            <td class="num">{{ format_coin(p.totals.profitPerPower) }}</td>
-            <td class="num">{{ format_coin(p.totals.profitPerHour) }}</td>
-            <td class="num">{{ format_number(p.totals.power) }}</td>
-            <td class="num">{{ format_seconds(p.totals.seconds) }}</td>
-            <td class="num {{ 'profit-pos' if p.totals.grossProfit >= 0 else 'profit-neg' }}">{{ format_coin(p.totals.grossProfit, signed=True) }}</td>
+            <td>{{ row.name }}</td>
+            <td class="num">{{ format_coin(row.total_cost) }}</td>
+            <td class="num">{{ format_coin(row.total_value) }}</td>
+            <td class="num {{ 'profit-pos' if row.total_profit >= 0 else 'profit-neg' }}">{{ format_coin(row.total_profit, signed=True) }}</td>
+            <td class="num {{ 'profit-pos' if row.total_roi >= 0 else 'profit-neg' }}">{{ format_pct(row.total_roi) }}</td>
+            <td class="num">{{ format_number(row.total_power, 2) }}</td>
+            <td class="num">{{ format_hms(row.total_seconds) }}</td>
           </tr>
-        {% endfor %}
+          {% endfor %}
+          {% if not leaderboard %}<tr><td colspan="7" class="subtle">No chain data available.</td></tr>{% endif %}
+        </tbody>
       </table>
     </div>
 
-    {% if plan %}
-      <div class="card">
-        <h2>Plan for {{ plan.targetSymbol }} × {{ plan.targetAmount|int }}</h2>
-        <div class="cp-summary">
-          <div class="cp-summary-item"><span class="k">Can afford now</span><span class="v">{{ 'Yes' if plan.constraints.canAffordNow else 'No' }}</span></div>
-          <div class="cp-summary-item"><span class="k">Power deficit</span><span class="v">{{ format_number(plan.constraints.powerDeficit) }}</span></div>
-          <div class="cp-summary-item"><span class="k">ETA</span><span class="v">{{ plan.constraints.etaToAffordHMS or format_hms(0) }}</span></div>
-          <div class="cp-summary-item"><span class="k">Total profit</span><span class="v {{ 'profit-pos' if plan.totals.grossProfit >= 0 else 'profit-neg' }}">{{ format_coin(plan.totals.grossProfit, signed=True) }}</span></div>
-          <div class="cp-summary-item"><span class="k">Profit / power</span><span class="v">{{ format_coin(plan.totals.profitPerPower) }}</span></div>
-          <div class="cp-summary-item"><span class="k">Profit / hour</span><span class="v">{{ format_coin(plan.totals.profitPerHour) }}</span></div>
-          <div class="cp-summary-item"><span class="k">ROI</span><span class="v">{{ format_coin(plan.totals.ROI) }}</span></div>
-          <div class="cp-summary-item"><span class="k">Total duration</span><span class="v">{{ format_hms(plan.totals.seconds) }}</span></div>
-        </div>
-        <table class="cp-table">
-          <tr><th>Output</th><th>Crafts</th><th>Power</th><th>Seconds</th><th>Coin Cost</th><th>Coin Value</th></tr>
-          {% for st in plan.steps %}
-            <tr>
-              <td>{{ st.outputSymbol }}</td>
-              <td class="num">{{ st.times }}</td>
-              <td class="num">{{ format_number(st.powerCost) }}</td>
-              <td class="num">{{ format_seconds(st.timeCost) }}</td>
-              <td class="num">{{ format_coin(st.coinCost) }}</td>
-              <td class="num">{{ format_coin(st.coinValue) }}</td>
-            </tr>
-          {% endfor %}
-        </table>
-        {% if plan.missing.prices or plan.missing.recipes %}
-          <div class="error">Incomplete data. Missing prices: {{ plan.missing.prices|join(', ') or 'none' }}. Missing recipes: {{ plan.missing.recipes|join(', ') or 'none' }}.</div>
+    {% for report in reports %}
+      <div class="card cc-card">
+        <h2>{{ report.name }}</h2>
+        {% if report.error %}
+          <div class="error">{{ report.error }}</div>
+        {% else %}
+          <div class="cc-summary">
+            <div class="item"><span class="k">Start</span><span class="v">{{ format_number(report.start_amount, 4) }} {{ report.start_symbol }}</span></div>
+            <div class="item"><span class="k">End</span><span class="v">{{ format_number(report.end_amount, 4) }} {{ report.end_symbol }}</span></div>
+            <div class="item"><span class="k">Total Profit</span><span class="v {{ 'profit-pos' if report.total_profit >= 0 else 'profit-neg' }}">{{ format_coin(report.total_profit, signed=True) }} COIN</span></div>
+            <div class="item"><span class="k">Total ROI</span><span class="v {{ 'profit-pos' if report.total_roi >= 0 else 'profit-neg' }}">{{ format_pct(report.total_roi) }}</span></div>
+          </div>
+          <table class="cc-table">
+            <thead>
+              <tr>
+                <th>Stage</th><th class="num">Input Qty</th><th class="num">Input Px</th><th class="num">Input Cost</th><th class="num">Other Inputs Cost</th>
+                <th class="num">Output Qty</th><th class="num">Output Px</th><th class="num">Output Value</th><th class="num">Stage ROI</th><th class="num">Cumulative ROI</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in report.stages %}
+              <tr>
+                <td>{{ s.from }} ➜ {{ s.to }}</td>
+                <td class="num">{{ format_number(s.input_amount, 4) }}</td>
+                <td class="num">{{ format_coin(s.input_price) }}</td>
+                <td class="num">{{ format_coin(s.input_cost) }}</td>
+                <td class="num">{{ format_coin(s.other_input_cost) }}</td>
+                <td class="num">{{ format_number(s.output_amount, 4) }}</td>
+                <td class="num">{{ format_coin(s.output_price) }}</td>
+                <td class="num">{{ format_coin(s.output_value) }}</td>
+                <td class="num {{ 'profit-pos' if s.stage_roi >= 0 else 'profit-neg' }}">{{ format_pct(s.stage_roi) }}</td>
+                <td class="num {{ 'profit-pos' if s.cumulative_roi >= 0 else 'profit-neg' }}">{{ format_pct(s.cumulative_roi) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         {% endif %}
       </div>
-    {% endif %}
+    {% endfor %}
 
     <script>
       (function () {
-        const hiddenBases = document.getElementById('start-bases-hidden');
-        const chipButtons = document.querySelectorAll('#start-bases-chips .cp-chip');
-        const powerInput = document.getElementById('power-budget');
-        const useCurrentPowerBtn = document.getElementById('use-current-power');
-        let connectedPower = null;
-
-        function syncBases() {
-          const active = Array.from(chipButtons)
-            .filter((btn) => btn.classList.contains('is-active'))
-            .map((btn) => btn.dataset.base);
-          hiddenBases.value = active.join(',');
+        const chips = Array.from(document.querySelectorAll('#cc-chain-chips .cc-chip'));
+        const input = document.getElementById('chains-input');
+        function sync(){
+          const names = chips.filter(c => c.classList.contains('active')).map(c => c.dataset.chain);
+          input.value = names.join(',');
         }
-
-        function syncPowerButton() {
-          if (!useCurrentPowerBtn) return;
-          const enabled = Number.isFinite(connectedPower);
-          useCurrentPowerBtn.disabled = !enabled;
-          useCurrentPowerBtn.title = enabled ? 'Use connected account power' : 'Connect Ronin wallet first';
-        }
-
-        chipButtons.forEach((btn) => {
-          btn.addEventListener('click', () => {
-            btn.classList.toggle('is-active');
-            syncBases();
-          });
-        });
-
-        window.addEventListener('cw-account-status', (event) => {
-          const detail = event.detail || {};
-          connectedPower = (detail.connected && typeof detail.power === 'number') ? Number(detail.power) : null;
-          syncPowerButton();
-        });
-
-        useCurrentPowerBtn?.addEventListener('click', () => {
-          if (Number.isFinite(connectedPower)) {
-            powerInput.value = connectedPower;
-            return;
-          }
-          if (typeof window.cwOpenConnectModal === 'function') {
-            window.cwOpenConnectModal();
-          } else {
-            window.dispatchEvent(new Event('cw-open-connect-modal'));
-          }
-        });
-
-        syncPowerButton();
+        chips.forEach((chip)=>chip.addEventListener('click', ()=>{
+          chip.classList.toggle('active');
+          if (!chips.some(c => c.classList.contains('active'))) chip.classList.add('active');
+          sync();
+        }));
+        sync();
       })();
     </script>
     """
@@ -5296,29 +5205,23 @@ def craft_profitability():
         BASE_TEMPLATE,
         content=render_template_string(
             content,
-            ranked=ranked,
-            plan=plan,
-            mode=mode,
-            objective=objective,
-            selected=selected,
-            target_qty=target_qty,
-            power_budget=power_budget_input,
-            time_budget_hours=time_budget_hours_raw,
-            start_bases_csv=",".join(start_bases),
-            start_bases=start_bases,
-            all_targets=all_targets,
+            reports=reports,
+            leaderboard=leaderboard,
+            chains=CRAFTING_CHAINS,
+            selected_chains=selected_chains,
+            selected_chains_csv=",".join(selected_chains),
+            start_amount=start_amount,
             status=status,
             error=error,
             format_coin=format_coin,
             format_number=format_number,
-            format_seconds=format_seconds,
+            format_pct=format_pct,
             format_hms=format_hms,
         ),
         active_page="craft_profit",
         has_uid=has_uid_flag(),
     )
     return html
-
 
 
 
