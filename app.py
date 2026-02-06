@@ -4990,7 +4990,7 @@ def api_account_uid():
     query = """
     query AccountUID {
       account {
-        uid
+        id
       }
     }
     """
@@ -5000,7 +5000,7 @@ def api_account_uid():
     if errors:
         return jsonify({"ok": False, "error": "Craft World returned an error.", "rawErrors": errors}), 502
 
-    uid = ((body.get("data") or {}).get("account") or {}).get("uid")
+    uid = ((body.get("data") or {}).get("account") or {}).get("id")
     if not uid:
         return jsonify({"ok": False, "error": "Craft World account UID not found."}), 404
 
@@ -11381,7 +11381,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
