@@ -2159,6 +2159,7 @@ tr:nth-child(odd) td {
       const CW_SESSION_INDEX_KEY = 'cw_sessions';
       const CW_ACTIVE_WALLET_KEY = 'cw_active_wallet';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
+      const CONNECTION_TYPE_KEY = 'cw_connection_type';
       let refillMs = 0;
       let currentPower = null;
       let countdownInterval = null;
@@ -2166,6 +2167,10 @@ tr:nth-child(odd) td {
       let lastErrorRaw = null;
       let authStatus = 'disconnected';
       let statusPollInterval = null;
+      let activeWalletProvider = null;
+      let providerAccountsChangedHandler = null;
+      let providerChainChangedHandler = null;
+      let providerDisconnectHandler = null;
 
       function normalizeWalletAddress(addr) {
         return String(addr || '').trim().toLowerCase();
@@ -2315,7 +2320,11 @@ tr:nth-child(odd) td {
         try {
           const accounts = await provider.request({ method: 'eth_accounts' });
           return normalizeWalletAddress((accounts && accounts[0]) ? accounts[0] : '');
-        } catch (_) {
+        } catch (err) {
+          const message = String(err && err.message ? err.message : err || '').toLowerCase();
+          if (message.includes('receiving end does not exist') || message.includes('runtime.lasterror')) {
+            return '';
+          }
           return '';
         }
       }
@@ -2340,13 +2349,52 @@ tr:nth-child(odd) td {
         return { idToken, cwToken, refreshToken, expiresAt, wallet };
       }
 
+      function clearWalletConnectCache() {
+        try {
+          const keys = Object.keys(localStorage);
+          for (const key of keys) {
+            if (key.startsWith('wc@2') || key.startsWith('walletconnect')) {
+              localStorage.removeItem(key);
+            }
+          }
+        } catch (_) {
+          // Ignore localStorage access failures.
+        }
+      }
+
+      async function disconnectActiveWalletProvider() {
+        const connectionType = String(localStorage.getItem(CONNECTION_TYPE_KEY) || '').trim().toLowerCase();
+        const provider = activeWalletProvider;
+
+        if (provider && connectionType === 'walletconnect') {
+          try {
+            if (typeof provider.disconnect === 'function') {
+              await provider.disconnect();
+            } else if (typeof provider.close === 'function') {
+              await provider.close();
+            }
+          } catch (_) {
+            // Ignore provider-level disconnect failures and continue local cleanup.
+          }
+        }
+
+        clearWalletConnectCache();
+      }
+
       function clearSession() {
+        const activeWallet = normalizeWalletAddress(localStorage.getItem(WALLET_KEY) || getActiveWallet());
+        if (activeWallet) {
+          removeWalletSession(activeWallet);
+        }
         localStorage.removeItem(ID_TOKEN_KEY);
         localStorage.removeItem(CW_TOKEN_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(EXPIRES_AT_KEY);
         localStorage.removeItem(WALLET_KEY);
+        localStorage.removeItem(CW_ACTIVE_WALLET_KEY);
+        localStorage.removeItem(CW_SESSION_INDEX_KEY);
         localStorage.removeItem(ACCOUNT_STATUS_KEY);
+        localStorage.removeItem(CONNECTION_TYPE_KEY);
       }
 
       function isSessionExpired(session) {
@@ -2852,6 +2900,7 @@ tr:nth-child(odd) td {
         localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
+        localStorage.setItem(CONNECTION_TYPE_KEY, connectionType);
 
         await syncBoostsOnSignin(walletAddress);
 
@@ -2995,6 +3044,7 @@ tr:nth-child(odd) td {
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
             stopStatusPolling();
+            await disconnectActiveWalletProvider();
             detachWalletProviderListeners();
             clearSession();
             if (countdownInterval) {
@@ -4968,9 +5018,15 @@ def craft_profitability():
     target_qty = float(request.args.get("target_qty") or 1)
     power_budget_raw = request.args.get("power_budget")
     if power_budget_raw is None or str(power_budget_raw).strip() == "":
-        power_budget = float(status.get("power") or 0)
+        if status.get("auth") == "ok":
+            power_budget = float(status.get("power") or 0)
+            power_budget_input = str(int(power_budget)) if float(power_budget).is_integer() else str(power_budget)
+        else:
+            power_budget = None
+            power_budget_input = ""
     else:
         power_budget = float(power_budget_raw)
+        power_budget_input = str(power_budget_raw)
     time_budget_hours_raw = request.args.get("time_budget_hours")
     time_budget_seconds = None
     if time_budget_hours_raw:
@@ -4997,6 +5053,8 @@ def craft_profitability():
     )[:10]
 
     selected = (request.args.get("selected") or (ranked[0]["targetSymbol"] if ranked else "")).upper()
+    selected_aliases = {"SCREW": "SCREWS"}
+    selected = selected_aliases.get(selected, selected)
     plan = None
     if selected:
         plan = plan_craft(
@@ -5112,7 +5170,7 @@ def craft_profitability():
           <div>
             <label>Power budget</label>
             <div class="cp-power-input">
-              <input type="number" step="1" min="0" name="power_budget" id="power-budget" value="{{ power_budget|int }}">
+              <input type="number" step="1" min="0" name="power_budget" id="power-budget" value="{{ power_budget }}">
               <button type="button" id="use-current-power">Use current power</button>
             </div>
           </div>
@@ -5244,7 +5302,7 @@ def craft_profitability():
             objective=objective,
             selected=selected,
             target_qty=target_qty,
-            power_budget=power_budget,
+            power_budget=power_budget_input,
             time_budget_hours=time_budget_hours_raw,
             start_bases_csv=",".join(start_bases),
             start_bases=start_bases,
@@ -7156,8 +7214,7 @@ def boosts():
 
         async function syncBoostsFromCraftWorld(walletHint) {
           const storedWallet = getStoredActiveWallet();
-          const detectedWallet = await detectConnectedWallet();
-          const wallet = normalizeWallet(walletHint || storedWallet || detectedWallet);
+          const wallet = normalizeWallet(walletHint || storedWallet);
           const token = getTokenForWalletOrLegacy(wallet);
           if (!token) {
             setBanner('Not connected. Connect Ronin Wallet.');
@@ -7224,8 +7281,7 @@ def boosts():
           const autoBtn = document.getElementById('cw-boosts-autofill');
           const refreshBtn = document.getElementById('cw-boosts-refresh');
           const storedWallet = getStoredActiveWallet();
-          const detectedWallet = await detectConnectedWallet();
-          const wallet = normalizeWallet(storedWallet || detectedWallet);
+          const wallet = normalizeWallet(storedWallet);
           const token = getTokenForWalletOrLegacy(wallet);
 
           if (!token) {
@@ -11309,7 +11365,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
