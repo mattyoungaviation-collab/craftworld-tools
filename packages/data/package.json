@@ -1,0 +1,9 @@
+{
+  "name": "@craftworld/data",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./factories.csv": "./factories.csv"
+  }
+}
