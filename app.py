@@ -4879,6 +4879,54 @@ def api_boosts_mastery():
     })
 
 
+@app.route("/api/boosts/sync", methods=["POST"])
+def api_boosts_sync():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "JSON body is required."}), 400
+
+    raw_mastery = payload.get("masteryLevels")
+    raw_workshop = payload.get("workshopLevels")
+    if not isinstance(raw_mastery, dict) and not isinstance(raw_workshop, dict):
+        return jsonify({"ok": False, "error": "masteryLevels or workshopLevels map is required."}), 400
+
+    levels_map = get_boost_levels()
+    mastery_updated = 0
+    workshop_updated = 0
+
+    if isinstance(raw_mastery, dict):
+        for token, level in raw_mastery.items():
+            symbol = str(token or "").strip().upper()
+            if symbol not in levels_map:
+                continue
+            try:
+                clamped_level = max(0, min(10, int(level)))
+            except (TypeError, ValueError):
+                continue
+            levels_map[symbol]["mastery_level"] = clamped_level
+            mastery_updated += 1
+
+    if isinstance(raw_workshop, dict):
+        for token, level in raw_workshop.items():
+            symbol = str(token or "").strip().upper()
+            if symbol not in levels_map:
+                continue
+            try:
+                clamped_level = max(0, min(10, int(level)))
+            except (TypeError, ValueError):
+                continue
+            levels_map[symbol]["workshop_level"] = clamped_level
+            workshop_updated += 1
+
+    save_boost_levels(levels_map)
+    return jsonify({
+        "ok": True,
+        "masteryUpdated": mastery_updated,
+        "workshopUpdated": workshop_updated,
+        "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+
+
 @app.route("/craft-profitability", methods=["GET"])
 def craft_profitability():
     error = None
@@ -6990,9 +7038,27 @@ def boosts():
       (function () {
         const CW_SESSION_INDEX = 'cw_sessions';
         const CW_ACTIVE_WALLET = 'cw_active_wallet';
+        const CW_TOKEN_KEY = 'cw_token';
 
-        function getActiveWallet() {
-          return String(localStorage.getItem(CW_ACTIVE_WALLET) || '').trim().toLowerCase();
+        function normalizeWallet(value) {
+          return String(value || '').trim().toLowerCase();
+        }
+
+        async function detectConnectedWallet() {
+          if (typeof window === 'undefined') return '';
+          const provider = window.ethereum;
+          if (!provider || typeof provider.request !== 'function') return '';
+          try {
+            const accounts = await provider.request({ method: 'eth_accounts' });
+            const addr = Array.isArray(accounts) && accounts.length ? accounts[0] : '';
+            return normalizeWallet(addr);
+          } catch (_) {
+            return '';
+          }
+        }
+
+        function getStoredActiveWallet() {
+          return normalizeWallet(localStorage.getItem(CW_ACTIVE_WALLET) || '');
         }
 
         function readSessions() {
@@ -7004,10 +7070,21 @@ def boosts():
           }
         }
 
-        function getActiveToken() {
-          const wallet = getActiveWallet();
+        function getStoredTokenForWallet(wallet) {
+          const normalized = normalizeWallet(wallet);
+          if (!normalized) return '';
           const sessions = readSessions();
-          return String((sessions[wallet] && sessions[wallet].token) || '');
+          return String((sessions[normalized] && sessions[normalized].token) || '').trim();
+        }
+
+        function getLegacyToken() {
+          return String(localStorage.getItem(CW_TOKEN_KEY) || '').trim();
+        }
+
+        function getTokenForWalletOrLegacy(wallet) {
+          const byWallet = getStoredTokenForWallet(wallet);
+          if (byWallet) return byWallet;
+          return getLegacyToken();
         }
 
         function getBoostStorageKey(wallet) {
@@ -7054,12 +7131,18 @@ def boosts():
           });
         }
 
-        async function syncBoostsFromCraftWorld() {
-          const wallet = getActiveWallet();
-          const token = getActiveToken();
-          if (!wallet || !token) {
+        async function syncBoostsFromCraftWorld(walletHint) {
+          const storedWallet = getStoredActiveWallet();
+          const detectedWallet = await detectConnectedWallet();
+          const wallet = normalizeWallet(walletHint || storedWallet || detectedWallet);
+          const token = getTokenForWalletOrLegacy(wallet);
+          if (!token) {
             setBanner('Not connected. Connect Ronin Wallet.');
             return null;
+          }
+
+          if (wallet && wallet !== storedWallet) {
+            localStorage.setItem(CW_ACTIVE_WALLET, wallet);
           }
 
           const headers = { Authorization: `Bearer ${token}` };
@@ -7093,22 +7176,42 @@ def boosts():
           });
 
           const payload = { workshopLevels, masteryLevels, syncedAt: Date.now() };
-          localStorage.setItem(getBoostStorageKey(wallet), JSON.stringify(payload));
+          if (wallet) {
+            localStorage.setItem(getBoostStorageKey(wallet), JSON.stringify(payload));
+          }
+
+          const persistRes = await fetch('/api/boosts/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workshopLevels, masteryLevels }),
+          });
+          const persistData = await persistRes.json().catch(() => ({}));
+          if (!persistRes.ok || !persistData.ok) {
+            setBanner("Fetched data, but couldn't save it to your account.");
+          } else {
+            setBanner('');
+          }
+
           hydrateBoostInputs(workshopLevels, masteryLevels);
           setLastSynced(payload.syncedAt);
-          setBanner('');
           return payload;
         }
 
         window.addEventListener('DOMContentLoaded', async function () {
           const autoBtn = document.getElementById('cw-boosts-autofill');
           const refreshBtn = document.getElementById('cw-boosts-refresh');
-          const wallet = getActiveWallet();
+          const storedWallet = getStoredActiveWallet();
+          const detectedWallet = await detectConnectedWallet();
+          const wallet = normalizeWallet(storedWallet || detectedWallet);
+          const token = getTokenForWalletOrLegacy(wallet);
 
-          if (!wallet || !getActiveToken()) {
+          if (!token) {
             setBanner('Not connected. Connect Ronin Wallet.');
           } else {
-            const cachedRaw = localStorage.getItem(getBoostStorageKey(wallet));
+            if (wallet && wallet !== storedWallet) {
+              localStorage.setItem(CW_ACTIVE_WALLET, wallet);
+            }
+            const cachedRaw = wallet ? localStorage.getItem(getBoostStorageKey(wallet)) : '';
             if (cachedRaw) {
               try {
                 const cached = JSON.parse(cachedRaw);
@@ -11183,7 +11286,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
