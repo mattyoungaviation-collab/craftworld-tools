@@ -2166,6 +2166,10 @@ tr:nth-child(odd) td {
       let lastErrorRaw = null;
       let authStatus = 'disconnected';
       let statusPollInterval = null;
+      let activeWalletProvider = null;
+      let providerAccountsChangedHandler = null;
+      let providerChainChangedHandler = null;
+      let providerDisconnectHandler = null;
 
       function normalizeWalletAddress(addr) {
         return String(addr || '').trim().toLowerCase();
@@ -2340,12 +2344,50 @@ tr:nth-child(odd) td {
         return { idToken, cwToken, refreshToken, expiresAt, wallet };
       }
 
+      function clearWalletConnectCache() {
+        try {
+          const keys = Object.keys(localStorage);
+          for (const key of keys) {
+            if (key.startsWith('wc@2') || key.startsWith('walletconnect')) {
+              localStorage.removeItem(key);
+            }
+          }
+        } catch (_) {
+          // Ignore localStorage access failures.
+        }
+      }
+
+      async function disconnectActiveWalletProvider() {
+        if (!activeWalletProvider) {
+          clearWalletConnectCache();
+          return;
+        }
+
+        try {
+          if (typeof activeWalletProvider.disconnect === 'function') {
+            await activeWalletProvider.disconnect();
+          } else if (typeof activeWalletProvider.close === 'function') {
+            await activeWalletProvider.close();
+          }
+        } catch (_) {
+          // Ignore provider-level disconnect failures and continue local cleanup.
+        }
+
+        clearWalletConnectCache();
+      }
+
       function clearSession() {
+        const activeWallet = normalizeWalletAddress(localStorage.getItem(WALLET_KEY) || getActiveWallet());
+        if (activeWallet) {
+          removeWalletSession(activeWallet);
+        }
         localStorage.removeItem(ID_TOKEN_KEY);
         localStorage.removeItem(CW_TOKEN_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(EXPIRES_AT_KEY);
         localStorage.removeItem(WALLET_KEY);
+        localStorage.removeItem(CW_ACTIVE_WALLET_KEY);
+        localStorage.removeItem(CW_SESSION_INDEX_KEY);
         localStorage.removeItem(ACCOUNT_STATUS_KEY);
       }
 
@@ -2995,6 +3037,7 @@ tr:nth-child(odd) td {
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
             stopStatusPolling();
+            await disconnectActiveWalletProvider();
             detachWalletProviderListeners();
             clearSession();
             if (countdownInterval) {
@@ -11309,7 +11352,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
