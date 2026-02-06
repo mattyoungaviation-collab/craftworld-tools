@@ -2384,18 +2384,39 @@ tr:nth-child(odd) td {
         return Array.isArray(data.proficiencies) ? data.proficiencies : [];
       }
 
-      async function syncMasteryOnSignin() {
+
+      async function fetchCraftWorldWorkshop(jwt) {
+        const token = String(jwt || '').trim();
+        if (!token) {
+          throw new Error('Missing Craft World session token.');
+        }
+
+        const res = await fetch('/api/account_workshop', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || 'Failed to fetch workshop.');
+        }
+        return Array.isArray(data.workshop) ? data.workshop : [];
+      }
+
+      async function syncBoostsOnSignin(walletHint) {
         const statusEl = document.getElementById('cw-wallet-status');
         const token = getCwToken();
-        const wallet = getActiveWallet();
+        const wallet = String(walletHint || getActiveWallet() || '').trim().toLowerCase();
         const boostStorageKey = wallet ? `cw_boosts:${wallet}` : '';
 
         if (statusEl) {
-          statusEl.textContent = 'Syncing mastery...';
+          statusEl.textContent = 'Syncing mastery + workshop...';
         }
 
         try {
-          const proficiencies = await fetchCraftWorldProficiencies(token);
+          const [proficiencies, workshopRows] = await Promise.all([
+            fetchCraftWorldProficiencies(token),
+            fetchCraftWorldWorkshop(token),
+          ]);
+
           const masteryLevels = {};
           for (const row of proficiencies) {
             const symbol = String((row && row.symbol) || '').trim().toUpperCase();
@@ -2405,47 +2426,49 @@ tr:nth-child(odd) td {
             masteryLevels[symbol] = Math.max(0, Math.min(10, Math.floor(claimed)));
           }
 
-          const persistRes = await fetch('/api/boosts/mastery', {
+          const workshopLevels = {};
+          for (const row of workshopRows) {
+            const symbol = String((row && row.symbol) || '').trim().toUpperCase();
+            if (!symbol) continue;
+            const level = Number((row && row.level) || 0);
+            if (!Number.isFinite(level)) continue;
+            workshopLevels[symbol] = Math.max(0, Math.min(10, Math.floor(level)));
+          }
+
+          const persistRes = await fetch('/api/boosts/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ masteryLevels }),
+            body: JSON.stringify({ masteryLevels, workshopLevels }),
           });
           const persistData = await persistRes.json();
           if (!persistRes.ok || !persistData.ok) {
-            throw new Error(persistData.error || 'Failed to persist mastery levels.');
+            throw new Error(persistData.error || 'Failed to persist boosts.');
           }
 
           if (boostStorageKey) {
-            try {
-              const cachedRaw = localStorage.getItem(boostStorageKey);
-              const cached = cachedRaw ? JSON.parse(cachedRaw) : {};
-              localStorage.setItem(boostStorageKey, JSON.stringify({
-                workshopLevels: (cached && cached.workshopLevels) || {},
-                masteryLevels,
-                syncedAt: Date.now(),
-              }));
-            } catch (_) {
-              localStorage.setItem(boostStorageKey, JSON.stringify({
-                workshopLevels: {},
-                masteryLevels,
-                syncedAt: Date.now(),
-              }));
-            }
+            localStorage.setItem(boostStorageKey, JSON.stringify({
+              workshopLevels,
+              masteryLevels,
+              syncedAt: Date.now(),
+            }));
           }
 
           window.dispatchEvent(new CustomEvent('cw-mastery-synced', {
             detail: { masteryLevels, wallet },
           }));
+          window.dispatchEvent(new CustomEvent('cw-boosts-synced', {
+            detail: { masteryLevels, workshopLevels, wallet },
+          }));
 
           if (statusEl) {
-            statusEl.textContent = 'Mastery synced.';
+            statusEl.textContent = 'Mastery + workshop synced.';
           }
           return { ok: true };
         } catch (err) {
           if (statusEl) {
-            statusEl.textContent = 'Connected (using saved mastery).';
+            statusEl.textContent = 'Connected (using saved boosts).';
           }
-          showBanner("Couldn't sync mastery — using saved values.");
+          showBanner("Couldn't sync mastery/workshop — using saved values.");
           return { ok: false, error: String(err && err.message ? err.message : err) };
         }
       }
@@ -2830,7 +2853,7 @@ tr:nth-child(odd) td {
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
 
-        await syncMasteryOnSignin();
+        await syncBoostsOnSignin(walletAddress);
 
         help.textContent = 'Signed in successfully.';
         statusEl.textContent = `Connected: ${shortWallet(walletAddress)}`;
