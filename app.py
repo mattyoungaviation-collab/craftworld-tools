@@ -2532,6 +2532,63 @@ tr:nth-child(odd) td {
         return fetch(url, nextOptions);
       }
 
+      async function fetchAccountUid() {
+        const res = await authFetch('/api/account_uid');
+        const data = await res.json();
+        if (!res.ok || !data.ok || !data.uid) {
+          const message = data && data.error ? data.error : 'Failed to fetch account ID.';
+          throw new Error(message);
+        }
+        return String(data.uid || '').trim();
+      }
+
+      async function autoPopulateOverviewFromWallet(options) {
+        const opts = options || {};
+        const force = Boolean(opts.force);
+        const form = document.getElementById('overview-form');
+        if (!form) return;
+        const uidInput = document.getElementById('uid');
+        if (!uidInput) return;
+        const statusEl = document.getElementById('overview-auto-status');
+
+        const hasResult = String(form.dataset.hasResult || '').toLowerCase() === 'true';
+        if (hasResult && !force) return;
+        if (form.dataset.autofetchInFlight === 'true') return;
+
+        const session = getSession();
+        if (!session.cwToken || isSessionExpired(session)) return;
+
+        form.dataset.autofetchInFlight = 'true';
+        if (statusEl) {
+          statusEl.textContent = 'Fetching Account ID from wallet...';
+        }
+
+        try {
+          const uid = await fetchAccountUid();
+          if (!uid) throw new Error('Missing Account ID from Craft World.');
+
+          const shouldOverwrite = force || !uidInput.value.trim();
+          if (shouldOverwrite) {
+            uidInput.value = uid;
+          }
+
+          if (statusEl) {
+            statusEl.textContent = 'Account ID loaded from wallet. Loading factories & resources...';
+          }
+
+          if (!hasResult && uidInput.value.trim()) {
+            form.submit();
+          }
+        } catch (err) {
+          const message = String(err && err.message ? err.message : err);
+          if (statusEl) {
+            statusEl.textContent = `Wallet sign-in detected, but couldn't load Account ID. ${message}`;
+          }
+        } finally {
+          form.dataset.autofetchInFlight = 'false';
+        }
+      }
+
       function formatHms(totalSeconds) {
         const sec = Math.max(0, Math.floor(totalSeconds));
         const h = String(Math.floor(sec / 3600)).padStart(2, '0');
@@ -3003,6 +3060,7 @@ tr:nth-child(odd) td {
             stopStatusPolling();
             await connectWalletAndSignin({ connectionType });
             await startStatusPolling();
+            await autoPopulateOverviewFromWallet({ force: true });
           } catch (err) {
             const message = String(err && err.message ? err.message : err);
             help.textContent = message;
@@ -3069,6 +3127,7 @@ tr:nth-child(odd) td {
           showBanner('Not connected. Connect Ronin Wallet.', null);
           emitAccountState(false, null);
         }
+        autoPopulateOverviewFromWallet({ force: false });
       });
     })();
 
@@ -3171,10 +3230,11 @@ def index():
         Enter your <strong>Account ID</strong> and this page will fetch your land plots, factories,
         mines, dynos and resources from Craft World.
       </p>
-      <form method="post">
+      <form method="post" id="overview-form" data-has-result="{{ 'true' if result else 'false' }}" data-auto-fetch="true">
         <label for="uid">Account ID</label>
         <input type="text" id="uid" name="uid" value="{{ uid }}" placeholder="e.g. GfUeRBCZv8OwuUKq7Tu9JVpA70l1">
         <button type="submit">Fetch Craft World</button>
+        <div id="overview-auto-status" class="hint">Sign in with your wallet to auto-fill your Account ID.</div>
       </form>
 
       {% if error %}
@@ -4919,6 +4979,32 @@ def api_account_proficiencies():
         for symbol, values in sorted(profs_map.items())
     ]
     return jsonify({"ok": True, "proficiencies": proficiencies, "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+
+
+@app.route("/api/account_uid", methods=["GET"])
+def api_account_uid():
+    jwt_token = _get_request_cw_token()
+    if not jwt_token:
+        return jsonify({"ok": False, "error": "Missing Craft World token."}), 401
+
+    query = """
+    query AccountUID {
+      account {
+        uid
+      }
+    }
+    """
+    upstream = _cw_graphql_request(query=query, bearer_token=jwt_token)
+    body = upstream.get("body") or {}
+    errors = body.get("errors") or []
+    if errors:
+        return jsonify({"ok": False, "error": "Craft World returned an error.", "rawErrors": errors}), 502
+
+    uid = ((body.get("data") or {}).get("account") or {}).get("uid")
+    if not uid:
+        return jsonify({"ok": False, "error": "Craft World account UID not found."}), 404
+
+    return jsonify({"ok": True, "uid": uid})
 
 
 @app.route("/api/boosts/mastery", methods=["POST"])
@@ -11295,11 +11381,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
-
-
 
 
 
