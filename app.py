@@ -2384,18 +2384,39 @@ tr:nth-child(odd) td {
         return Array.isArray(data.proficiencies) ? data.proficiencies : [];
       }
 
-      async function syncMasteryOnSignin() {
+
+      async function fetchCraftWorldWorkshop(jwt) {
+        const token = String(jwt || '').trim();
+        if (!token) {
+          throw new Error('Missing Craft World session token.');
+        }
+
+        const res = await fetch('/api/account_workshop', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || 'Failed to fetch workshop.');
+        }
+        return Array.isArray(data.workshop) ? data.workshop : [];
+      }
+
+      async function syncBoostsOnSignin(walletHint) {
         const statusEl = document.getElementById('cw-wallet-status');
         const token = getCwToken();
-        const wallet = getActiveWallet();
+        const wallet = String(walletHint || getActiveWallet() || '').trim().toLowerCase();
         const boostStorageKey = wallet ? `cw_boosts:${wallet}` : '';
 
         if (statusEl) {
-          statusEl.textContent = 'Syncing mastery...';
+          statusEl.textContent = 'Syncing mastery + workshop...';
         }
 
         try {
-          const proficiencies = await fetchCraftWorldProficiencies(token);
+          const [proficiencies, workshopRows] = await Promise.all([
+            fetchCraftWorldProficiencies(token),
+            fetchCraftWorldWorkshop(token),
+          ]);
+
           const masteryLevels = {};
           for (const row of proficiencies) {
             const symbol = String((row && row.symbol) || '').trim().toUpperCase();
@@ -2405,47 +2426,49 @@ tr:nth-child(odd) td {
             masteryLevels[symbol] = Math.max(0, Math.min(10, Math.floor(claimed)));
           }
 
-          const persistRes = await fetch('/api/boosts/mastery', {
+          const workshopLevels = {};
+          for (const row of workshopRows) {
+            const symbol = String((row && row.symbol) || '').trim().toUpperCase();
+            if (!symbol) continue;
+            const level = Number((row && row.level) || 0);
+            if (!Number.isFinite(level)) continue;
+            workshopLevels[symbol] = Math.max(0, Math.min(10, Math.floor(level)));
+          }
+
+          const persistRes = await fetch('/api/boosts/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ masteryLevels }),
+            body: JSON.stringify({ masteryLevels, workshopLevels }),
           });
           const persistData = await persistRes.json();
           if (!persistRes.ok || !persistData.ok) {
-            throw new Error(persistData.error || 'Failed to persist mastery levels.');
+            throw new Error(persistData.error || 'Failed to persist boosts.');
           }
 
           if (boostStorageKey) {
-            try {
-              const cachedRaw = localStorage.getItem(boostStorageKey);
-              const cached = cachedRaw ? JSON.parse(cachedRaw) : {};
-              localStorage.setItem(boostStorageKey, JSON.stringify({
-                workshopLevels: (cached && cached.workshopLevels) || {},
-                masteryLevels,
-                syncedAt: Date.now(),
-              }));
-            } catch (_) {
-              localStorage.setItem(boostStorageKey, JSON.stringify({
-                workshopLevels: {},
-                masteryLevels,
-                syncedAt: Date.now(),
-              }));
-            }
+            localStorage.setItem(boostStorageKey, JSON.stringify({
+              workshopLevels,
+              masteryLevels,
+              syncedAt: Date.now(),
+            }));
           }
 
           window.dispatchEvent(new CustomEvent('cw-mastery-synced', {
             detail: { masteryLevels, wallet },
           }));
+          window.dispatchEvent(new CustomEvent('cw-boosts-synced', {
+            detail: { masteryLevels, workshopLevels, wallet },
+          }));
 
           if (statusEl) {
-            statusEl.textContent = 'Mastery synced.';
+            statusEl.textContent = 'Mastery + workshop synced.';
           }
           return { ok: true };
         } catch (err) {
           if (statusEl) {
-            statusEl.textContent = 'Connected (using saved mastery).';
+            statusEl.textContent = 'Connected (using saved boosts).';
           }
-          showBanner("Couldn't sync mastery — using saved values.");
+          showBanner("Couldn't sync mastery/workshop — using saved values.");
           return { ok: false, error: String(err && err.message ? err.message : err) };
         }
       }
@@ -2830,7 +2853,7 @@ tr:nth-child(odd) td {
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
 
-        await syncMasteryOnSignin();
+        await syncBoostsOnSignin(walletAddress);
 
         help.textContent = 'Signed in successfully.';
         statusEl.textContent = `Connected: ${shortWallet(walletAddress)}`;
@@ -4875,6 +4898,54 @@ def api_boosts_mastery():
     return jsonify({
         "ok": True,
         "updated": updated_count,
+        "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+
+
+@app.route("/api/boosts/sync", methods=["POST"])
+def api_boosts_sync():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "JSON body is required."}), 400
+
+    raw_mastery = payload.get("masteryLevels")
+    raw_workshop = payload.get("workshopLevels")
+    if not isinstance(raw_mastery, dict) and not isinstance(raw_workshop, dict):
+        return jsonify({"ok": False, "error": "masteryLevels or workshopLevels map is required."}), 400
+
+    levels_map = get_boost_levels()
+    mastery_updated = 0
+    workshop_updated = 0
+
+    if isinstance(raw_mastery, dict):
+        for token, level in raw_mastery.items():
+            symbol = str(token or "").strip().upper()
+            if symbol not in levels_map:
+                continue
+            try:
+                clamped_level = max(0, min(10, int(level)))
+            except (TypeError, ValueError):
+                continue
+            levels_map[symbol]["mastery_level"] = clamped_level
+            mastery_updated += 1
+
+    if isinstance(raw_workshop, dict):
+        for token, level in raw_workshop.items():
+            symbol = str(token or "").strip().upper()
+            if symbol not in levels_map:
+                continue
+            try:
+                clamped_level = max(0, min(10, int(level)))
+            except (TypeError, ValueError):
+                continue
+            levels_map[symbol]["workshop_level"] = clamped_level
+            workshop_updated += 1
+
+    save_boost_levels(levels_map)
+    return jsonify({
+        "ok": True,
+        "masteryUpdated": mastery_updated,
+        "workshopUpdated": workshop_updated,
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
@@ -6990,9 +7061,27 @@ def boosts():
       (function () {
         const CW_SESSION_INDEX = 'cw_sessions';
         const CW_ACTIVE_WALLET = 'cw_active_wallet';
+        const CW_TOKEN_KEY = 'cw_token';
 
-        function getActiveWallet() {
-          return String(localStorage.getItem(CW_ACTIVE_WALLET) || '').trim().toLowerCase();
+        function normalizeWallet(value) {
+          return String(value || '').trim().toLowerCase();
+        }
+
+        async function detectConnectedWallet() {
+          if (typeof window === 'undefined') return '';
+          const provider = window.ethereum;
+          if (!provider || typeof provider.request !== 'function') return '';
+          try {
+            const accounts = await provider.request({ method: 'eth_accounts' });
+            const addr = Array.isArray(accounts) && accounts.length ? accounts[0] : '';
+            return normalizeWallet(addr);
+          } catch (_) {
+            return '';
+          }
+        }
+
+        function getStoredActiveWallet() {
+          return normalizeWallet(localStorage.getItem(CW_ACTIVE_WALLET) || '');
         }
 
         function readSessions() {
@@ -7004,10 +7093,21 @@ def boosts():
           }
         }
 
-        function getActiveToken() {
-          const wallet = getActiveWallet();
+        function getStoredTokenForWallet(wallet) {
+          const normalized = normalizeWallet(wallet);
+          if (!normalized) return '';
           const sessions = readSessions();
-          return String((sessions[wallet] && sessions[wallet].token) || '');
+          return String((sessions[normalized] && sessions[normalized].token) || '').trim();
+        }
+
+        function getLegacyToken() {
+          return String(localStorage.getItem(CW_TOKEN_KEY) || '').trim();
+        }
+
+        function getTokenForWalletOrLegacy(wallet) {
+          const byWallet = getStoredTokenForWallet(wallet);
+          if (byWallet) return byWallet;
+          return getLegacyToken();
         }
 
         function getBoostStorageKey(wallet) {
@@ -7054,12 +7154,18 @@ def boosts():
           });
         }
 
-        async function syncBoostsFromCraftWorld() {
-          const wallet = getActiveWallet();
-          const token = getActiveToken();
-          if (!wallet || !token) {
+        async function syncBoostsFromCraftWorld(walletHint) {
+          const storedWallet = getStoredActiveWallet();
+          const detectedWallet = await detectConnectedWallet();
+          const wallet = normalizeWallet(walletHint || storedWallet || detectedWallet);
+          const token = getTokenForWalletOrLegacy(wallet);
+          if (!token) {
             setBanner('Not connected. Connect Ronin Wallet.');
             return null;
+          }
+
+          if (wallet && wallet !== storedWallet) {
+            localStorage.setItem(CW_ACTIVE_WALLET, wallet);
           }
 
           const headers = { Authorization: `Bearer ${token}` };
@@ -7093,22 +7199,42 @@ def boosts():
           });
 
           const payload = { workshopLevels, masteryLevels, syncedAt: Date.now() };
-          localStorage.setItem(getBoostStorageKey(wallet), JSON.stringify(payload));
+          if (wallet) {
+            localStorage.setItem(getBoostStorageKey(wallet), JSON.stringify(payload));
+          }
+
+          const persistRes = await fetch('/api/boosts/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workshopLevels, masteryLevels }),
+          });
+          const persistData = await persistRes.json().catch(() => ({}));
+          if (!persistRes.ok || !persistData.ok) {
+            setBanner("Fetched data, but couldn't save it to your account.");
+          } else {
+            setBanner('');
+          }
+
           hydrateBoostInputs(workshopLevels, masteryLevels);
           setLastSynced(payload.syncedAt);
-          setBanner('');
           return payload;
         }
 
         window.addEventListener('DOMContentLoaded', async function () {
           const autoBtn = document.getElementById('cw-boosts-autofill');
           const refreshBtn = document.getElementById('cw-boosts-refresh');
-          const wallet = getActiveWallet();
+          const storedWallet = getStoredActiveWallet();
+          const detectedWallet = await detectConnectedWallet();
+          const wallet = normalizeWallet(storedWallet || detectedWallet);
+          const token = getTokenForWalletOrLegacy(wallet);
 
-          if (!wallet || !getActiveToken()) {
+          if (!token) {
             setBanner('Not connected. Connect Ronin Wallet.');
           } else {
-            const cachedRaw = localStorage.getItem(getBoostStorageKey(wallet));
+            if (wallet && wallet !== storedWallet) {
+              localStorage.setItem(CW_ACTIVE_WALLET, wallet);
+            }
+            const cachedRaw = wallet ? localStorage.getItem(getBoostStorageKey(wallet)) : '';
             if (cachedRaw) {
               try {
                 const cached = JSON.parse(cachedRaw);
@@ -11183,7 +11309,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
