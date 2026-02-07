@@ -32,9 +32,11 @@ const getAuthContext = async (request: { headers: Record<string, string | string
   const authHeader = Array.isArray(headerValue) ? headerValue[0] ?? '' : headerValue ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return null;
+
   const decoded = await verifyIdToken(token);
   const walletAddress = decoded.uid || (decoded as { walletAddress?: string }).walletAddress;
   if (!walletAddress) return null;
+
   return { walletAddress, firebaseUid: decoded.uid };
 };
 
@@ -82,6 +84,7 @@ const start = async () => {
     return payload;
   });
 
+  // IMPORTANT: This route should never throw (avoid crashing Next pages).
   server.get('/prices', async (req, reply) => {
     const now = Date.now();
 
@@ -143,8 +146,8 @@ const start = async () => {
 
       return data;
     } catch (err) {
-      // IMPORTANT: do NOT throw, or Next pages will hard-fail.
       server.log.error({ err }, 'prices failed');
+      // Return a safe fallback so the UI still loads.
       return reply.code(200).send({
         exchangePriceList: [],
         ok: false,
@@ -152,7 +155,6 @@ const start = async () => {
       });
     }
   });
-
 
   server.get('/masterpieces', async () => {
     const snapshot = await readSnapshot('masterpieces');
@@ -359,3 +361,4 @@ start().catch((err) => {
   server.log.error(err);
   process.exit(1);
 });
+
