@@ -11,22 +11,88 @@ import { createCustomToken, isFirebaseConfigured, verifyIdToken } from './fireba
 
 const server = Fastify({ logger: true });
 
-type PricesItem = { symbol: string; price: number };
-type PricesPayload = { exchangePriceList: PricesItem[] };
+/**
+ * What the WEB expects (stable):
+ * { exchangePriceList: [{ symbol, price }] }
+ */
+type PricesPayload = {
+  exchangePriceList: { symbol: string; price: number }[];
+};
 
-// CraftWorld GraphQL (new nested shape)
-type PricesGqlPayload = {
+/**
+ * CraftWorld "exchangePriceList" (NEW shape you captured):
+ * exchangePriceList: [{ baseSymbol, prices: [{ referenceSymbol, amount, recommendation }] }]
+ */
+type ExchangePriceListGql = {
   exchangePriceList: {
-    prices: Record<string, unknown>[];
+    baseSymbol: string;
+    prices: {
+      referenceSymbol: string;
+      amount: number;
+      recommendation?: string | null;
+    }[];
+  }[];
+};
+
+const EXCHANGE_PRICE_LIST_QUERY = `
+  query {
+    exchangePriceList {
+      baseSymbol
+      prices {
+        referenceSymbol
+        amount
+        recommendation
+      }
+    }
+  }
+`;
+
+/**
+ * CraftWorld exactInputQuote query you captured.
+ */
+type ExactInputQuoteVars = {
+  input: { inputSymbol: string; outputSymbol: string; inputAmount: number };
+};
+
+type ExactInputQuoteGql = {
+  exactInputQuote: {
+    type: string;
+    input: { symbol: string; amount: number };
+    output: { symbol: string; amount: number };
+    details?: { priceImpactPercentage?: number } | null;
   };
 };
+
+const EXACT_INPUT_QUOTE_QUERY = `
+  query exactInputQuoteQuery($input: ExactInputInput!) {
+    exactInputQuote(input: $input) {
+      type
+      input { symbol amount }
+      output { symbol amount }
+      details { priceImpactPercentage }
+    }
+  }
+`;
 
 const PRICE_TTL_MS = 60_000;
 const inMemoryCache: { prices?: { data: PricesPayload; fetchedAt: number } } = {};
 const nonceStore = new Map<string, string>();
 
-// Cache the discovered field names once we find a working combo
-let discoveredPricesFields: { symbolField: string; priceField: string } | null = null;
+function flattenExchangePriceListToCoin(gql: ExchangePriceListGql): PricesPayload {
+  const out: { symbol: string; price: number }[] = [];
+
+  for (const row of gql.exchangePriceList ?? []) {
+    const sym = row.baseSymbol;
+    const coin = row.prices?.find((p) => p.referenceSymbol === 'COIN');
+    const price = coin?.amount;
+
+    if (sym && typeof price === 'number' && Number.isFinite(price)) {
+      out.push({ symbol: sym, price });
+    }
+  }
+
+  return { exchangePriceList: out };
+}
 
 const requireFirebase = (reply: { code: (status: number) => { send: (payload: unknown) => void } }) => {
   if (!isFirebaseConfigured()) {
@@ -49,108 +115,19 @@ const getAuthContext = async (request: { headers: Record<string, string | string
   return { walletAddress, firebaseUid: decoded.uid };
 };
 
-const normalizePrices = (rows: Record<string, unknown>[], symbolField: string, priceField: string): PricesPayload => {
-  const list: PricesItem[] = rows
-    .map((row) => {
-      const sym = row[symbolField];
-      const pr = row[priceField];
-
-      const symbol = typeof sym === 'string' ? sym : typeof sym === 'number' ? String(sym) : '';
-      const price =
-        typeof pr === 'number'
-          ? pr
-          : typeof pr === 'string'
-            ? Number(pr)
-            : typeof pr === 'bigint'
-              ? Number(pr)
-              : NaN;
-
-      if (!symbol || !Number.isFinite(price)) return null;
-      return { symbol, price };
-    })
-    .filter((x): x is PricesItem => Boolean(x));
-
-  return { exchangePriceList: list };
-};
-
-const buildPricesQuery = (symbolField: string, priceField: string) => {
-  // NOTE: No introspection fields used here.
-  return `query exchangePriceList {
-    exchangePriceList {
-      prices {
-        ${symbolField}
-        ${priceField}
-      }
-    }
-  }`;
-};
-
-const probePricesFields = async (): Promise<{ symbolField: string; priceField: string }> => {
-  // If we already found a working combo, reuse it.
-  if (discoveredPricesFields) return discoveredPricesFields;
-
-  // Candidates (ordered by likelihood)
-  const symbolCandidates = [
-    'symbol',
-    'token',
-    'resourceSymbol',
-    'itemSymbol',
-    'resource',
-    'id',
-    'name',
-    'key'
-  ];
-
-  const priceCandidates = [
-    'price',
-    'prices',
-    'value',
-    'amount',
-    'coinPrice',
-    'rate',
-    'exchangePrice',
-    'coinValue'
-  ];
-
-  // Try all reasonable combos (small set; fast)
-  for (const symbolField of symbolCandidates) {
-    for (const priceField of priceCandidates) {
-      const query = buildPricesQuery(symbolField, priceField);
-
-      try {
-        const gql = await cwGraphqlRequest<PricesGqlPayload>('exchangePriceList', query);
-        const rows = gql?.exchangePriceList?.prices ?? [];
-        const normalized = normalizePrices(rows, symbolField, priceField);
-
-        // Accept the first combo that yields data or at least doesn’t error
-        // (Even if empty, it means fields are valid and upstream schema matches.)
-        discoveredPricesFields = { symbolField, priceField };
-        server.log.info({ symbolField, priceField, count: normalized.exchangePriceList.length }, 'Discovered prices fields');
-        return discoveredPricesFields;
-      } catch (err) {
-        // keep probing
-        continue;
-      }
-    }
-  }
-
-  throw new Error('Could not determine CraftWorld price field names (all probes failed)');
-};
-
-const fetchPricesFromCraftWorld = async (): Promise<PricesPayload> => {
-  const { symbolField, priceField } = await probePricesFields();
-  const query = buildPricesQuery(symbolField, priceField);
-  const gql = await cwGraphqlRequest<PricesGqlPayload>('exchangePriceList', query);
-  const rows = gql?.exchangePriceList?.prices ?? [];
-  return normalizePrices(rows, symbolField, priceField);
-};
-
 const start = async () => {
   const redis = createRedisClient();
 
   await server.register(cors, {
     origin: process.env.NEXT_PUBLIC_WEB_ORIGIN ? [process.env.NEXT_PUBLIC_WEB_ORIGIN] : true
   });
+
+  // Root route so "/" isn't a 404
+  server.get('/', async () => ({
+    ok: true,
+    service: 'craftworld-companion-api',
+    endpoints: ['/health', '/ready', '/prices', '/quote', '/masterpieces', '/config', '/defs']
+  }));
 
   server.get('/health', async () => ({
     ok: true,
@@ -162,9 +139,8 @@ const start = async () => {
 
   server.get('/ready', async () => {
     const dbReady = Boolean(process.env.DATABASE_URL);
-    const redisReady = Boolean(redis && redis.status === 'ready');
+    const redisReady = Boolean(redis && (redis as any).status === 'ready');
     const firebaseReady = isFirebaseConfigured();
-    const degraded = !dbReady || (redis && !redisReady);
 
     return {
       ok: true,
@@ -172,8 +148,7 @@ const start = async () => {
         db: dbReady,
         redis: redisReady,
         firebase: firebaseReady
-      },
-      degraded
+      }
     };
   });
 
@@ -189,12 +164,12 @@ const start = async () => {
     return payload;
   });
 
-  // Optional: a quick endpoint to see what combo was discovered
-  server.get('/debug/prices-fields', async () => ({
-    discovered: discoveredPricesFields
-  }));
-
-  // IMPORTANT: never throw from /prices (avoid crashing Next pages)
+  /**
+   * FIXED /prices:
+   * - Uses the real CraftWorld exchangePriceList query you captured
+   * - Flattens to { exchangePriceList: [{symbol, price}] }
+   * - Never hard-crashes the web app
+   */
   server.get('/prices', async (req, reply) => {
     const now = Date.now();
 
@@ -209,7 +184,7 @@ const start = async () => {
       // redis cache
       if (redis) {
         try {
-          const cached = await redis.get(redisKey);
+          const cached = await (redis as any).get(redisKey);
           if (cached) {
             const parsed = JSON.parse(cached) as PricesPayload;
             inMemoryCache.prices = { data: parsed, fetchedAt: now };
@@ -229,9 +204,11 @@ const start = async () => {
         // refresh snapshot in background
         void (async () => {
           try {
-            const fresh = await fetchPricesFromCraftWorld();
+            const gql = await cwGraphqlRequest<ExchangePriceListGql>('exchangePriceList', EXCHANGE_PRICE_LIST_QUERY);
+            const fresh = flattenExchangePriceListToCoin(gql);
+
             inMemoryCache.prices = { data: fresh, fetchedAt: Date.now() };
-            if (redis) await redis.set(redisKey, JSON.stringify(fresh), 'EX', 60);
+            if (redis) await (redis as any).set(redisKey, JSON.stringify(fresh), 'EX', 60);
             await writeSnapshot('prices', fresh);
           } catch (error) {
             server.log.error({ err: error }, 'Failed to refresh prices snapshot');
@@ -242,10 +219,11 @@ const start = async () => {
       }
 
       // live fetch
-      const data = await fetchPricesFromCraftWorld();
+      const gql = await cwGraphqlRequest<ExchangePriceListGql>('exchangePriceList', EXCHANGE_PRICE_LIST_QUERY);
+      const data = flattenExchangePriceListToCoin(gql);
 
       inMemoryCache.prices = { data, fetchedAt: now };
-      if (redis) await redis.set(redisKey, JSON.stringify(data), 'EX', 60);
+      if (redis) await (redis as any).set(redisKey, JSON.stringify(data), 'EX', 60);
       await writeSnapshot('prices', data);
 
       return data;
@@ -260,6 +238,38 @@ const start = async () => {
     }
   });
 
+  /**
+   * POST /quote
+   * Body: { input: { inputSymbol, outputSymbol, inputAmount } }
+   */
+  server.post('/quote', async (request, reply) => {
+    try {
+      const body = request.body as Partial<ExactInputQuoteVars> | undefined;
+
+      const inputSymbol = body?.input?.inputSymbol;
+      const outputSymbol = body?.input?.outputSymbol;
+      const inputAmount = body?.input?.inputAmount;
+
+      if (!inputSymbol || !outputSymbol || typeof inputAmount !== 'number') {
+        return reply.code(400).send({
+          error: 'Body must be: { input: { inputSymbol: string, outputSymbol: string, inputAmount: number } }'
+        });
+      }
+
+      const data = await cwGraphqlRequest<ExactInputQuoteGql>(
+        'exactInputQuoteQuery',
+        EXACT_INPUT_QUOTE_QUERY,
+        { input: { inputSymbol, outputSymbol, inputAmount } }
+      );
+
+      return data;
+    } catch (err) {
+      server.log.error({ err }, 'quote failed');
+      return reply.code(502).send({ error: 'quote_failed' });
+    }
+  });
+
+  // Masterpieces
   server.get('/masterpieces', async () => {
     const snapshot = await readSnapshot('masterpieces');
     try {
@@ -298,6 +308,7 @@ const start = async () => {
     }
   });
 
+  // Auth (Firebase)
   server.post('/api/auth/nonce', async (request, reply) => {
     if (!requireFirebase(reply)) return;
 
@@ -343,6 +354,7 @@ const start = async () => {
     reply.send({ customToken });
   });
 
+  // Profile storage (Prisma)
   server.get('/me', async (request, reply) => {
     if (!requireFirebase(reply)) return;
 
@@ -358,7 +370,7 @@ const start = async () => {
       return;
     }
 
-    const user = await prisma.user.upsert({
+    const user = await (prisma as any).user.upsert({
       where: { firebaseUid: auth.firebaseUid },
       update: { walletAddress: auth.walletAddress },
       create: { firebaseUid: auth.firebaseUid, walletAddress: auth.walletAddress }
@@ -382,13 +394,13 @@ const start = async () => {
       return;
     }
 
-    const user = await prisma.user.findUnique({ where: { firebaseUid: auth.firebaseUid } });
+    const user = await (prisma as any).user.findUnique({ where: { firebaseUid: auth.firebaseUid } });
     if (!user) {
       reply.send({ profile: null });
       return;
     }
 
-    const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
+    const profile = await (prisma as any).profile.findUnique({ where: { userId: user.id } });
     reply.send({ profile: profile?.profile ?? null });
   });
 
@@ -409,13 +421,13 @@ const start = async () => {
 
     const body = request.body as { profile?: unknown } | undefined;
 
-    const user = await prisma.user.upsert({
+    const user = await (prisma as any).user.upsert({
       where: { firebaseUid: auth.firebaseUid },
       update: { walletAddress: auth.walletAddress },
       create: { firebaseUid: auth.firebaseUid, walletAddress: auth.walletAddress }
     });
 
-    const profile = await prisma.profile.upsert({
+    const profile = await (prisma as any).profile.upsert({
       where: { userId: user.id },
       update: { profile: body?.profile ?? {} },
       create: { userId: user.id, profile: body?.profile ?? {} }
@@ -439,13 +451,13 @@ const start = async () => {
       return;
     }
 
-    const user = await prisma.user.findUnique({ where: { firebaseUid: auth.firebaseUid } });
+    const user = await (prisma as any).user.findUnique({ where: { firebaseUid: auth.firebaseUid } });
     if (!user) {
       reply.send({ favorites: [] });
       return;
     }
 
-    const favorites = await prisma.favorite.findMany({ where: { userId: user.id } });
+    const favorites = await (prisma as any).favorite.findMany({ where: { userId: user.id } });
     reply.send({ favorites: favorites.map((fav: { symbol: string }) => fav.symbol) });
   });
 
@@ -471,13 +483,13 @@ const start = async () => {
       return;
     }
 
-    const user = await prisma.user.upsert({
+    const user = await (prisma as any).user.upsert({
       where: { firebaseUid: auth.firebaseUid },
       update: { walletAddress: auth.walletAddress },
       create: { firebaseUid: auth.firebaseUid, walletAddress: auth.walletAddress }
     });
 
-    await prisma.favorite.upsert({
+    await (prisma as any).favorite.upsert({
       where: { userId_symbol: { userId: user.id, symbol } },
       update: {},
       create: { userId: user.id, symbol }
