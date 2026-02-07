@@ -11,8 +11,18 @@ import { createCustomToken, isFirebaseConfigured, verifyIdToken } from './fireba
 
 const server = Fastify({ logger: true });
 
+type PricesItem = { symbol: string; price: number };
+
+// What our API returns (flat list) — keep this stable for the web app
 type PricesPayload = {
-  exchangePriceList: { symbol: string; price: number }[];
+  exchangePriceList: PricesItem[];
+};
+
+// What CraftWorld GraphQL returns (new nested shape)
+type PricesGqlPayload = {
+  exchangePriceList: {
+    prices: PricesItem[];
+  };
 };
 
 const PRICE_TTL_MS = 60_000;
@@ -39,6 +49,13 @@ const getAuthContext = async (request: { headers: Record<string, string | string
 
   return { walletAddress, firebaseUid: decoded.uid };
 };
+
+const PRICES_QUERY =
+  'query exchangePriceList { exchangePriceList { prices { symbol price } } }';
+
+const toFlatPrices = (gql: PricesGqlPayload): PricesPayload => ({
+  exchangePriceList: gql?.exchangePriceList?.prices ?? []
+});
 
 const start = async () => {
   const redis = createRedisClient();
@@ -84,19 +101,19 @@ const start = async () => {
     return payload;
   });
 
-  // IMPORTANT: This route should never throw (avoid crashing Next pages).
+  // IMPORTANT: never throw from /prices (avoid crashing Next pages)
   server.get('/prices', async (req, reply) => {
     const now = Date.now();
 
     try {
-      // in-memory cache first
+      // in-memory cache
       if (inMemoryCache.prices && now - inMemoryCache.prices.fetchedAt < PRICE_TTL_MS) {
         return inMemoryCache.prices.data;
       }
 
       const redisKey = 'prices';
 
-      // redis cache next
+      // redis cache
       if (redis) {
         try {
           const cached = await redis.get(redisKey);
@@ -119,10 +136,9 @@ const start = async () => {
         // refresh snapshot in background
         void (async () => {
           try {
-            const fresh = await cwGraphqlRequest<PricesPayload>(
-              'exchangePriceList',
-              'query exchangePriceList { exchangePriceList { symbol price } }'
-            );
+            const freshGql = await cwGraphqlRequest<PricesGqlPayload>('exchangePriceList', PRICES_QUERY);
+            const fresh = toFlatPrices(freshGql);
+
             inMemoryCache.prices = { data: fresh, fetchedAt: Date.now() };
             if (redis) await redis.set(redisKey, JSON.stringify(fresh), 'EX', 60);
             await writeSnapshot('prices', fresh);
@@ -134,11 +150,9 @@ const start = async () => {
         return snapshot as PricesPayload;
       }
 
-      // live fetch (no snapshot available)
-      const data = await cwGraphqlRequest<PricesPayload>(
-        'exchangePriceList',
-        'query exchangePriceList { exchangePriceList { symbol price } }'
-      );
+      // live fetch
+      const dataGql = await cwGraphqlRequest<PricesGqlPayload>('exchangePriceList', PRICES_QUERY);
+      const data = toFlatPrices(dataGql);
 
       inMemoryCache.prices = { data, fetchedAt: now };
       if (redis) await redis.set(redisKey, JSON.stringify(data), 'EX', 60);
@@ -147,7 +161,7 @@ const start = async () => {
       return data;
     } catch (err) {
       server.log.error({ err }, 'prices failed');
-      // Return a safe fallback so the UI still loads.
+      // safe fallback so UI still loads
       return reply.code(200).send({
         exchangePriceList: [],
         ok: false,
@@ -196,43 +210,52 @@ const start = async () => {
 
   server.post('/api/auth/nonce', async (request, reply) => {
     if (!requireFirebase(reply)) return;
+
     const body = request.body as { walletAddress?: string } | undefined;
     const walletAddress = body?.walletAddress?.toLowerCase();
     if (!walletAddress) {
       reply.code(400).send({ error: 'walletAddress required' });
       return;
     }
+
     const nonce = randomBytes(16).toString('hex');
     nonceStore.set(walletAddress, nonce);
+
     reply.send({ nonce, messageToSign: `CraftWorld Companion login nonce: ${nonce}` });
   });
 
   server.post('/api/auth/exchange', async (request, reply) => {
     if (!requireFirebase(reply)) return;
+
     const body = request.body as { walletAddress?: string; signature?: string } | undefined;
     const walletAddress = body?.walletAddress?.toLowerCase();
     const signature = body?.signature;
+
     if (!walletAddress || !signature) {
       reply.code(400).send({ error: 'walletAddress and signature required' });
       return;
     }
+
     const nonce = nonceStore.get(walletAddress);
     if (!nonce) {
       reply.code(400).send({ error: 'nonce missing for wallet' });
       return;
     }
+
     const message = `CraftWorld Companion login nonce: ${nonce}`;
     const recovered = verifyMessage(message, signature).toLowerCase();
     if (recovered !== walletAddress) {
       reply.code(401).send({ error: 'signature mismatch' });
       return;
     }
+
     const customToken = await createCustomToken(walletAddress, { walletAddress });
     reply.send({ customToken });
   });
 
   server.get('/me', async (request, reply) => {
     if (!requireFirebase(reply)) return;
+
     const auth = await getAuthContext(request);
     if (!auth) {
       reply.code(401).send({ error: 'Unauthorized' });
@@ -250,105 +273,126 @@ const start = async () => {
       update: { walletAddress: auth.walletAddress },
       create: { firebaseUid: auth.firebaseUid, walletAddress: auth.walletAddress }
     });
+
     reply.send({ user });
   });
 
   server.get('/profile', async (request, reply) => {
     if (!requireFirebase(reply)) return;
+
     const auth = await getAuthContext(request);
     if (!auth) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
+
     const prisma = getPrismaClient();
     if (!prisma) {
       reply.code(503).send({ error: 'Database unavailable' });
       return;
     }
+
     const user = await prisma.user.findUnique({ where: { firebaseUid: auth.firebaseUid } });
     if (!user) {
       reply.send({ profile: null });
       return;
     }
+
     const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
     reply.send({ profile: profile?.profile ?? null });
   });
 
   server.post('/profile', async (request, reply) => {
     if (!requireFirebase(reply)) return;
+
     const auth = await getAuthContext(request);
     if (!auth) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
+
     const prisma = getPrismaClient();
     if (!prisma) {
       reply.code(503).send({ error: 'Database unavailable' });
       return;
     }
+
     const body = request.body as { profile?: unknown } | undefined;
+
     const user = await prisma.user.upsert({
       where: { firebaseUid: auth.firebaseUid },
       update: { walletAddress: auth.walletAddress },
       create: { firebaseUid: auth.firebaseUid, walletAddress: auth.walletAddress }
     });
+
     const profile = await prisma.profile.upsert({
       where: { userId: user.id },
       update: { profile: body?.profile ?? {} },
       create: { userId: user.id, profile: body?.profile ?? {} }
     });
+
     reply.send({ profile: profile.profile });
   });
 
   server.get('/favorites', async (request, reply) => {
     if (!requireFirebase(reply)) return;
+
     const auth = await getAuthContext(request);
     if (!auth) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
+
     const prisma = getPrismaClient();
     if (!prisma) {
       reply.code(503).send({ error: 'Database unavailable' });
       return;
     }
+
     const user = await prisma.user.findUnique({ where: { firebaseUid: auth.firebaseUid } });
     if (!user) {
       reply.send({ favorites: [] });
       return;
     }
+
     const favorites = await prisma.favorite.findMany({ where: { userId: user.id } });
     reply.send({ favorites: favorites.map((fav: { symbol: string }) => fav.symbol) });
   });
 
   server.post('/favorites', async (request, reply) => {
     if (!requireFirebase(reply)) return;
+
     const auth = await getAuthContext(request);
     if (!auth) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
+
     const prisma = getPrismaClient();
     if (!prisma) {
       reply.code(503).send({ error: 'Database unavailable' });
       return;
     }
+
     const body = request.body as { symbol?: string } | undefined;
     const symbol = body?.symbol?.toUpperCase();
     if (!symbol) {
       reply.code(400).send({ error: 'symbol required' });
       return;
     }
+
     const user = await prisma.user.upsert({
       where: { firebaseUid: auth.firebaseUid },
       update: { walletAddress: auth.walletAddress },
       create: { firebaseUid: auth.firebaseUid, walletAddress: auth.walletAddress }
     });
+
     await prisma.favorite.upsert({
       where: { userId_symbol: { userId: user.id, symbol } },
       update: {},
       create: { userId: user.id, symbol }
     });
+
     reply.send({ ok: true });
   });
 
@@ -361,4 +405,3 @@ start().catch((err) => {
   server.log.error(err);
   process.exit(1);
 });
-
