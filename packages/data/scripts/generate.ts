@@ -72,13 +72,13 @@ const run = async () => {
       .map((token) => ({ token, name: token }))
   };
 
-  const craftIndex: Record<string, { inputs: { token: string; amount: number }[] }> = {};
+  const craftIndex: Record<string, { inputs: { token: string; amount: number }[]; level: number }> = {};
   for (const entry of config) {
     if (!craftIndex[entry.outputToken] || entry.level < craftIndex[entry.outputToken].level) {
       craftIndex[entry.outputToken] = {
         inputs: entry.inputs as { token: string; amount: number }[],
         level: entry.level
-      } as unknown as { inputs: { token: string; amount: number }[]; level: number };
+      };
     }
   }
   const craftIndexClean: Record<string, { inputs: { token: string; amount: number }[] }> = {};

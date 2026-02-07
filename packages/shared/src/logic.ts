@@ -1,4 +1,4 @@
-import config from './generated/config.json' assert { type: 'json' };
+import config from './generated/config.json' with { type: 'json' };
 import { BASE_SYMBOLS, CANONICAL_GRAPH, MASTERY_BONUSES, WORKSHOP_MODIFIERS } from './constants.js';
 import type { CraftPlan, Modifiers, Recipe, RecipeInput } from './types.js';
 
@@ -91,7 +91,7 @@ export const planCraft = (
   refillSeconds?: number
 ): CraftPlan => {
   const { index, warnings } = buildRecipeIndex();
-  const baseModel = {
+  const baseModel: Record<string, number> = {
     EARTH: 0.0,
     WATER: prices.WATER ?? 0.0,
     FIRE: prices.FIRE ?? 0.0,
