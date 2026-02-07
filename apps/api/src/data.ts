@@ -1,6 +1,6 @@
-import config from '@craftworld/shared/src/generated/config.json' assert { type: 'json' };
-import defs from '@craftworld/shared/src/generated/defs.json' assert { type: 'json' };
-import meta from '@craftworld/shared/src/generated/meta.json' assert { type: 'json' };
+import config from '@craftworld/shared/src/generated/config.json' with { type: 'json' };
+import defs from '@craftworld/shared/src/generated/defs.json' with { type: 'json' };
+import meta from '@craftworld/shared/src/generated/meta.json' with { type: 'json' };
 
 export const getConfigPayload = () => ({
   ...config,

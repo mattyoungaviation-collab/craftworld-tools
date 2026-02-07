@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "pnpm --filter @craftworld/shared build",
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p $PORT",
