@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: starter
     rootDir: apps/api
-    buildCommand: cd ../.. && corepack enable && pnpm install --frozen-lockfile && pnpm -r build
+    buildCommand: cd ../.. && corepack enable && pnpm install --no-frozen-lockfile && pnpm -r build
     startCommand: cd ../.. && pnpm --filter @craftworld/api start
     healthCheckPath: /health
     disk:
@@ -37,7 +37,7 @@ services:
     runtime: node
     plan: free
     rootDir: apps/web
-    buildCommand: cd ../.. && corepack enable && pnpm install --frozen-lockfile && pnpm -r build
+    buildCommand: cd ../.. && corepack enable && pnpm install --no-frozen-lockfile && pnpm -r build
     startCommand: cd ../.. && pnpm --filter @craftworld/web start
     healthCheckPath: /
     envVars:
