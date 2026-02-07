@@ -1,5 +1,5 @@
 import { buildChainReport } from '@craftworld/shared';
-import { fetchJson } from '../../../lib/api';
+import { fetchJson } from '../../../lib/api.js';
 
 type Price = { symbol: string; price: number };
 
