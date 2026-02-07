@@ -12,34 +12,21 @@ import { createCustomToken, isFirebaseConfigured, verifyIdToken } from './fireba
 const server = Fastify({ logger: true });
 
 type PricesItem = { symbol: string; price: number };
+type PricesPayload = { exchangePriceList: PricesItem[] };
 
-// What our API returns (flat list) — stable contract for the web
-type PricesPayload = {
-  exchangePriceList: PricesItem[];
-};
-
-// GraphQL introspection types
-type GqlTypeRef = {
-  kind: string;
-  name: string | null;
-  ofType?: GqlTypeRef | null;
-};
-
-type GqlField = {
-  name: string;
-  type: GqlTypeRef;
-};
-
-type IntrospectionType = {
-  __type: {
-    name: string;
-    fields: GqlField[];
-  } | null;
+// CraftWorld GraphQL (new nested shape)
+type PricesGqlPayload = {
+  exchangePriceList: {
+    prices: Record<string, unknown>[];
+  };
 };
 
 const PRICE_TTL_MS = 60_000;
 const inMemoryCache: { prices?: { data: PricesPayload; fetchedAt: number } } = {};
 const nonceStore = new Map<string, string>();
+
+// Cache the discovered field names once we find a working combo
+let discoveredPricesFields: { symbolField: string; priceField: string } | null = null;
 
 const requireFirebase = (reply: { code: (status: number) => { send: (payload: unknown) => void } }) => {
   if (!isFirebaseConfigured()) {
@@ -62,113 +49,8 @@ const getAuthContext = async (request: { headers: Record<string, string | string
   return { walletAddress, firebaseUid: decoded.uid };
 };
 
-const unwrapNamedType = (t: GqlTypeRef | null | undefined): string | null => {
-  let cur: GqlTypeRef | null | undefined = t;
-  while (cur) {
-    if (cur.name) return cur.name;
-    cur = cur.ofType ?? null;
-  }
-  return null;
-};
-
-const introspectType = async (name: string) => {
-  return cwGraphqlRequest<IntrospectionType>(
-    'TypeInfo',
-    `query TypeInfo($name: String!) {
-      __type(name: $name) {
-        name
-        fields {
-          name
-          type {
-            kind
-            name
-            ofType {
-              kind
-              name
-              ofType {
-                kind
-                name
-              }
-            }
-          }
-        }
-      }
-    }`,
-    { name }
-  );
-};
-
-const pickFirst = (fields: string[], preferred: string[]) => {
-  for (const p of preferred) {
-    if (fields.includes(p)) return p;
-  }
-  return null;
-};
-
-/**
- * Robust price fetch that adapts to schema changes:
- * - exchangePriceList is an object
- * - it has a field "prices"
- * - items inside "prices" may not be {symbol, price} anymore
- *   so we introspect the item type and pick likely field names.
- */
-const fetchPricesFromCraftWorld = async (): Promise<PricesPayload> => {
-  // 1) Introspect ExchangePriceList to find the "prices" field item type
-  const exchangeType = await introspectType('ExchangePriceList');
-  if (!exchangeType.__type) throw new Error('Introspection failed for ExchangePriceList');
-
-  const exchangeFields = exchangeType.__type.fields.map((f) => f.name);
-  if (!exchangeFields.includes('prices')) {
-    throw new Error(`ExchangePriceList missing "prices" field. Has: ${exchangeFields.join(', ')}`);
-  }
-
-  const pricesField = exchangeType.__type.fields.find((f) => f.name === 'prices');
-  const pricesItemTypeName = unwrapNamedType(pricesField?.type);
-  if (!pricesItemTypeName) {
-    throw new Error('Could not resolve prices item type');
-  }
-
-  // 2) Introspect item type to discover field names
-  const itemType = await introspectType(pricesItemTypeName);
-  if (!itemType.__type) throw new Error(`Introspection failed for ${pricesItemTypeName}`);
-
-  const itemFields = itemType.__type.fields.map((f) => f.name);
-
-  // Common candidates we might see in the wild
-  const symbolField =
-    pickFirst(itemFields, ['symbol', 'token', 'resourceSymbol', 'itemSymbol', 'resource', 'id']) ??
-    null;
-
-  // For price, CraftWorld literally suggested "prices" at the ExchangePriceList level,
-  // but inside each item it could be "price", "value", etc.
-  const priceField =
-    pickFirst(itemFields, ['price', 'value', 'amount', 'coinPrice', 'prices', 'priceInCoin']) ?? null;
-
-  if (!symbolField || !priceField) {
-    throw new Error(
-      `Could not infer symbol/price fields from ${pricesItemTypeName}. Fields: ${itemFields.join(', ')}`
-    );
-  }
-
-  // 3) Query using discovered field names
-  // Note: We must build the selection set dynamically.
-  const query = `query exchangePriceList {
-    exchangePriceList {
-      prices {
-        ${symbolField}
-        ${priceField}
-      }
-    }
-  }`;
-
-  const data = await cwGraphqlRequest<{
-    exchangePriceList: { prices: Record<string, unknown>[] };
-  }>('exchangePriceList', query);
-
-  const raw = data?.exchangePriceList?.prices ?? [];
-
-  // 4) Normalize to our stable API contract
-  const normalized: PricesItem[] = raw
+const normalizePrices = (rows: Record<string, unknown>[], symbolField: string, priceField: string): PricesPayload => {
+  const list: PricesItem[] = rows
     .map((row) => {
       const sym = row[symbolField];
       const pr = row[priceField];
@@ -188,7 +70,79 @@ const fetchPricesFromCraftWorld = async (): Promise<PricesPayload> => {
     })
     .filter((x): x is PricesItem => Boolean(x));
 
-  return { exchangePriceList: normalized };
+  return { exchangePriceList: list };
+};
+
+const buildPricesQuery = (symbolField: string, priceField: string) => {
+  // NOTE: No introspection fields used here.
+  return `query exchangePriceList {
+    exchangePriceList {
+      prices {
+        ${symbolField}
+        ${priceField}
+      }
+    }
+  }`;
+};
+
+const probePricesFields = async (): Promise<{ symbolField: string; priceField: string }> => {
+  // If we already found a working combo, reuse it.
+  if (discoveredPricesFields) return discoveredPricesFields;
+
+  // Candidates (ordered by likelihood)
+  const symbolCandidates = [
+    'symbol',
+    'token',
+    'resourceSymbol',
+    'itemSymbol',
+    'resource',
+    'id',
+    'name',
+    'key'
+  ];
+
+  const priceCandidates = [
+    'price',
+    'prices',
+    'value',
+    'amount',
+    'coinPrice',
+    'rate',
+    'exchangePrice',
+    'coinValue'
+  ];
+
+  // Try all reasonable combos (small set; fast)
+  for (const symbolField of symbolCandidates) {
+    for (const priceField of priceCandidates) {
+      const query = buildPricesQuery(symbolField, priceField);
+
+      try {
+        const gql = await cwGraphqlRequest<PricesGqlPayload>('exchangePriceList', query);
+        const rows = gql?.exchangePriceList?.prices ?? [];
+        const normalized = normalizePrices(rows, symbolField, priceField);
+
+        // Accept the first combo that yields data or at least doesn’t error
+        // (Even if empty, it means fields are valid and upstream schema matches.)
+        discoveredPricesFields = { symbolField, priceField };
+        server.log.info({ symbolField, priceField, count: normalized.exchangePriceList.length }, 'Discovered prices fields');
+        return discoveredPricesFields;
+      } catch (err) {
+        // keep probing
+        continue;
+      }
+    }
+  }
+
+  throw new Error('Could not determine CraftWorld price field names (all probes failed)');
+};
+
+const fetchPricesFromCraftWorld = async (): Promise<PricesPayload> => {
+  const { symbolField, priceField } = await probePricesFields();
+  const query = buildPricesQuery(symbolField, priceField);
+  const gql = await cwGraphqlRequest<PricesGqlPayload>('exchangePriceList', query);
+  const rows = gql?.exchangePriceList?.prices ?? [];
+  return normalizePrices(rows, symbolField, priceField);
 };
 
 const start = async () => {
@@ -235,54 +189,10 @@ const start = async () => {
     return payload;
   });
 
-  // Debug endpoints so you can inspect schema quickly if it changes again
-  server.get('/debug/prices-schema', async () => introspectType('ExchangePriceList'));
-
-  server.get('/debug/prices-item-schema', async () => {
-    const exchangeType = await introspectType('ExchangePriceList');
-    if (!exchangeType.__type) return exchangeType;
-
-    const pricesField = exchangeType.__type.fields.find((f) => f.name === 'prices');
-    const pricesItemTypeName = unwrapNamedType(pricesField?.type);
-    if (!pricesItemTypeName) return { error: 'Could not resolve prices item type' };
-
-    return introspectType(pricesItemTypeName);
-  });
-
-  server.get('/debug/prices-raw', async () => {
-    // returns what CraftWorld sends before normalization
-    const exchangeType = await introspectType('ExchangePriceList');
-    if (!exchangeType.__type) throw new Error('Introspection failed for ExchangePriceList');
-
-    const pricesField = exchangeType.__type.fields.find((f) => f.name === 'prices');
-    const pricesItemTypeName = unwrapNamedType(pricesField?.type);
-    if (!pricesItemTypeName) throw new Error('Could not resolve prices item type');
-
-    const itemType = await introspectType(pricesItemTypeName);
-    if (!itemType.__type) throw new Error(`Introspection failed for ${pricesItemTypeName}`);
-
-    const itemFields = itemType.__type.fields.map((f) => f.name);
-    const symbolField = pickFirst(itemFields, ['symbol', 'token', 'resourceSymbol', 'itemSymbol', 'resource', 'id']);
-    const priceField = pickFirst(itemFields, ['price', 'value', 'amount', 'coinPrice', 'prices', 'priceInCoin']);
-    if (!symbolField || !priceField) {
-      return { error: `Could not infer fields`, pricesItemTypeName, itemFields };
-    }
-
-    const query = `query exchangePriceList {
-      exchangePriceList {
-        prices {
-          ${symbolField}
-          ${priceField}
-        }
-      }
-    }`;
-
-    const data = await cwGraphqlRequest<{
-      exchangePriceList: { prices: Record<string, unknown>[] };
-    }>('exchangePriceList', query);
-
-    return { pricesItemTypeName, symbolField, priceField, data };
-  });
+  // Optional: a quick endpoint to see what combo was discovered
+  server.get('/debug/prices-fields', async () => ({
+    discovered: discoveredPricesFields
+  }));
 
   // IMPORTANT: never throw from /prices (avoid crashing Next pages)
   server.get('/prices', async (req, reply) => {
