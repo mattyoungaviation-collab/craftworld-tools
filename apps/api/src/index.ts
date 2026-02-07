@@ -82,11 +82,17 @@ const start = async () => {
     return payload;
   });
 
-  server.get('/prices', async () => {
-    const now = Date.now();
-    if (inMemoryCache.prices && now - inMemoryCache.prices.fetchedAt < PRICE_TTL_MS) {
-      return inMemoryCache.prices.data;
-    }
+server.get('/prices', async (req, reply) => {
+  try {
+    // your existing prices logic
+    return await getPrices(); // whatever your current code is
+  } catch (err) {
+    server.log.error({ err }, 'prices failed');
+    // IMPORTANT: return an empty list (UI still loads)
+    return reply.code(200).send({ exchangePriceList: [], source: 'fallback', ok: false });
+  }
+});
+
 
     const redisKey = 'prices';
     if (redis) {
