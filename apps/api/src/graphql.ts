@@ -1,51 +1,58 @@
-const CW_GRAPHQL_URL = process.env.CW_GRAPHQL_URL || 'https://craft-world.gg/graphql';
-
-// CraftWorld expects this header (you mentioned 1.6.4)
-const CW_APP_VERSION = process.env.CW_APP_VERSION || '1.6.4';
-
-type GqlRequestBody = {
-  operationName?: string;
-  query: string;
-  variables?: Record<string, unknown> | null;
+type GqlEnvelope<T> = {
+  data?: T;
+  errors?: Array<{ message: string; extensions?: unknown }>;
 };
 
-export async function cwGraphqlRequest<T>(
+export const cwGraphqlRequest = async <T>(
   operationName: string,
   query: string,
   variables?: Record<string, unknown> | null
-): Promise<T> {
-  const body: GqlRequestBody = {
-    operationName,
-    query,
-    variables: variables ?? null
-  };
+): Promise<T> => {
+  const url = process.env.CRAFTWORLD_GQL_URL || 'https://craft-world.gg/graphql';
+  const appVersion = process.env.CRAFTWORLD_APP_VERSION || '1.6.4';
 
-  const res = await fetch(CW_GRAPHQL_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'x-app-version': CW_APP_VERSION
-    },
-    body: JSON.stringify(body)
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
 
-  const text = await res.text();
-
-  if (!res.ok) {
-    throw new Error(`CraftWorld GraphQL failed ${res.status}: ${text}`);
-  }
-
-  let json: any;
   try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(`CraftWorld GraphQL returned non-JSON: ${text}`);
-  }
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+        'x-app-version': appVersion
+      },
+      body: JSON.stringify({
+        operationName,
+        query,
+        variables: variables ?? null
+      }),
+      signal: controller.signal
+    });
 
-  if (json?.errors?.length) {
-    throw new Error(`CraftWorld GraphQL failed 400: ${JSON.stringify({ errors: json.errors })}`);
-  }
+    const text = await response.text();
 
-  return json.data as T;
-}
+    if (!response.ok) {
+      throw new Error(`CraftWorld GraphQL failed ${response.status}: ${text}`);
+    }
+
+    let payload: GqlEnvelope<T>;
+    try {
+      payload = JSON.parse(text) as GqlEnvelope<T>;
+    } catch {
+      throw new Error(`CraftWorld GraphQL returned non-JSON: ${text}`);
+    }
+
+    if (payload.errors?.length) {
+      throw new Error(`CraftWorld GraphQL errors: ${JSON.stringify(payload.errors)}`);
+    }
+
+    if (!payload.data) {
+      throw new Error(`CraftWorld GraphQL missing data: ${text}`);
+    }
+
+    return payload.data;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
