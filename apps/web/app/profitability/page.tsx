@@ -1,4 +1,4 @@
-import { fetchJson } from '../../lib/api';
+import { fetchJson } from '../../lib/api.js';
 import { planCraft } from '@craftworld/shared';
 
 type Price = { symbol: string; price: number };

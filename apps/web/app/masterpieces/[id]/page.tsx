@@ -1,4 +1,4 @@
-import { fetchJson } from '../../../lib/api';
+import { fetchJson } from '../../../lib/api.js';
 
 type Params = { params: { id: string } };
 

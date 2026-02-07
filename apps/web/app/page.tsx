@@ -1,4 +1,4 @@
-import { fetchJson } from '../lib/api';
+import { fetchJson } from '../lib/api.js';
 
 export default async function HomePage() {
   const ready = await fetchJson<{ ok: boolean; degraded: boolean; deps: Record<string, boolean> }>('/ready');

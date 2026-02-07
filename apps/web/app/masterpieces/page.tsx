@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { fetchJson } from '../../lib/api';
+import { fetchJson } from '../../lib/api.js';
 
 type Masterpiece = {
   id: string;
