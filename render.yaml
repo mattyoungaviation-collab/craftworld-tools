@@ -1,10 +1,11 @@
 services:
   - type: web
     name: craftworld-companion-api
-    env: node
+    runtime: node
+    plan: starter
     rootDir: apps/api
-    buildCommand: cd .. && pnpm install && pnpm -r build
-    startCommand: cd .. && pnpm --filter @craftworld/api start
+    buildCommand: cd ../.. && corepack enable && pnpm install --frozen-lockfile && pnpm -r build
+    startCommand: cd ../.. && pnpm --filter @craftworld/api start
     healthCheckPath: /health
     disk:
       name: craftworld-companion-data
@@ -28,35 +29,29 @@ services:
       - key: REDIS_URL
         fromService:
           name: craftworld-companion-redis
-          type: redis
+          type: keyvalue
           property: connectionString
 
   - type: web
     name: craftworld-companion-web
-    env: node
+    runtime: node
+    plan: free
     rootDir: apps/web
-    buildCommand: cd .. && pnpm install && pnpm -r build
-    startCommand: cd .. && pnpm --filter @craftworld/web start
+    buildCommand: cd ../.. && corepack enable && pnpm install --frozen-lockfile && pnpm -r build
+    startCommand: cd ../.. && pnpm --filter @craftworld/web start
     healthCheckPath: /
     envVars:
       - key: NODE_VERSION
         value: 20
       - key: NEXT_PUBLIC_API_BASE
-        fromService:
-          name: craftworld-companion-api
-          type: web
-          property: url
+        sync: false
 
-  - type: redis
+  - type: keyvalue
     name: craftworld-companion-redis
     ipAllowList: []
     plan: free
 
-  - type: pserv
-    name: craftworld-companion-db
-    env: postgres
+databases:
+  - name: craftworld-companion-db
     plan: free
-    disk:
-      name: craftworld-companion-db-disk
-      sizeGB: 5
-
+    ipAllowList: []
