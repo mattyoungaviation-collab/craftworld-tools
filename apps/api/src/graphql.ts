@@ -20,9 +20,11 @@ export const cwGraphqlRequest = async <T>(
       signal: controller.signal
     });
 
-    if (!response.ok) {
-      throw new Error(`CraftWorld GraphQL failed with ${response.status}`);
-    }
+if (!response.ok) {
+  const text = await response.text().catch(() => '');
+  throw new Error(`CraftWorld GraphQL failed ${response.status}: ${text.slice(0, 800)}`);
+}
+
 
     const payload = (await response.json()) as { data?: T; errors?: { message: string }[] };
     if (payload.errors?.length) {
