@@ -82,64 +82,77 @@ const start = async () => {
     return payload;
   });
 
-server.get('/prices', async (req, reply) => {
-  try {
-    // your existing prices logic
-    return await getPrices(); // whatever your current code is
-  } catch (err) {
-    server.log.error({ err }, 'prices failed');
-    // IMPORTANT: return an empty list (UI still loads)
-    return reply.code(200).send({ exchangePriceList: [], source: 'fallback', ok: false });
-  }
-});
+  server.get('/prices', async (req, reply) => {
+    const now = Date.now();
 
-
-    const redisKey = 'prices';
-    if (redis) {
-      try {
-        const cached = await redis.get(redisKey);
-        if (cached) {
-          const parsed = JSON.parse(cached) as PricesPayload;
-          inMemoryCache.prices = { data: parsed, fetchedAt: now };
-          return parsed;
-        }
-      } catch (error) {
-        server.log.warn({ err: error }, 'Redis cache unavailable for prices');
+    try {
+      // in-memory cache first
+      if (inMemoryCache.prices && now - inMemoryCache.prices.fetchedAt < PRICE_TTL_MS) {
+        return inMemoryCache.prices.data;
       }
-    }
 
-    const snapshot = await readSnapshot('prices');
-    if (snapshot) {
-      inMemoryCache.prices = { data: snapshot as PricesPayload, fetchedAt: now };
-      server.log.warn('Serving prices from disk snapshot');
-      void (async () => {
+      const redisKey = 'prices';
+
+      // redis cache next
+      if (redis) {
         try {
-          const data = await cwGraphqlRequest<PricesPayload>(
-            'exchangePriceList',
-            'query exchangePriceList { exchangePriceList { symbol price } }'
-          );
-          inMemoryCache.prices = { data, fetchedAt: Date.now() };
-          if (redis) await redis.set(redisKey, JSON.stringify(data), 'EX', 60);
-          await writeSnapshot('prices', data);
+          const cached = await redis.get(redisKey);
+          if (cached) {
+            const parsed = JSON.parse(cached) as PricesPayload;
+            inMemoryCache.prices = { data: parsed, fetchedAt: now };
+            return parsed;
+          }
         } catch (error) {
-          server.log.error({ err: error }, 'Failed to refresh prices snapshot');
+          server.log.warn({ err: error }, 'Redis cache unavailable for prices');
         }
-      })();
+      }
 
-      return snapshot as PricesPayload;
-    }
+      // disk snapshot fallback
+      const snapshot = await readSnapshot('prices');
+      if (snapshot) {
+        inMemoryCache.prices = { data: snapshot as PricesPayload, fetchedAt: now };
+        server.log.warn('Serving prices from disk snapshot');
 
-    const data = await cwGraphqlRequest<PricesPayload>(
-      'exchangePriceList',
-      'query exchangePriceList { exchangePriceList { symbol price } }'
-    );
-    inMemoryCache.prices = { data, fetchedAt: now };
-    if (redis) {
-      await redis.set(redisKey, JSON.stringify(data), 'EX', 60);
+        // refresh snapshot in background
+        void (async () => {
+          try {
+            const fresh = await cwGraphqlRequest<PricesPayload>(
+              'exchangePriceList',
+              'query exchangePriceList { exchangePriceList { symbol price } }'
+            );
+            inMemoryCache.prices = { data: fresh, fetchedAt: Date.now() };
+            if (redis) await redis.set(redisKey, JSON.stringify(fresh), 'EX', 60);
+            await writeSnapshot('prices', fresh);
+          } catch (error) {
+            server.log.error({ err: error }, 'Failed to refresh prices snapshot');
+          }
+        })();
+
+        return snapshot as PricesPayload;
+      }
+
+      // live fetch (no snapshot available)
+      const data = await cwGraphqlRequest<PricesPayload>(
+        'exchangePriceList',
+        'query exchangePriceList { exchangePriceList { symbol price } }'
+      );
+
+      inMemoryCache.prices = { data, fetchedAt: now };
+      if (redis) await redis.set(redisKey, JSON.stringify(data), 'EX', 60);
+      await writeSnapshot('prices', data);
+
+      return data;
+    } catch (err) {
+      // IMPORTANT: do NOT throw, or Next pages will hard-fail.
+      server.log.error({ err }, 'prices failed');
+      return reply.code(200).send({
+        exchangePriceList: [],
+        ok: false,
+        error: 'prices_unavailable'
+      });
     }
-    await writeSnapshot('prices', data);
-    return data;
   });
+
 
   server.get('/masterpieces', async () => {
     const snapshot = await readSnapshot('masterpieces');
