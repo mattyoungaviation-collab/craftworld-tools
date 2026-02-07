@@ -27,8 +27,9 @@ const requireFirebase = (reply: { code: (status: number) => { send: (payload: un
   return true;
 };
 
-const getAuthContext = async (request: { headers: Record<string, string | undefined> }) => {
-  const authHeader = request.headers.authorization || '';
+const getAuthContext = async (request: { headers: Record<string, string | string[] | undefined> }) => {
+  const headerValue = request.headers.authorization;
+  const authHeader = Array.isArray(headerValue) ? headerValue[0] ?? '' : headerValue ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return null;
   const decoded = await verifyIdToken(token);
@@ -296,7 +297,7 @@ const start = async () => {
       return;
     }
     const favorites = await prisma.favorite.findMany({ where: { userId: user.id } });
-    reply.send({ favorites: favorites.map((fav) => fav.symbol) });
+    reply.send({ favorites: favorites.map((fav: { symbol: string }) => fav.symbol) });
   });
 
   server.post('/favorites', async (request, reply) => {
