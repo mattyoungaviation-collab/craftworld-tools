@@ -93,6 +93,12 @@ API runs at `http://localhost:3001`, Web at `http://localhost:3000`.
 - `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
 - `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
 
+### Craft World Auth (Web)
+- `NEXT_PUBLIC_CW_GRAPHQL_URL` (default `https://craft-world.gg/graphql`)
+- `NEXT_PUBLIC_CW_APP_VERSION` (default `1.6.4`)
+- `NEXT_PUBLIC_FIREBASE_API_KEY` (required for wallet sign-in)
+- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` (required for WalletConnect v2 mobile flow)
+
 ## Degraded Mode + Caching
 
 - API stores warm snapshots on disk:
@@ -119,3 +125,11 @@ API runs at `http://localhost:3001`, Web at `http://localhost:3000`.
 ## Notes
 
 Legacy Python tooling and CSVs are preserved in `packages/legacy` for attribution and parity checks.
+
+## Auth + Tabs Overview
+
+The web app now ships a mobile-first tabbed dashboard that mirrors Craft World’s wallet sign-in and authenticated GraphQL flow:
+
+- **Auth flow:** connect wallet → sign login message → `loginForCustomToken` → exchange custom token → Firebase `idToken` → Craft World GraphQL calls with `Bearer jwt_<idToken>`.
+- **Session storage:** wallet address, Firebase `idToken`, refresh token (if available), `expiresAt`, and Firebase `localId` in localStorage. Tokens are never printed in the UI.
+- **Tabs:** Home (status/actions), Calls (API catalog), Prices, Resources, Wallets, Deputy lookup, Workshop, Mastery, Leaderboards, and Notes (flow explanation).
