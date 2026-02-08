@@ -1,31 +1,25 @@
-import { NextResponse } from 'next/server';
-
-const graphqlUrl = () => process.env.NEXT_PUBLIC_CW_GRAPHQL_URL || 'https://craft-world.gg/graphql';
-const appVersion = () => process.env.NEXT_PUBLIC_CW_APP_VERSION || '1.6.4';
+const CW_GRAPHQL_URL = process.env.NEXT_PUBLIC_CW_GRAPHQL_URL || 'https://craft-world.gg/graphql';
+const CW_APP_VERSION = process.env.NEXT_PUBLIC_CW_APP_VERSION || '1.6.4';
 
 export async function POST(request: Request) {
-  const payload = (await request.json()) as {
-    operationName?: string;
-    query?: string;
-    variables?: Record<string, unknown>;
-  };
-  if (!payload.query) {
-    return NextResponse.json({ error: 'Missing query.' }, { status: 400 });
-  }
-  const authHeader = request.headers.get('authorization');
-  const response = await fetch(graphqlUrl(), {
+  const body = await request.text();
+  const authHeader = request.headers.get('authorization') ?? '';
+
+  const res = await fetch(CW_GRAPHQL_URL, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-app-version': appVersion(),
+      'x-app-version': CW_APP_VERSION,
       ...(authHeader ? { authorization: authHeader } : {})
     },
-    body: JSON.stringify({
-      operationName: payload.operationName,
-      query: payload.query,
-      variables: payload.variables
-    })
+    body
   });
-  const data = await response.json();
-  return NextResponse.json(data, { status: response.status });
+
+  const responseBody = await res.text();
+  return new Response(responseBody, {
+    status: res.status,
+    headers: {
+      'content-type': res.headers.get('content-type') ?? 'application/json'
+    }
+  });
 }
