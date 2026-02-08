@@ -88,6 +88,12 @@ API runs at `http://localhost:3001`, Web at `http://localhost:3000`.
 ### Web (required)
 - `NEXT_PUBLIC_API_BASE`
 
+### Web (Craft World Auth)
+- `NEXT_PUBLIC_CW_GRAPHQL_URL` (default `https://craft-world.gg/graphql`)
+- `NEXT_PUBLIC_CW_APP_VERSION` (default `1.6.4`)
+- `NEXT_PUBLIC_FIREBASE_API_KEY` (Craft World Firebase web API key)
+- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` (WalletConnect v2 project id for mobile)
+
 ### Firebase Web (optional)
 - `NEXT_PUBLIC_FIREBASE_API_KEY`
 - `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
@@ -119,3 +125,15 @@ API runs at `http://localhost:3001`, Web at `http://localhost:3000`.
 ## Notes
 
 Legacy Python tooling and CSVs are preserved in `packages/legacy` for attribution and parity checks.
+
+## Auth + Tabs overview
+
+The web app now includes a mobile-first, tabbed Craft World wallet console that:
+
+- Connects injected wallets (Ronin/MetaMask) or WalletConnect on mobile.
+- Signs a deterministic login message to obtain a Firebase custom token, then exchanges it for an idToken.
+- Uses a centralized Craft World API client and a `/api/cw/graphql` proxy that attaches required headers.
+- Persists the authenticated session in localStorage and hydrates it on refresh.
+- Provides tabs for status, API call catalog, prices, resources, wallets, deputy lookup, workshop, mastery, leaderboards, and notes.
+
+Set the environment variables above before running the web app to enable the full auth flow.
