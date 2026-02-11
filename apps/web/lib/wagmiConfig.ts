@@ -1,5 +1,6 @@
 import { http, createConfig } from 'wagmi';
-import { injected, walletConnect } from 'wagmi/connectors';
+import { injected } from 'wagmi/connectors/injected';
+import { walletConnect } from 'wagmi/connectors/walletConnect';
 import { defineChain } from 'viem';
 
 const ronin = defineChain({
