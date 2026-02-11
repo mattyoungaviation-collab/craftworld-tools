@@ -3,16 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { WagmiProvider, useAccount, useConnect, useDisconnect, useSignMessage } from 'wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cwGraphqlRequest } from '../../lib/cwClient.js';
-import { exchangeCustomToken, lookupAccountInfo, refreshIdToken } from '../../lib/firebaseAuth.js';
-import {
-  clearStoredSession,
-  readStoredSession,
-  readWorkshopCache,
-  writeStoredSession,
-  writeWorkshopCache
-} from '../../lib/authStorage.js';
-import { isWalletConnectConfigured, wagmiConfig } from '../../lib/wagmiConfig.js';
+import { cwGraphqlRequest } from '../../lib/cwClient';
+import { exchangeCustomToken, lookupAccountInfo, refreshIdToken } from '../../lib/firebaseAuth';
+import { clearStoredSession, readStoredSession, readWorkshopCache, writeStoredSession, writeWorkshopCache } from '../../lib/authStorage';
+import { isWalletConnectConfigured, wagmiConfig } from '../../lib/wagmiConfig';
 
 type AuthStatus = 'disconnected' | 'connecting' | 'connected' | 'logging_in' | 'authenticated' | 'error';
 
