@@ -2,8 +2,9 @@ import { BrowserProvider, getAddress } from 'ethers';
 
 type Eip1193Provider = {
   request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
-  on?: (event: string, callback: (...args: unknown[]) => void) => void;
-  removeListener?: (event: string, callback: (...args: unknown[]) => void) => void;
+  // Loosen event typing so WalletConnect's strongly-typed `.on()` is compatible
+  on?: (event: unknown, listener: (...args: unknown[]) => void) => unknown;
+  removeListener?: (event: unknown, listener: (...args: unknown[]) => void) => unknown;
   disconnect?: () => Promise<void> | void;
 };
 
@@ -55,13 +56,11 @@ export const connectInjectedWallet = async (): Promise<ConnectedWallet | null> =
 
 export const connectWalletConnect = async (): Promise<ConnectedWallet> => {
   const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
-  if (!projectId) {
-    throw new Error('WalletConnect project id missing.');
-  }
+  if (!projectId) throw new Error('WalletConnect project id missing.');
 
   const { EthereumProvider } = await import('@walletconnect/ethereum-provider');
 
-  const provider = await EthereumProvider.init({
+  const wcProvider = await EthereumProvider.init({
     projectId,
     chains: [2020],
     showQrModal: true,
@@ -69,13 +68,14 @@ export const connectWalletConnect = async (): Promise<ConnectedWallet> => {
     events: ['accountsChanged', 'chainChanged', 'disconnect'],
   });
 
-  await provider.enable();
+  await wcProvider.enable();
 
-  const browserProvider = new BrowserProvider(provider as never);
+  const browserProvider = new BrowserProvider(wcProvider as never);
   const accounts = (await browserProvider.send('eth_requestAccounts', [])) as string[];
   const address = getAddress(accounts[0]);
 
-  return { provider, address, type: 'walletconnect' };
+  // Cast to our minimal EIP-1193-ish shape
+  return { provider: wcProvider as unknown as Eip1193Provider, address, type: 'walletconnect' };
 };
 
 export const signMessage = async (wallet: ConnectedWallet, message: string) => {
