@@ -2552,7 +2552,8 @@ tr:nth-child(odd) td {
         const statusEl = document.getElementById('overview-auto-status');
 
         const hasResult = String(form.dataset.hasResult || '').toLowerCase() === 'true';
-        if (hasResult && !force) return;
+        const hasAttempted = String(form.dataset.hasAttempted || '').toLowerCase() === 'true';
+        if ((hasResult || hasAttempted) && !force) return;
         if (form.dataset.autofetchInFlight === 'true') return;
 
         const session = getSession();
@@ -3210,6 +3211,7 @@ def index():
     error: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     uid = session.get("voya_uid", "")
+    did_submit = request.method == "POST"
 
     if request.method == "POST":
         uid = (request.form.get("uid") or "").strip()
@@ -3230,7 +3232,7 @@ def index():
         Enter your <strong>Account ID</strong> and this page will fetch your land plots, factories,
         mines, dynos and resources from Craft World.
       </p>
-      <form method="post" id="overview-form" data-has-result="{{ 'true' if result else 'false' }}" data-auto-fetch="true">
+      <form method="post" id="overview-form" data-has-result="{{ 'true' if result else 'false' }}" data-has-attempted="{{ 'true' if did_submit else 'false' }}" data-auto-fetch="true">
         <label for="uid">Account ID</label>
         <input type="text" id="uid" name="uid" value="{{ uid }}" placeholder="e.g. GfUeRBCZv8OwuUKq7Tu9JVpA70l1">
         <button type="submit">Fetch Craft World</button>
@@ -11389,7 +11391,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
