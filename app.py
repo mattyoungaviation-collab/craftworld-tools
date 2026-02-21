@@ -50,7 +50,7 @@ def normalize_avatar_url(raw: Optional[str]) -> Optional[str]:
 import os
 DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
 CW_GRAPHQL_URL = "https://craft-world.gg/graphql"
-CW_APP_VERSION = "1.6.2"
+CW_APP_VERSION = "1.6.6"
 CW_FIREBASE_API_KEY = "AIzaSyDgDDykbRrhbdfWUpm1BUgj4ga7d_-wy_g"
 CW_IDENTITY_SIGNIN_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={CW_FIREBASE_API_KEY}"
 
@@ -4828,7 +4828,11 @@ def api_cw_get_nonce():
 
     body = upstream.get("body") if isinstance(upstream, dict) else {}
     raw_errors = body.get("errors") if isinstance(body, dict) else None
-    nonce = (((body.get("data") or {}).get("getNonce") or {}).get("nonce") if isinstance(body, dict) else None)
+    nonce_payload = ((body.get("data") or {}).get("getNonce") if isinstance(body, dict) else None)
+    if isinstance(nonce_payload, dict):
+        nonce = nonce_payload.get("nonce")
+    else:
+        nonce = nonce_payload
     if (not upstream.get("ok")) or raw_errors or (not nonce):
         return jsonify({
             "ok": False,
@@ -4865,7 +4869,11 @@ def api_cw_login_for_custom_token():
 
     body = upstream.get("body") if isinstance(upstream, dict) else {}
     raw_errors = body.get("errors") if isinstance(body, dict) else None
-    custom_token = ((((body.get("data") or {}).get("loginForCustomToken") or {}).get("customToken")) if isinstance(body, dict) else None)
+    token_payload = ((body.get("data") or {}).get("loginForCustomToken") if isinstance(body, dict) else None)
+    if isinstance(token_payload, dict):
+        custom_token = token_payload.get("customToken")
+    else:
+        custom_token = token_payload
     if (not upstream.get("ok")) or raw_errors or (not custom_token):
         return jsonify({
             "ok": False,
@@ -11381,7 +11389,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
