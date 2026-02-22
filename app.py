@@ -2062,6 +2062,7 @@ tr:nth-child(odd) td {
         <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
         <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
         <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
+        <a href="{{ url_for('upgrade_calculate') }}" class="{{ 'active' if active_page=='upgrade_calculate' else '' }}">Upgrade Calculate</a>
         <a href="{{ url_for('charts') }}" class="{{ 'active' if active_page=='charts' else '' }}">Charts</a>
 
 
@@ -11160,6 +11161,518 @@ def calculate():
     )
     return html
 
+
+@app.route("/upgrade-calculate", methods=["GET", "POST"])
+def upgrade_calculate():
+    error: Optional[str] = None
+    result = None
+
+    factories = FACTORIES_FROM_CSV or {}
+    all_tokens = list(factories.keys())
+    tokens: List[str] = [t for t in FACTORY_DISPLAY_ORDER if t in factories]
+    for tok in sorted(all_tokens):
+        if tok not in tokens:
+            tokens.append(tok)
+
+    selected_token = tokens[0] if tokens else ""
+    mode = "next"
+    count = 1
+    current_level: Optional[int] = None
+    target_level: Optional[int] = None
+
+    def get_highest_owned_levels() -> Dict[str, int]:
+        uid = session.get("voya_uid")
+        if not uid:
+            return {}
+
+        highest: Dict[str, int] = {}
+        try:
+            cw = fetch_craftworld(uid)
+            land_plots = attr_or_key(cw, "landPlots", []) or []
+            for plot in land_plots:
+                areas = attr_or_key(plot, "areas", []) or []
+                for area in areas:
+                    factories_wrapped = attr_or_key(area, "factories", []) or []
+                    for facwrap in factories_wrapped:
+                        fac = attr_or_key(facwrap, "factory", None)
+                        if not fac:
+                            continue
+                        definition = attr_or_key(fac, "definition", {}) or {}
+                        token = str(attr_or_key(definition, "id", "") or "").upper()
+                        if not token:
+                            continue
+                        api_level = int(attr_or_key(fac, "level", 0) or 0)
+                        csv_level = api_level + 1
+                        if csv_level > int(highest.get(token, 0)):
+                            highest[token] = csv_level
+        except Exception:
+            return {}
+
+        return highest
+
+    owned_highest_levels = get_highest_owned_levels()
+
+    def get_default_current_level(token: str, levels: List[int]) -> Optional[int]:
+        if not levels:
+            return None
+        owned_level = int(owned_highest_levels.get(token, 0) or 0)
+        if owned_level in levels:
+            return owned_level
+        if session.get("voya_uid"):
+            return 1 if 1 in levels else levels[0]
+        return 1 if 1 in levels else levels[0]
+
+    def get_upgrade_cost_for_level(token: str, level: int) -> Dict[str, float]:
+        token_u = str(token or "").upper()
+        if level <= 1:
+            return {}
+
+        level_data = factories.get(token_u, {}).get(level) or {}
+        if not isinstance(level_data, dict):
+            return {}
+
+        out: Dict[str, float] = {}
+
+        def _add_resource(res_token: Any, res_amount: Any) -> None:
+            sym = str(res_token or "").strip().upper()
+            if not sym:
+                return
+            try:
+                amt = float(res_amount or 0.0)
+            except Exception:
+                return
+            if amt <= 0:
+                return
+            out[sym] = out.get(sym, 0.0) + amt
+
+        if isinstance(level_data.get("upgrade"), dict):
+            for sym, amt in level_data["upgrade"].items():
+                _add_resource(sym, amt)
+
+        for key in ("upgrade_inputs", "upgrade_cost"):
+            value = level_data.get(key)
+            if isinstance(value, dict):
+                for sym, amt in value.items():
+                    _add_resource(sym, amt)
+            elif isinstance(value, list):
+                for row in value:
+                    if isinstance(row, dict):
+                        _add_resource(
+                            row.get("token") or row.get("symbol") or row.get("resource"),
+                            row.get("amount") or row.get("qty") or row.get("value"),
+                        )
+
+        _add_resource(level_data.get("upgrade_token"), level_data.get("upgrade_amount"))
+
+        for key, value in level_data.items():
+            if not (isinstance(key, str) and key.startswith("upgrade_") and key.endswith("_token")):
+                continue
+            mid = key[len("upgrade_") : -len("_token")]
+            if not mid:
+                continue
+            amount_key = f"upgrade_{mid}_amount"
+            _add_resource(value, level_data.get(amount_key))
+
+        return out
+
+    def get_buy_prices_in_coin(symbols: List[str]) -> Dict[str, float]:
+        symbols_u = sorted({str(sym or "").upper() for sym in symbols if str(sym or "").strip()})
+        if not symbols_u:
+            return {"COIN": 1.0}
+
+        price_map: Dict[str, float] = {}
+        try:
+            quote_map = fetch_buy_sell_for_profitability(symbols_u)
+            for sym in symbols_u:
+                rec = quote_map.get(sym, {}) or {}
+                if "BUY" in rec:
+                    price_map[sym] = float(rec.get("BUY", 0.0) or 0.0)
+                elif "SELL" in rec:
+                    price_map[sym] = float(rec.get("SELL", 0.0) or 0.0)
+                else:
+                    price_map[sym] = 0.0
+        except Exception:
+            for sym in symbols_u:
+                price_map[sym] = 0.0
+
+        price_map.setdefault("COIN", 1.0)
+        return price_map
+
+    def sum_upgrade_cost(token: str, start_level: int, end_level: int, count_n: int, prices: Dict[str, Any]) -> Any:
+        totals: Dict[str, float] = {}
+        steps: List[Dict[str, Any]] = []
+
+        for to_level in range(start_level + 1, end_level + 1):
+            step_resources = get_upgrade_cost_for_level(token, to_level)
+            scaled: Dict[str, float] = {}
+            step_rows: List[Dict[str, Any]] = []
+            coin_subtotal = 0.0
+
+            for sym, amt in step_resources.items():
+                total_amt = float(amt) * count_n
+                scaled[sym] = scaled.get(sym, 0.0) + total_amt
+                totals[sym] = totals.get(sym, 0.0) + total_amt
+
+                price_coin = float(prices.get(sym, 0.0) or 0.0)
+                coin_total = total_amt * price_coin
+                coin_subtotal += coin_total
+                step_rows.append(
+                    {
+                        "resource": sym,
+                        "amount": total_amt,
+                        "price_coin": price_coin,
+                        "coin_total": coin_total,
+                    }
+                )
+
+            steps.append(
+                {
+                    "from_level": to_level - 1,
+                    "to_level": to_level,
+                    "resources": scaled,
+                    "coin_subtotal": coin_subtotal,
+                    "coin_breakdown_rows": sorted(step_rows, key=lambda r: r["resource"]),
+                }
+            )
+
+        return totals, steps
+
+    levels_for_selected = sorted(factories.get(selected_token, {}).keys()) if selected_token in factories else []
+    if levels_for_selected:
+        current_level = get_default_current_level(selected_token, levels_for_selected)
+        next_default = (current_level or 0) + 1
+        target_level = next_default if next_default in levels_for_selected else current_level
+
+    if request.method == "POST":
+        selected_token = request.form.get("factory", selected_token).strip().upper()
+        mode = (request.form.get("mode", "next").strip() or "next").lower()
+        if mode not in {"next", "range"}:
+            mode = "next"
+
+        try:
+            count = max(1, int(request.form.get("count", "1").strip() or "1"))
+        except Exception:
+            count = 1
+
+        if selected_token in factories:
+            levels_for_selected = sorted(factories.get(selected_token, {}).keys())
+        else:
+            levels_for_selected = []
+
+        if levels_for_selected:
+            default_current = get_default_current_level(selected_token, levels_for_selected)
+        else:
+            default_current = None
+
+        try:
+            current_level = int((request.form.get("current_level", "").strip() or "0"))
+        except Exception:
+            current_level = default_current
+
+        if current_level is None and default_current is not None:
+            current_level = default_current
+
+        fallback_target = None
+        if current_level is not None:
+            fallback_target = current_level + 1 if (current_level + 1) in levels_for_selected else current_level
+        try:
+            target_level = int((request.form.get("target_level", "").strip() or "0"))
+        except Exception:
+            target_level = fallback_target
+        if target_level is None and fallback_target is not None:
+            target_level = fallback_target
+
+        try:
+            live_prices = fetch_live_prices_in_coin() or {}
+            _coin_usd = float(live_prices.get("_COIN_USD", 0.0))
+
+            if selected_token not in factories:
+                raise RuntimeError("Selected factory token was not found.")
+            if not levels_for_selected:
+                raise RuntimeError(f"No level data found for {selected_token}.")
+            if current_level not in levels_for_selected:
+                raise RuntimeError("Please choose a valid current level.")
+
+            if mode == "next":
+                next_level = current_level + 1
+                if next_level not in levels_for_selected:
+                    raise RuntimeError(f"No next level exists after L{current_level} for {selected_token}.")
+                target_level = next_level
+            else:
+                if target_level not in levels_for_selected:
+                    raise RuntimeError("Please choose a valid target level.")
+                if target_level <= current_level:
+                    raise RuntimeError("For range mode, target level must be greater than current level.")
+
+            requested_symbols = set()
+            for lvl in range(current_level + 1, target_level + 1):
+                requested_symbols.update(get_upgrade_cost_for_level(selected_token, lvl).keys())
+            prices = get_buy_prices_in_coin(sorted(requested_symbols))
+
+            totals, steps = sum_upgrade_cost(selected_token, current_level, target_level, count, prices)
+            resource_rows: List[Dict[str, Any]] = []
+            total_coin = 0.0
+            for sym in sorted(totals.keys()):
+                amount = float(totals.get(sym, 0.0))
+                price_coin = float(prices.get(sym, 0.0) or 0.0)
+                coin_total = amount * price_coin
+                total_coin += coin_total
+                resource_rows.append(
+                    {
+                        "resource": sym,
+                        "amount": amount,
+                        "price_coin": price_coin,
+                        "coin_total": coin_total,
+                    }
+                )
+
+            breakdown_resources = sorted({r["resource"] for s in steps for r in s["coin_breakdown_rows"]})
+            result = {
+                "factory": selected_token,
+                "count": count,
+                "from_level": current_level,
+                "to_level": target_level,
+                "total_coin": total_coin,
+                "resource_rows": resource_rows,
+                "steps": steps,
+                "breakdown_resources": breakdown_resources,
+            }
+        except Exception as e:
+            error = str(e)
+
+    levels_for_selected = sorted(factories.get(selected_token, {}).keys()) if selected_token in factories else []
+    if current_level is None and levels_for_selected:
+        current_level = get_default_current_level(selected_token, levels_for_selected)
+    if target_level is None and current_level is not None:
+        target_level = current_level + 1 if (current_level + 1) in levels_for_selected else current_level
+
+    factory_levels = {tok: sorted(levels.keys()) for tok, levels in factories.items()}
+    factory_levels_json = json.dumps(factory_levels)
+    default_levels_json = json.dumps({tok: get_default_current_level(tok, lvls) for tok, lvls in factory_levels.items()})
+
+    content = """
+    <div class="card">
+      <h1>Upgrade Calculate</h1>
+      <p class="subtle">Calculate factory upgrade resources and COIN cost from one level to the next or across a full level range.</p>
+
+      {% if error %}
+        <div class="pill-bad" style="display:inline-block;margin-bottom:10px;">{{ error }}</div>
+      {% endif %}
+
+      <form method="post" style="margin-bottom: 12px;">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+          <div style="flex:1;min-width:160px;">
+            <label for="factory">Factory token</label>
+            <select id="factory" name="factory" style="width:100%;">
+              {% for tok in tokens %}
+                <option value="{{ tok }}" {% if tok == selected_token %}selected{% endif %}>{{ tok }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div style="flex:1;min-width:140px;">
+            <label for="current_level">Current level</label>
+            <select id="current_level" name="current_level" style="width:100%;">
+              {% for lvl in levels_for_selected %}
+                <option value="{{ lvl }}" {% if lvl == current_level %}selected{% endif %}>L{{ lvl }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div style="flex:1;min-width:140px;">
+            <label for="target_level">Target level</label>
+            <select id="target_level" name="target_level" style="width:100%;">
+              {% for lvl in levels_for_selected %}
+                <option value="{{ lvl }}" {% if lvl == target_level %}selected{% endif %}>L{{ lvl }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div style="min-width:110px;">
+            <label for="count"># of factories</label>
+            <input id="count" name="count" type="number" min="1" value="{{ count }}" style="width:100%;">
+          </div>
+
+          <div style="min-width:150px;">
+            <label for="mode">Calculation mode</label>
+            <select id="mode" name="mode" style="width:100%;">
+              <option value="next" {% if mode == 'next' %}selected{% endif %}>Next level only</option>
+              <option value="range" {% if mode == 'range' %}selected{% endif %}>Current to target range</option>
+            </select>
+          </div>
+
+          <div>
+            <button class="btn" type="submit">Calculate</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    {% if result %}
+      <div class="card" style="margin-top:10px;">
+        <h2>Upgrade Summary</h2>
+        <p class="subtle">
+          <strong>{{ result.factory }}</strong> × <strong>{{ result.count }}</strong><br>
+          L{{ result.from_level }} → L{{ result.to_level }}
+        </p>
+        <p class="num" style="font-size:1.1rem;">Total COIN: {{ '%.6f'|format(result.total_coin) }}</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Resource</th>
+              <th>Amount</th>
+              <th>Price (COIN)</th>
+              <th>COIN Total</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for row in result.resource_rows %}
+            <tr>
+              <td>{{ row.resource }}</td>
+              <td>{{ '%.6f'|format(row.amount) }}</td>
+              <td>{{ '%.6f'|format(row.price_coin) }}</td>
+              <td>{{ '%.6f'|format(row.coin_total) }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" style="margin-top:10px;">
+        <button id="toggle-breakdown" class="btn" type="button">Show breakdown</button>
+        <div id="breakdown-wrap" style="display:none;margin-top:10px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Step</th>
+                {% for sym in result.breakdown_resources %}
+                  <th>{{ sym }}</th>
+                {% endfor %}
+                <th>COIN Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for step in result.steps %}
+              <tr>
+                <td>L{{ step.from_level }}→L{{ step.to_level }}</td>
+                {% for sym in result.breakdown_resources %}
+                  <td>{{ '%.6f'|format(step.resources.get(sym, 0.0)) }}</td>
+                {% endfor %}
+                <td>{{ '%.6f'|format(step.coin_subtotal) }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+
+    <script>
+      (function() {
+        const factoryLevels = {{ factory_levels_json | safe }};
+        const defaultLevels = {{ default_levels_json | safe }};
+        const factorySelect = document.getElementById("factory");
+        const currentSelect = document.getElementById("current_level");
+        const targetSelect = document.getElementById("target_level");
+        const modeSelect = document.getElementById("mode");
+
+        function rebuildLevelOptions(token) {
+          const levels = factoryLevels[token] || [];
+          const currentValue = currentSelect.value;
+          const targetValue = targetSelect.value;
+
+          currentSelect.innerHTML = "";
+          targetSelect.innerHTML = "";
+
+          levels.forEach((lvl) => {
+            const v = String(lvl);
+            const cOpt = document.createElement("option");
+            cOpt.value = v;
+            cOpt.textContent = "L" + v;
+            if (v === currentValue) cOpt.selected = true;
+            currentSelect.appendChild(cOpt);
+
+            const tOpt = document.createElement("option");
+            tOpt.value = v;
+            tOpt.textContent = "L" + v;
+            if (v === targetValue) tOpt.selected = true;
+            targetSelect.appendChild(tOpt);
+          });
+
+          if (levels.length) {
+            const hasPriorCurrent = Array.from(currentSelect.options).some((o) => o.value === currentValue);
+            if (hasPriorCurrent && currentValue) {
+              currentSelect.value = currentValue;
+            } else {
+              const defaultCurrent = String(defaultLevels[token] || levels[0]);
+              const hasDefault = Array.from(currentSelect.options).some((o) => o.value === defaultCurrent);
+              currentSelect.value = hasDefault ? defaultCurrent : String(levels[0]);
+            }
+          }
+          if (!targetSelect.value && levels.length) {
+            const cur = Number(currentSelect.value || 0);
+            targetSelect.value = levels.includes(cur + 1) ? String(cur + 1) : String(cur);
+          }
+        }
+
+        function syncTargetForNextMode() {
+          if (modeSelect.value !== "next") return;
+          const cur = Number(currentSelect.value || 0);
+          const candidate = String(cur + 1);
+          const opt = Array.from(targetSelect.options).find((o) => o.value === candidate);
+          if (opt) {
+            targetSelect.value = candidate;
+          }
+        }
+
+        if (factorySelect && currentSelect && targetSelect) {
+          factorySelect.addEventListener("change", function() {
+            rebuildLevelOptions(this.value);
+            syncTargetForNextMode();
+          });
+          currentSelect.addEventListener("change", syncTargetForNextMode);
+          modeSelect.addEventListener("change", syncTargetForNextMode);
+          rebuildLevelOptions(factorySelect.value);
+          syncTargetForNextMode();
+        }
+
+        const toggleBtn = document.getElementById("toggle-breakdown");
+        const breakdown = document.getElementById("breakdown-wrap");
+        if (toggleBtn && breakdown) {
+          toggleBtn.addEventListener("click", function() {
+            const show = breakdown.style.display === "none";
+            breakdown.style.display = show ? "block" : "none";
+            toggleBtn.textContent = show ? "Hide breakdown" : "Show breakdown";
+          });
+        }
+      })();
+    </script>
+    """
+
+    content = render_template_string(
+        content,
+        error=error,
+        result=result,
+        tokens=tokens,
+        selected_token=selected_token,
+        levels_for_selected=levels_for_selected,
+        current_level=current_level,
+        target_level=target_level,
+        mode=mode,
+        count=count,
+        factory_levels_json=factory_levels_json,
+        default_levels_json=default_levels_json,
+    )
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=content,
+        active_page="upgrade_calculate",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
 # -------- Trees tab (Earth / Water / Fire / Special) --------
 
 @app.route("/trees", methods=["GET"])
@@ -11391,7 +11904,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
