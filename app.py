@@ -11180,6 +11180,48 @@ def upgrade_calculate():
     current_level: Optional[int] = None
     target_level: Optional[int] = None
 
+    def get_highest_owned_levels() -> Dict[str, int]:
+        uid = session.get("voya_uid")
+        if not uid:
+            return {}
+
+        highest: Dict[str, int] = {}
+        try:
+            cw = fetch_craftworld(uid)
+            land_plots = attr_or_key(cw, "landPlots", []) or []
+            for plot in land_plots:
+                areas = attr_or_key(plot, "areas", []) or []
+                for area in areas:
+                    factories_wrapped = attr_or_key(area, "factories", []) or []
+                    for facwrap in factories_wrapped:
+                        fac = attr_or_key(facwrap, "factory", None)
+                        if not fac:
+                            continue
+                        definition = attr_or_key(fac, "definition", {}) or {}
+                        token = str(attr_or_key(definition, "id", "") or "").upper()
+                        if not token:
+                            continue
+                        api_level = int(attr_or_key(fac, "level", 0) or 0)
+                        csv_level = api_level + 1
+                        if csv_level > int(highest.get(token, 0)):
+                            highest[token] = csv_level
+        except Exception:
+            return {}
+
+        return highest
+
+    owned_highest_levels = get_highest_owned_levels()
+
+    def get_default_current_level(token: str, levels: List[int]) -> Optional[int]:
+        if not levels:
+            return None
+        owned_level = int(owned_highest_levels.get(token, 0) or 0)
+        if owned_level in levels:
+            return owned_level
+        if session.get("voya_uid"):
+            return 1 if 1 in levels else levels[0]
+        return 1 if 1 in levels else levels[0]
+
     def get_upgrade_cost_for_level(token: str, level: int) -> Dict[str, float]:
         token_u = str(token or "").upper()
         if level <= 1:
@@ -11233,6 +11275,29 @@ def upgrade_calculate():
 
         return out
 
+    def get_buy_prices_in_coin(symbols: List[str]) -> Dict[str, float]:
+        symbols_u = sorted({str(sym or "").upper() for sym in symbols if str(sym or "").strip()})
+        if not symbols_u:
+            return {"COIN": 1.0}
+
+        price_map: Dict[str, float] = {}
+        try:
+            quote_map = fetch_buy_sell_for_profitability(symbols_u)
+            for sym in symbols_u:
+                rec = quote_map.get(sym, {}) or {}
+                if "BUY" in rec:
+                    price_map[sym] = float(rec.get("BUY", 0.0) or 0.0)
+                elif "SELL" in rec:
+                    price_map[sym] = float(rec.get("SELL", 0.0) or 0.0)
+                else:
+                    price_map[sym] = 0.0
+        except Exception:
+            for sym in symbols_u:
+                price_map[sym] = 0.0
+
+        price_map.setdefault("COIN", 1.0)
+        return price_map
+
     def sum_upgrade_cost(token: str, start_level: int, end_level: int, count_n: int, prices: Dict[str, Any]) -> Any:
         totals: Dict[str, float] = {}
         steps: List[Dict[str, Any]] = []
@@ -11274,8 +11339,8 @@ def upgrade_calculate():
 
     levels_for_selected = sorted(factories.get(selected_token, {}).keys()) if selected_token in factories else []
     if levels_for_selected:
-        current_level = levels_for_selected[-1]
-        next_default = current_level + 1
+        current_level = get_default_current_level(selected_token, levels_for_selected)
+        next_default = (current_level or 0) + 1
         target_level = next_default if next_default in levels_for_selected else current_level
 
     if request.method == "POST":
@@ -11295,7 +11360,7 @@ def upgrade_calculate():
             levels_for_selected = []
 
         if levels_for_selected:
-            default_current = levels_for_selected[-1]
+            default_current = get_default_current_level(selected_token, levels_for_selected)
         else:
             default_current = None
 
@@ -11318,8 +11383,8 @@ def upgrade_calculate():
             target_level = fallback_target
 
         try:
-            prices = fetch_live_prices_in_coin() or {}
-            _coin_usd = float(prices.get("_COIN_USD", 0.0))
+            live_prices = fetch_live_prices_in_coin() or {}
+            _coin_usd = float(live_prices.get("_COIN_USD", 0.0))
 
             if selected_token not in factories:
                 raise RuntimeError("Selected factory token was not found.")
@@ -11338,6 +11403,11 @@ def upgrade_calculate():
                     raise RuntimeError("Please choose a valid target level.")
                 if target_level <= current_level:
                     raise RuntimeError("For range mode, target level must be greater than current level.")
+
+            requested_symbols = set()
+            for lvl in range(current_level + 1, target_level + 1):
+                requested_symbols.update(get_upgrade_cost_for_level(selected_token, lvl).keys())
+            prices = get_buy_prices_in_coin(sorted(requested_symbols))
 
             totals, steps = sum_upgrade_cost(selected_token, current_level, target_level, count, prices)
             resource_rows: List[Dict[str, Any]] = []
@@ -11372,12 +11442,13 @@ def upgrade_calculate():
 
     levels_for_selected = sorted(factories.get(selected_token, {}).keys()) if selected_token in factories else []
     if current_level is None and levels_for_selected:
-        current_level = levels_for_selected[-1]
+        current_level = get_default_current_level(selected_token, levels_for_selected)
     if target_level is None and current_level is not None:
         target_level = current_level + 1 if (current_level + 1) in levels_for_selected else current_level
 
     factory_levels = {tok: sorted(levels.keys()) for tok, levels in factories.items()}
     factory_levels_json = json.dumps(factory_levels)
+    default_levels_json = json.dumps({tok: get_default_current_level(tok, lvls) for tok, lvls in factory_levels.items()})
 
     content = """
     <div class="card">
@@ -11500,6 +11571,7 @@ def upgrade_calculate():
     <script>
       (function() {
         const factoryLevels = {{ factory_levels_json | safe }};
+        const defaultLevels = {{ default_levels_json | safe }};
         const factorySelect = document.getElementById("factory");
         const currentSelect = document.getElementById("current_level");
         const targetSelect = document.getElementById("target_level");
@@ -11528,8 +11600,15 @@ def upgrade_calculate():
             targetSelect.appendChild(tOpt);
           });
 
-          if (!currentSelect.value && levels.length) {
-            currentSelect.value = String(levels[levels.length - 1]);
+          if (levels.length) {
+            const hasPriorCurrent = Array.from(currentSelect.options).some((o) => o.value === currentValue);
+            if (hasPriorCurrent && currentValue) {
+              currentSelect.value = currentValue;
+            } else {
+              const defaultCurrent = String(defaultLevels[token] || levels[0]);
+              const hasDefault = Array.from(currentSelect.options).some((o) => o.value === defaultCurrent);
+              currentSelect.value = hasDefault ? defaultCurrent : String(levels[0]);
+            }
           }
           if (!targetSelect.value && levels.length) {
             const cur = Number(currentSelect.value || 0);
@@ -11583,6 +11662,7 @@ def upgrade_calculate():
         mode=mode,
         count=count,
         factory_levels_json=factory_levels_json,
+        default_levels_json=default_levels_json,
     )
 
     html = render_template_string(
