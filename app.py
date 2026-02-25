@@ -2157,6 +2157,7 @@ tr:nth-child(odd) td {
       const REFRESH_TOKEN_KEY = 'cw_refreshToken';
       const EXPIRES_AT_KEY = 'cw_expiresAt';
       const WALLET_KEY = 'cw_wallet';
+      const CW_UID_KEY = 'cw_uid';
       const CW_SESSION_INDEX_KEY = 'cw_sessions';
       const CW_ACTIVE_WALLET_KEY = 'cw_active_wallet';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
@@ -2284,6 +2285,7 @@ tr:nth-child(odd) td {
           refreshToken: String(payload.refreshToken || ''),
           lastLoginAt: Number(payload.lastLoginAt || Date.now()),
           idToken: String(payload.idToken || ''),
+          uid: String(payload.uid || ''),
         };
         writeSessionIndex(sessions);
         setActiveWallet(normalized);
@@ -2307,12 +2309,14 @@ tr:nth-child(odd) td {
           localStorage.removeItem(CW_TOKEN_KEY);
           localStorage.removeItem(REFRESH_TOKEN_KEY);
           localStorage.removeItem(EXPIRES_AT_KEY);
+          localStorage.removeItem(CW_UID_KEY);
           return;
         }
         localStorage.setItem(ID_TOKEN_KEY, String(entry.idToken || ''));
         localStorage.setItem(CW_TOKEN_KEY, String(entry.token || ''));
         localStorage.setItem(REFRESH_TOKEN_KEY, String(entry.refreshToken || ''));
         localStorage.setItem(EXPIRES_AT_KEY, String(Number(entry.expiresAt || 0)));
+        localStorage.setItem(CW_UID_KEY, String(entry.uid || ''));
       }
 
       async function detectConnectedWalletAddress() {
@@ -2347,7 +2351,8 @@ tr:nth-child(odd) td {
         const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || '';
         const expiresAt = Number(localStorage.getItem(EXPIRES_AT_KEY) || 0);
         const wallet = localStorage.getItem(WALLET_KEY) || '';
-        return { idToken, cwToken, refreshToken, expiresAt, wallet };
+        const uid = String(localStorage.getItem(CW_UID_KEY) || '').trim();
+        return { idToken, cwToken, refreshToken, expiresAt, wallet, uid };
       }
 
       function clearWalletConnectCache() {
@@ -2391,6 +2396,7 @@ tr:nth-child(odd) td {
         localStorage.removeItem(CW_TOKEN_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(EXPIRES_AT_KEY);
+        localStorage.removeItem(CW_UID_KEY);
         localStorage.removeItem(WALLET_KEY);
         localStorage.removeItem(CW_ACTIVE_WALLET_KEY);
         localStorage.removeItem(CW_SESSION_INDEX_KEY);
@@ -2534,13 +2540,22 @@ tr:nth-child(odd) td {
       }
 
       async function fetchAccountUid() {
+        const cachedUid = String(localStorage.getItem(CW_UID_KEY) || '').trim();
+        if (cachedUid) {
+          return cachedUid;
+        }
+
         const res = await authFetch('/api/account_uid');
         const data = await res.json();
         if (!res.ok || !data.ok || !data.uid) {
           const message = data && data.error ? data.error : 'Failed to fetch account ID.';
           throw new Error(message);
         }
-        return String(data.uid || '').trim();
+        const uid = String(data.uid || '').trim();
+        if (uid) {
+          localStorage.setItem(CW_UID_KEY, uid);
+        }
+        return uid;
       }
 
       async function autoPopulateOverviewFromWallet(options) {
@@ -2960,6 +2975,18 @@ tr:nth-child(odd) td {
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
         localStorage.setItem(CONNECTION_TYPE_KEY, connectionType);
+        if (signinData.uid) {
+          localStorage.setItem(CW_UID_KEY, String(signinData.uid).trim());
+        }
+        upsertWalletSession(walletAddress, {
+          token: signinData.idToken,
+          idToken: signinData.idToken,
+          refreshToken: signinData.refreshToken || '',
+          expiresAt,
+          lastLoginAt: Date.now(),
+          uid: String(signinData.uid || '').trim(),
+        });
+        syncLegacySessionFromActiveWallet();
 
         await syncBoostsOnSignin(walletAddress);
 
@@ -4912,11 +4939,29 @@ def api_cw_signin_with_custom_token():
             "rawErrors": [body.get("error")] if body.get("error") else [],
         }), 400
 
+    id_token = body.get("idToken")
+    uid = None
+    if id_token:
+        try:
+            uid_query = """
+            query AccountUID {
+              account {
+                id
+              }
+            }
+            """
+            uid_upstream = _cw_graphql_request(query=uid_query, bearer_token=id_token)
+            uid_body = uid_upstream.get("body") or {}
+            uid = ((uid_body.get("data") or {}).get("account") or {}).get("id")
+        except Exception:
+            uid = None
+
     return jsonify({
         "ok": True,
-        "idToken": body.get("idToken"),
+        "idToken": id_token,
         "refreshToken": body.get("refreshToken"),
         "expiresIn": int(body.get("expiresIn") or 0),
+        "uid": uid,
     })
 
 
@@ -11904,7 +11949,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
