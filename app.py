@@ -2688,24 +2688,9 @@ tr:nth-child(odd) td {
       }
 
       async function fetchAccountUid() {
-        const wallet = normalizeWalletAddress(getActiveWallet() || '');
-        const uidKey = getWalletUidStorageKey(wallet);
-
-        if (uidKey) {
-          const walletCachedUid = String(localStorage.getItem(uidKey) || '').trim();
-          if (walletCachedUid) {
-            localStorage.setItem(CW_UID_KEY, walletCachedUid);
-            return walletCachedUid;
-          }
-        }
-
-        const cachedUid = String(localStorage.getItem(CW_UID_KEY) || '').trim();
-        if (cachedUid && !wallet) {
-          return cachedUid;
-        }
-
-        const endpoint = wallet ? `/api/account_uid?walletAddress=${encodeURIComponent(wallet)}` : '/api/account_uid';
-        const res = await authFetch(endpoint);
+        const wallet = getActiveWallet();
+        const url = wallet ? `/api/account_uid?wallet=${encodeURIComponent(wallet)}` : '/api/account_uid';
+        const res = await authFetch(url);
         const data = await res.json();
         if (!res.ok || !data.ok || !data.uid) {
           const message = data && data.error ? data.error : 'Failed to fetch account ID.';
@@ -3132,11 +3117,14 @@ tr:nth-child(odd) td {
 
         const expiresIn = Number(signinData.expiresIn || 0);
         const expiresAt = Date.now() + (Math.max(0, expiresIn) * 1000);
-        localStorage.setItem(ID_TOKEN_KEY, signinData.idToken);
-        localStorage.setItem(CW_TOKEN_KEY, signinData.idToken);
-        localStorage.setItem(REFRESH_TOKEN_KEY, signinData.refreshToken || '');
-        localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
-        localStorage.setItem(WALLET_KEY, walletAddress);
+        upsertWalletSession(walletAddress, {
+          idToken: signinData.idToken,
+          token: signinData.idToken,
+          refreshToken: signinData.refreshToken || '',
+          expiresAt,
+          lastLoginAt: Date.now(),
+        });
+        syncLegacySessionFromActiveWallet();
         localStorage.setItem(CONNECTION_TYPE_KEY, connectionType);
         if (signinData.uid) {
           const resolvedUid = String(signinData.uid).trim();
@@ -3315,6 +3303,19 @@ tr:nth-child(odd) td {
           });
         }
 
+        const restoreSessionForConnectedWallet = async () => {
+          try {
+            const connectedWallet = await detectConnectedWalletAddress();
+            if (connectedWallet) {
+              setActiveWallet(connectedWallet);
+            }
+          } catch (_) {
+            // Ignore wallet autodetect failures and keep existing active wallet.
+          }
+          syncLegacySessionFromActiveWallet();
+        };
+
+        await restoreSessionForConnectedWallet();
         const initialSession = getSession();
         if (initialSession.cwToken) {
           fetchAccountStatus();
@@ -5214,17 +5215,25 @@ def api_account_uid():
     if not jwt_token:
         return jsonify({"ok": False, "error": "Missing Craft World token."}), 401
 
-    identity_result = _fetch_account_identity_payload(jwt_token)
-    if not identity_result.get("ok"):
-        return jsonify({
-            "ok": False,
-            "error": "Craft World returned an error.",
-            "rawErrors": identity_result.get("errors") or [],
-        }), 502
+    requested_wallet = (request.args.get("wallet") or "").strip().lower()
 
-    body = identity_result.get("body") or {}
-    account_payload = ((body.get("data") or {}).get("account") or {})
-    uid = _extract_uid_from_identity_payload(account_payload)
+    query = """
+    query AccountUID {
+      account {
+        id
+        primaryWallet
+      }
+    }
+    """
+    upstream = _cw_graphql_request(query=query, bearer_token=jwt_token)
+    body = upstream.get("body") or {}
+    errors = body.get("errors") or []
+    if errors:
+        return jsonify({"ok": False, "error": "Craft World returned an error.", "rawErrors": errors}), 502
+
+    account = (body.get("data") or {}).get("account") or {}
+    uid = account.get("id")
+    primary_wallet = str(account.get("primaryWallet") or "").strip().lower()
     if not uid:
         return jsonify({"ok": False, "error": "Craft World custom_jwt UID not found."}), 404
 
@@ -5252,7 +5261,15 @@ def api_account_uid():
                 "walletAddress": requested_wallet,
             }), 409
 
-    return jsonify({"ok": True, "uid": uid, "accountId": account_payload.get("id"), "source": "linkedAccounts.custom_jwt|tradeAccount"})
+    if requested_wallet and primary_wallet and requested_wallet != primary_wallet:
+        return jsonify({
+            "ok": False,
+            "error": "Wallet session mismatch. Reconnect wallet to refresh your Craft World sign-in.",
+            "auth": "wallet_mismatch",
+            "wallet": primary_wallet,
+        }), 409
+
+    return jsonify({"ok": True, "uid": uid, "wallet": primary_wallet or None})
 
 
 @app.route("/api/boosts/mastery", methods=["POST"])
@@ -12141,6 +12158,7 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
 
