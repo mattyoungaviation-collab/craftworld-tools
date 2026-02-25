@@ -113,6 +113,25 @@ def _extract_uid_from_account_payload(account_payload: Any) -> Optional[str]:
 
     return None
 
+
+def _extract_uid_from_identity_payload(identity_payload: Any) -> Optional[str]:
+    if not isinstance(identity_payload, dict):
+        return None
+
+    # Schema variant A: account.linkedAccounts
+    direct_uid = _extract_uid_from_account_payload(identity_payload)
+    if direct_uid:
+        return direct_uid
+
+    # Schema variant B: account.tradeAccount.linkedAccounts
+    trade_account = identity_payload.get("tradeAccount")
+    if isinstance(trade_account, dict):
+        trade_uid = _extract_uid_from_account_payload(trade_account)
+        if trade_uid:
+            return trade_uid
+
+    return None
+
 def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
     if not authorization_value:
         return None
@@ -173,29 +192,68 @@ def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, 
 
 
 def _fetch_account_identity_payload(bearer_token: str) -> Dict[str, Any]:
-    query = """
-    query AccountIdentity {
-      account {
-        id
-        linkedAccounts {
-          type
-          details
+    queries = [
+        # Variant A: linkedAccounts is directly on Account.
+        """
+        query AccountIdentity {
+          account {
+            id
+            linkedAccounts {
+              type
+              details
+            }
+            wallets {
+              address
+              type
+            }
+          }
         }
-        wallets {
-          address
-          type
+        """,
+        # Variant B: linkedAccounts hangs off tradeAccount.
+        """
+        query AccountIdentity {
+          account {
+            id
+            wallets {
+              address
+              type
+            }
+            tradeAccount {
+              id
+              linkedAccounts {
+                type
+                details
+              }
+              wallets {
+                address
+                type
+              }
+            }
+          }
         }
-      }
-    }
-    """
+        """,
+    ]
 
-    upstream = _cw_graphql_request(query=query, bearer_token=bearer_token)
-    body = upstream.get("body") or {}
-    errors = body.get("errors") or []
-    if errors:
-        return {"ok": False, "body": body, "errors": errors}
+    last_errors: list[Any] = []
+    for query in queries:
+        upstream = _cw_graphql_request(query=query, bearer_token=bearer_token)
+        body = upstream.get("body") or {}
+        errors = body.get("errors") or []
+        if errors:
+            last_errors = errors
+            validation_only = all(
+                isinstance(err, dict)
+                and isinstance(err.get("extensions"), dict)
+                and err.get("extensions", {}).get("code") == "GRAPHQL_VALIDATION_FAILED"
+                for err in errors
+            )
+            if validation_only:
+                continue
+            return {"ok": False, "body": body, "errors": errors}
 
-    return {"ok": True, "body": body, "errors": []}
+        return {"ok": True, "body": body, "errors": []}
+
+    return {"ok": False, "body": {"errors": last_errors}, "errors": last_errors}
 
 def _mask_token(token: Optional[str]) -> str:
     if not token:
@@ -2331,6 +2389,11 @@ tr:nth-child(odd) td {
         return normalizeWalletAddress(ACTIVE_WALLET_CONFIG.wallet || '');
       }
 
+      function getWalletUidStorageKey(wallet) {
+        const normalized = normalizeWalletAddress(wallet);
+        return normalized ? `cw_uid:${normalized}` : '';
+      }
+
       function getWalletSession(wallet) {
         const normalized = normalizeWalletAddress(wallet);
         if (!normalized) return null;
@@ -2379,6 +2442,8 @@ tr:nth-child(odd) td {
           localStorage.removeItem(REFRESH_TOKEN_KEY);
           localStorage.removeItem(EXPIRES_AT_KEY);
           localStorage.removeItem(CW_UID_KEY);
+          const uidKey = getWalletUidStorageKey(wallet);
+          if (uidKey) localStorage.removeItem(uidKey);
           return;
         }
         localStorage.setItem(ID_TOKEN_KEY, String(entry.idToken || ''));
@@ -2386,6 +2451,10 @@ tr:nth-child(odd) td {
         localStorage.setItem(REFRESH_TOKEN_KEY, String(entry.refreshToken || ''));
         localStorage.setItem(EXPIRES_AT_KEY, String(Number(entry.expiresAt || 0)));
         localStorage.setItem(CW_UID_KEY, String(entry.uid || ''));
+        const uidKey = getWalletUidStorageKey(wallet);
+        if (uidKey) {
+          localStorage.setItem(uidKey, String(entry.uid || ''));
+        }
       }
 
       async function detectConnectedWalletAddress() {
@@ -2466,6 +2535,16 @@ tr:nth-child(odd) td {
         localStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(EXPIRES_AT_KEY);
         localStorage.removeItem(CW_UID_KEY);
+        try {
+          const keys = Object.keys(localStorage);
+          for (const key of keys) {
+            if (key.startsWith('cw_uid:')) {
+              localStorage.removeItem(key);
+            }
+          }
+        } catch (_) {
+          // Ignore localStorage access failures.
+        }
         localStorage.removeItem(WALLET_KEY);
         localStorage.removeItem(CW_ACTIVE_WALLET_KEY);
         localStorage.removeItem(CW_SESSION_INDEX_KEY);
@@ -2609,12 +2688,22 @@ tr:nth-child(odd) td {
       }
 
       async function fetchAccountUid() {
+        const wallet = normalizeWalletAddress(getActiveWallet() || '');
+        const uidKey = getWalletUidStorageKey(wallet);
+
+        if (uidKey) {
+          const walletCachedUid = String(localStorage.getItem(uidKey) || '').trim();
+          if (walletCachedUid) {
+            localStorage.setItem(CW_UID_KEY, walletCachedUid);
+            return walletCachedUid;
+          }
+        }
+
         const cachedUid = String(localStorage.getItem(CW_UID_KEY) || '').trim();
-        if (cachedUid) {
+        if (cachedUid && !wallet) {
           return cachedUid;
         }
 
-        const wallet = String(getActiveWallet() || '').trim();
         const endpoint = wallet ? `/api/account_uid?walletAddress=${encodeURIComponent(wallet)}` : '/api/account_uid';
         const res = await authFetch(endpoint);
         const data = await res.json();
@@ -2625,6 +2714,9 @@ tr:nth-child(odd) td {
         const uid = String(data.uid || '').trim();
         if (uid) {
           localStorage.setItem(CW_UID_KEY, uid);
+          if (uidKey) {
+            localStorage.setItem(uidKey, uid);
+          }
         }
         return uid;
       }
@@ -3047,7 +3139,12 @@ tr:nth-child(odd) td {
         localStorage.setItem(WALLET_KEY, walletAddress);
         localStorage.setItem(CONNECTION_TYPE_KEY, connectionType);
         if (signinData.uid) {
-          localStorage.setItem(CW_UID_KEY, String(signinData.uid).trim());
+          const resolvedUid = String(signinData.uid).trim();
+          localStorage.setItem(CW_UID_KEY, resolvedUid);
+          const uidKey = getWalletUidStorageKey(walletAddress);
+          if (uidKey) {
+            localStorage.setItem(uidKey, resolvedUid);
+          }
         }
         upsertWalletSession(walletAddress, {
           token: signinData.idToken,
@@ -5023,7 +5120,7 @@ def api_cw_signin_with_custom_token():
                 }), 502
             uid_body = identity_result.get("body") or {}
             account_payload = ((uid_body.get("data") or {}).get("account") or {})
-            uid = _extract_uid_from_account_payload(account_payload)
+            uid = _extract_uid_from_identity_payload(account_payload)
         except Exception as exc:
             return jsonify({"ok": False, "error": f"Failed to resolve account UID: {exc}"}), 502
 
@@ -5127,7 +5224,7 @@ def api_account_uid():
 
     body = identity_result.get("body") or {}
     account_payload = ((body.get("data") or {}).get("account") or {})
-    uid = _extract_uid_from_account_payload(account_payload)
+    uid = _extract_uid_from_identity_payload(account_payload)
     if not uid:
         return jsonify({"ok": False, "error": "Craft World custom_jwt UID not found."}), 404
 
@@ -5139,6 +5236,14 @@ def api_account_uid():
             for w in (wallets or [])
             if isinstance(w, dict)
         }
+        trade_account = account_payload.get("tradeAccount") if isinstance(account_payload, dict) else None
+        trade_wallets = trade_account.get("wallets") if isinstance(trade_account, dict) else None
+        wallet_addresses.update({
+            str((w or {}).get("address") or "").strip().lower()
+            for w in (trade_wallets or [])
+            if isinstance(w, dict)
+        })
+
         if requested_wallet not in wallet_addresses:
             return jsonify({
                 "ok": False,
@@ -5147,7 +5252,7 @@ def api_account_uid():
                 "walletAddress": requested_wallet,
             }), 409
 
-    return jsonify({"ok": True, "uid": uid, "accountId": account_payload.get("id"), "source": "linkedAccounts.custom_jwt"})
+    return jsonify({"ok": True, "uid": uid, "accountId": account_payload.get("id"), "source": "linkedAccounts.custom_jwt|tradeAccount"})
 
 
 @app.route("/api/boosts/mastery", methods=["POST"])
@@ -12036,7 +12141,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
