@@ -8093,13 +8093,80 @@ MASTERPIECES_TEMPLATE = """
       box-shadow: 0 10px 24px rgba(15, 23, 42, 0.6);
       transform: translateY(-2px);
     }
+
+    .mp-section {
+      margin-top: 1.5rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid rgba(148, 163, 184, 0.25);
+    }
+
+    .mp-section:first-of-type {
+      margin-top: 0;
+      padding-top: 0;
+      border-top: none;
+    }
+
+    .mp-card-grid {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    .mp-summary-box {
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 0.75rem;
+      margin-bottom: 1rem;
+      background: rgba(2, 6, 23, 0.45);
+    }
+
+    .mp-totals-grid {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .mp-totals-column {
+      flex: 1 1 240px;
+    }
+
+    .mp-inline-form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: end;
+      margin-bottom: 1rem;
+    }
+
+    .mp-inline-form label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      min-width: 160px;
+    }
+
+    .mp-inline-form--planner {
+      gap: 1rem;
+    }
+
+    .mp-form-actions {
+      display: flex;
+      gap: 0.5rem;
+      align-self: flex-end;
+    }
+
+    .mp-gap-note {
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+    }
   </style>
 
   <!-- ================= OVERVIEW / CURRENT ================= -->
-  <div id="overview">
+  <div id="overview" class="mp-section">
     <h2>Current Masterpieces</h2>
 
-    <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1rem;">
+    <div class="mp-card-grid">
       <!-- General MP card -->
       {% set general_mp_id = None %}
       {% if general_snapshot and general_snapshot.mp %}
@@ -8356,7 +8423,7 @@ MASTERPIECES_TEMPLATE = """
 
 
   <!-- ================= REWARDS & TOTALS ================= -->
-  <div id="rewards" style="margin-top:1.5rem;">
+  <div id="rewards" class="mp-section">
     <h2>Rewards &amp; Totals</h2>
 
     {% if src_mp %}
@@ -8374,7 +8441,7 @@ MASTERPIECES_TEMPLATE = """
 
     <!-- Your snapshot on selected MP (if any) -->
     {% if selected_reward_snapshot %}
-      <div style="border:1px solid #444; border-radius:8px; padding:0.75rem; margin-bottom:1rem;">
+      <div class="mp-summary-box">
         <h3>Your position on this masterpiece</h3>
         <p>
           Rank: <strong>#{{ selected_reward_snapshot.position }}</strong><br>
@@ -8413,7 +8480,7 @@ MASTERPIECES_TEMPLATE = """
     </table>
 
     <!-- Reward stages from rewardStages -->
-    <h3 style="margin-top:1rem;">Tier rewards (per stage)</h3>
+    <h3>Tier rewards (per stage)</h3>
     {% if reward_tier_rows %}
       <table class="table">
         <thead>
@@ -8530,10 +8597,10 @@ MASTERPIECES_TEMPLATE = """
 
 
     <!-- Totals (base / BP / combined) -->
-    <h3 style="margin-top:1rem;">Total resource rewards</h3>
+    <h3>Total resource rewards</h3>
 
-    <div style="display:flex; gap:1rem; flex-wrap:wrap;">
-      <div style="flex:1 1 240px;">
+    <div class="mp-totals-grid">
+      <div class="mp-totals-column">
         <h4>Base track only</h4>
         {% if tier_base_totals_list %}
           <table class="table">
@@ -8561,7 +8628,7 @@ MASTERPIECES_TEMPLATE = """
         {% endif %}
       </div>
 
-      <div style="flex:1 1 240px;">
+      <div class="mp-totals-column">
         <h4>RawrPass track only</h4>
         {% if tier_bp_totals_list %}
           <table class="table">
@@ -8589,7 +8656,7 @@ MASTERPIECES_TEMPLATE = """
         {% endif %}
       </div>
 
-      <div style="flex:1 1 240px;">
+      <div class="mp-totals-column">
         <h4>Combined (Base + RawrPass)</h4>
         {% if tier_combined_totals_list %}
           <table class="table">
@@ -8626,7 +8693,7 @@ MASTERPIECES_TEMPLATE = """
 
     <!-- Rank-based grand totals if available -->
     {% if my_rank_totals_list %}
-      <h3 style="margin-top:1.5rem;">Your total rewards at current rank</h3>
+      <h3>Your total rewards at current rank</h3>
       <table class="table">
         <thead>
           <tr>
@@ -8650,7 +8717,7 @@ MASTERPIECES_TEMPLATE = """
     {% endif %}
 
     {% if grand_totals_list %}
-      <h3 style="margin-top:1.5rem;">Grand totals (all tiers + rank rewards)</h3>
+      <h3>Grand totals (all tiers + rank rewards)</h3>
       <table class="table">
         <thead>
           <tr>
@@ -8680,10 +8747,10 @@ MASTERPIECES_TEMPLATE = """
   </div>
 
   <!-- ================= HISTORY ================= -->
-  <div id="history" style="margin-top:1.5rem;">
+  <div id="history" class="mp-section">
     <h2>History &amp; Selector</h2>
 
-    <form method="get" style="margin-bottom:1rem;">
+    <form method="get" class="mp-inline-form">
       <label>
         Masterpiece:
         <select name="mp_view_id">
@@ -8702,12 +8769,12 @@ MASTERPIECES_TEMPLATE = """
         </select>
       </label>
 
-      <label style="margin-left:0.5rem;">
+      <label>
         Highlight (name or Voya ID):
         <input type="text" name="highlight" value="{{ highlight_query }}" placeholder="Your name or Voya ID">
       </label>
 
-      <label style="margin-left:0.5rem;">
+      <label>
         Leaderboard size:
         <select name="top_n">
           {% for n in top_n_options %}
@@ -8718,13 +8785,15 @@ MASTERPIECES_TEMPLATE = """
         </select>
       </label>
 
-      <label style="margin-left:0.5rem;">
+      <label>
         RawrPass:
         <input type="checkbox" name="has_battle_pass"
           {% if has_battle_pass %}checked{% endif %}>
       </label>
 
-      <button type="submit" style="margin-left:0.5rem;">Load</button>
+      <div class="mp-form-actions">
+        <button type="submit">Load</button>
+      </div>
     </form>
 
     {% if selected_mp %}
@@ -8768,7 +8837,7 @@ MASTERPIECES_TEMPLATE = """
 
 
       {% if selected_gap %}
-        <div style="margin-top:0.5rem; font-size:0.9rem;">
+        <div class="mp-gap-note">
           <strong>Your gap on this MP:</strong>
           You are <strong>#{{ selected_gap.position }}</strong>
           with
@@ -8796,13 +8865,13 @@ MASTERPIECES_TEMPLATE = """
   </div>
 
   <!-- ================= DONATION PLANNER ================= -->
-  <div id="planner" style="margin-top:1.5rem;">
+  <div id="planner" class="mp-section">
     <h2>Donation Planner</h2>
 
     <form method="post">
       <input type="hidden" name="calc_state" value="{{ calc_state_json|e }}">
 
-      <div style="display:flex; flex-wrap:wrap; gap:1rem; margin-bottom:1rem;">
+      <div class="mp-inline-form mp-inline-form--planner">
         <div>
           <label>
             Masterpiece:
@@ -8841,7 +8910,7 @@ MASTERPIECES_TEMPLATE = """
           </label>
         </div>
 
-        <div style="align-self:flex-end; display:flex; gap:0.5rem;">
+        <div class="mp-form-actions">
           <button type="submit" name="calc_action" value="add">Add</button>
           <button type="submit" name="calc_action" value="clear">Clear</button>
         </div>
@@ -12382,7 +12451,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
