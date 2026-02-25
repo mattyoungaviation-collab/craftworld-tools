@@ -71,6 +71,32 @@ def _token_cache_key(jwt_token: str) -> str:
     return hashlib.sha256(jwt_token.encode("utf-8")).hexdigest()
 
 
+def _extract_uid_from_account_payload(account_payload: Any) -> Optional[str]:
+    if not isinstance(account_payload, dict):
+        return None
+
+    linked_accounts = account_payload.get("linkedAccounts")
+    if isinstance(linked_accounts, list):
+        for entry in linked_accounts:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("type") or "").strip().lower() != "custom_jwt":
+                continue
+            details = entry.get("details")
+            if isinstance(details, str):
+                try:
+                    details = json.loads(details)
+                except Exception:
+                    details = {}
+            if isinstance(details, dict):
+                candidate = str(details.get("id") or details.get("user_id") or "").strip()
+                if candidate:
+                    return candidate
+
+    account_id = str(account_payload.get("id") or "").strip()
+    return account_id or None
+
+
 def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
     if not authorization_value:
         return None
@@ -2157,6 +2183,7 @@ tr:nth-child(odd) td {
       const REFRESH_TOKEN_KEY = 'cw_refreshToken';
       const EXPIRES_AT_KEY = 'cw_expiresAt';
       const WALLET_KEY = 'cw_wallet';
+      const CW_UID_KEY = 'cw_uid';
       const CW_SESSION_INDEX_KEY = 'cw_sessions';
       const CW_ACTIVE_WALLET_KEY = 'cw_active_wallet';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
@@ -2284,6 +2311,7 @@ tr:nth-child(odd) td {
           refreshToken: String(payload.refreshToken || ''),
           lastLoginAt: Number(payload.lastLoginAt || Date.now()),
           idToken: String(payload.idToken || ''),
+          uid: String(payload.uid || ''),
         };
         writeSessionIndex(sessions);
         setActiveWallet(normalized);
@@ -2307,12 +2335,14 @@ tr:nth-child(odd) td {
           localStorage.removeItem(CW_TOKEN_KEY);
           localStorage.removeItem(REFRESH_TOKEN_KEY);
           localStorage.removeItem(EXPIRES_AT_KEY);
+          localStorage.removeItem(CW_UID_KEY);
           return;
         }
         localStorage.setItem(ID_TOKEN_KEY, String(entry.idToken || ''));
         localStorage.setItem(CW_TOKEN_KEY, String(entry.token || ''));
         localStorage.setItem(REFRESH_TOKEN_KEY, String(entry.refreshToken || ''));
         localStorage.setItem(EXPIRES_AT_KEY, String(Number(entry.expiresAt || 0)));
+        localStorage.setItem(CW_UID_KEY, String(entry.uid || ''));
       }
 
       async function detectConnectedWalletAddress() {
@@ -2347,7 +2377,8 @@ tr:nth-child(odd) td {
         const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || '';
         const expiresAt = Number(localStorage.getItem(EXPIRES_AT_KEY) || 0);
         const wallet = localStorage.getItem(WALLET_KEY) || '';
-        return { idToken, cwToken, refreshToken, expiresAt, wallet };
+        const uid = String(localStorage.getItem(CW_UID_KEY) || '').trim();
+        return { idToken, cwToken, refreshToken, expiresAt, wallet, uid };
       }
 
       function clearWalletConnectCache() {
@@ -2391,6 +2422,7 @@ tr:nth-child(odd) td {
         localStorage.removeItem(CW_TOKEN_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(EXPIRES_AT_KEY);
+        localStorage.removeItem(CW_UID_KEY);
         localStorage.removeItem(WALLET_KEY);
         localStorage.removeItem(CW_ACTIVE_WALLET_KEY);
         localStorage.removeItem(CW_SESSION_INDEX_KEY);
@@ -2534,13 +2566,22 @@ tr:nth-child(odd) td {
       }
 
       async function fetchAccountUid() {
+        const cachedUid = String(localStorage.getItem(CW_UID_KEY) || '').trim();
+        if (cachedUid) {
+          return cachedUid;
+        }
+
         const res = await authFetch('/api/account_uid');
         const data = await res.json();
         if (!res.ok || !data.ok || !data.uid) {
           const message = data && data.error ? data.error : 'Failed to fetch account ID.';
           throw new Error(message);
         }
-        return String(data.uid || '').trim();
+        const uid = String(data.uid || '').trim();
+        if (uid) {
+          localStorage.setItem(CW_UID_KEY, uid);
+        }
+        return uid;
       }
 
       async function autoPopulateOverviewFromWallet(options) {
@@ -2960,6 +3001,18 @@ tr:nth-child(odd) td {
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
         localStorage.setItem(CONNECTION_TYPE_KEY, connectionType);
+        if (signinData.uid) {
+          localStorage.setItem(CW_UID_KEY, String(signinData.uid).trim());
+        }
+        upsertWalletSession(walletAddress, {
+          token: signinData.idToken,
+          idToken: signinData.idToken,
+          refreshToken: signinData.refreshToken || '',
+          expiresAt,
+          lastLoginAt: Date.now(),
+          uid: String(signinData.uid || '').trim(),
+        });
+        syncLegacySessionFromActiveWallet();
 
         await syncBoostsOnSignin(walletAddress);
 
@@ -4912,11 +4965,39 @@ def api_cw_signin_with_custom_token():
             "rawErrors": [body.get("error")] if body.get("error") else [],
         }), 400
 
+    id_token = body.get("idToken")
+    uid = None
+    if id_token:
+        try:
+            uid_query = """
+            query AccountUID {
+              account {
+                id
+                linkedAccounts {
+                  type
+                  details
+                }
+                wallets {
+                  address
+                  createdAt
+                  type
+                }
+              }
+            }
+            """
+            uid_upstream = _cw_graphql_request(query=uid_query, bearer_token=id_token)
+            uid_body = uid_upstream.get("body") or {}
+            account_payload = ((uid_body.get("data") or {}).get("account") or {})
+            uid = _extract_uid_from_account_payload(account_payload)
+        except Exception:
+            uid = None
+
     return jsonify({
         "ok": True,
-        "idToken": body.get("idToken"),
+        "idToken": id_token,
         "refreshToken": body.get("refreshToken"),
         "expiresIn": int(body.get("expiresIn") or 0),
+        "uid": uid,
     })
 
 
@@ -5002,6 +5083,15 @@ def api_account_uid():
     query AccountUID {
       account {
         id
+        linkedAccounts {
+          type
+          details
+        }
+        wallets {
+          address
+          createdAt
+          type
+        }
       }
     }
     """
@@ -5011,11 +5101,12 @@ def api_account_uid():
     if errors:
         return jsonify({"ok": False, "error": "Craft World returned an error.", "rawErrors": errors}), 502
 
-    uid = ((body.get("data") or {}).get("account") or {}).get("id")
+    account_payload = ((body.get("data") or {}).get("account") or {})
+    uid = _extract_uid_from_account_payload(account_payload)
     if not uid:
         return jsonify({"ok": False, "error": "Craft World account UID not found."}), 404
 
-    return jsonify({"ok": True, "uid": uid})
+    return jsonify({"ok": True, "uid": uid, "accountId": account_payload.get("id")})
 
 
 @app.route("/api/boosts/mastery", methods=["POST"])
@@ -11904,7 +11995,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
