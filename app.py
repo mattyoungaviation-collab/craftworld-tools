@@ -48,7 +48,23 @@ def normalize_avatar_url(raw: Optional[str]) -> Optional[str]:
 # ---------------- Database setup (users + saved boosts) ----------------
 
 import os
-DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
+
+
+def _resolve_db_path() -> str:
+    configured = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
+    configured = str(configured or "").strip() or "/data/craftworld_tools.db"
+    target_dir = os.path.dirname(os.path.abspath(configured)) or "."
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        return configured
+    except Exception:
+        fallback = os.path.join(os.getcwd(), "craftworld_tools.db")
+        fallback_dir = os.path.dirname(os.path.abspath(fallback)) or "."
+        os.makedirs(fallback_dir, exist_ok=True)
+        return fallback
+
+
+DB_PATH = _resolve_db_path()
 CW_GRAPHQL_URL = "https://craft-world.gg/graphql"
 CW_APP_VERSION = "1.6.6"
 CW_FIREBASE_API_KEY = "AIzaSyDgDDykbRrhbdfWUpm1BUgj4ga7d_-wy_g"
@@ -70,6 +86,51 @@ def _format_hms_from_seconds(seconds: int) -> str:
 def _token_cache_key(jwt_token: str) -> str:
     return hashlib.sha256(jwt_token.encode("utf-8")).hexdigest()
 
+
+def _extract_uid_from_account_payload(account_payload: Any) -> Optional[str]:
+    if not isinstance(account_payload, dict):
+        return None
+
+    linked_accounts = account_payload.get("linkedAccounts")
+    if not isinstance(linked_accounts, list):
+        return None
+
+    for entry in linked_accounts:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type") or "").strip().lower() != "custom_jwt":
+            continue
+        details = entry.get("details")
+        if isinstance(details, str):
+            try:
+                details = json.loads(details)
+            except Exception:
+                details = {}
+        if isinstance(details, dict):
+            candidate = str(details.get("id") or details.get("user_id") or "").strip()
+            if candidate:
+                return candidate
+
+    return None
+
+
+def _extract_uid_from_identity_payload(identity_payload: Any) -> Optional[str]:
+    if not isinstance(identity_payload, dict):
+        return None
+
+    # Schema variant A: account.linkedAccounts
+    direct_uid = _extract_uid_from_account_payload(identity_payload)
+    if direct_uid:
+        return direct_uid
+
+    # Schema variant B: account.tradeAccount.linkedAccounts
+    trade_account = identity_payload.get("tradeAccount")
+    if isinstance(trade_account, dict):
+        trade_uid = _extract_uid_from_account_payload(trade_account)
+        if trade_uid:
+            return trade_uid
+
+    return None
 
 def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
     if not authorization_value:
@@ -127,6 +188,72 @@ def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, 
         "body": body,
     }
 
+
+
+
+def _fetch_account_identity_payload(bearer_token: str) -> Dict[str, Any]:
+    queries = [
+        # Variant A: linkedAccounts is directly on Account.
+        """
+        query AccountIdentity {
+          account {
+            id
+            linkedAccounts {
+              type
+              details
+            }
+            wallets {
+              address
+              type
+            }
+          }
+        }
+        """,
+        # Variant B: linkedAccounts hangs off tradeAccount.
+        """
+        query AccountIdentity {
+          account {
+            id
+            wallets {
+              address
+              type
+            }
+            tradeAccount {
+              id
+              linkedAccounts {
+                type
+                details
+              }
+              wallets {
+                address
+                type
+              }
+            }
+          }
+        }
+        """,
+    ]
+
+    last_errors: list[Any] = []
+    for query in queries:
+        upstream = _cw_graphql_request(query=query, bearer_token=bearer_token)
+        body = upstream.get("body") or {}
+        errors = body.get("errors") or []
+        if errors:
+            last_errors = errors
+            validation_only = all(
+                isinstance(err, dict)
+                and isinstance(err.get("extensions"), dict)
+                and err.get("extensions", {}).get("code") == "GRAPHQL_VALIDATION_FAILED"
+                for err in errors
+            )
+            if validation_only:
+                continue
+            return {"ok": False, "body": body, "errors": errors}
+
+        return {"ok": True, "body": body, "errors": []}
+
+    return {"ok": False, "body": {"errors": last_errors}, "errors": last_errors}
 
 def _mask_token(token: Optional[str]) -> str:
     if not token:
@@ -2157,6 +2284,7 @@ tr:nth-child(odd) td {
       const REFRESH_TOKEN_KEY = 'cw_refreshToken';
       const EXPIRES_AT_KEY = 'cw_expiresAt';
       const WALLET_KEY = 'cw_wallet';
+      const CW_UID_KEY = 'cw_uid';
       const CW_SESSION_INDEX_KEY = 'cw_sessions';
       const CW_ACTIVE_WALLET_KEY = 'cw_active_wallet';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
@@ -2261,6 +2389,11 @@ tr:nth-child(odd) td {
         return normalizeWalletAddress(ACTIVE_WALLET_CONFIG.wallet || '');
       }
 
+      function getWalletUidStorageKey(wallet) {
+        const normalized = normalizeWalletAddress(wallet);
+        return normalized ? `cw_uid:${normalized}` : '';
+      }
+
       function getWalletSession(wallet) {
         const normalized = normalizeWalletAddress(wallet);
         if (!normalized) return null;
@@ -2284,6 +2417,7 @@ tr:nth-child(odd) td {
           refreshToken: String(payload.refreshToken || ''),
           lastLoginAt: Number(payload.lastLoginAt || Date.now()),
           idToken: String(payload.idToken || ''),
+          uid: String(payload.uid || ''),
         };
         writeSessionIndex(sessions);
         setActiveWallet(normalized);
@@ -2307,12 +2441,20 @@ tr:nth-child(odd) td {
           localStorage.removeItem(CW_TOKEN_KEY);
           localStorage.removeItem(REFRESH_TOKEN_KEY);
           localStorage.removeItem(EXPIRES_AT_KEY);
+          localStorage.removeItem(CW_UID_KEY);
+          const uidKey = getWalletUidStorageKey(wallet);
+          if (uidKey) localStorage.removeItem(uidKey);
           return;
         }
         localStorage.setItem(ID_TOKEN_KEY, String(entry.idToken || ''));
         localStorage.setItem(CW_TOKEN_KEY, String(entry.token || ''));
         localStorage.setItem(REFRESH_TOKEN_KEY, String(entry.refreshToken || ''));
         localStorage.setItem(EXPIRES_AT_KEY, String(Number(entry.expiresAt || 0)));
+        localStorage.setItem(CW_UID_KEY, String(entry.uid || ''));
+        const uidKey = getWalletUidStorageKey(wallet);
+        if (uidKey) {
+          localStorage.setItem(uidKey, String(entry.uid || ''));
+        }
       }
 
       async function detectConnectedWalletAddress() {
@@ -2347,7 +2489,8 @@ tr:nth-child(odd) td {
         const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY) || '';
         const expiresAt = Number(localStorage.getItem(EXPIRES_AT_KEY) || 0);
         const wallet = localStorage.getItem(WALLET_KEY) || '';
-        return { idToken, cwToken, refreshToken, expiresAt, wallet };
+        const uid = String(localStorage.getItem(CW_UID_KEY) || '').trim();
+        return { idToken, cwToken, refreshToken, expiresAt, wallet, uid };
       }
 
       function clearWalletConnectCache() {
@@ -2391,6 +2534,17 @@ tr:nth-child(odd) td {
         localStorage.removeItem(CW_TOKEN_KEY);
         localStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(EXPIRES_AT_KEY);
+        localStorage.removeItem(CW_UID_KEY);
+        try {
+          const keys = Object.keys(localStorage);
+          for (const key of keys) {
+            if (key.startsWith('cw_uid:')) {
+              localStorage.removeItem(key);
+            }
+          }
+        } catch (_) {
+          // Ignore localStorage access failures.
+        }
         localStorage.removeItem(WALLET_KEY);
         localStorage.removeItem(CW_ACTIVE_WALLET_KEY);
         localStorage.removeItem(CW_SESSION_INDEX_KEY);
@@ -2534,13 +2688,37 @@ tr:nth-child(odd) td {
       }
 
       async function fetchAccountUid() {
-        const res = await authFetch('/api/account_uid');
+        const wallet = normalizeWalletAddress(getActiveWallet() || '');
+        const uidKey = getWalletUidStorageKey(wallet);
+
+        if (uidKey) {
+          const walletCachedUid = String(localStorage.getItem(uidKey) || '').trim();
+          if (walletCachedUid) {
+            localStorage.setItem(CW_UID_KEY, walletCachedUid);
+            return walletCachedUid;
+          }
+        }
+
+        const cachedUid = String(localStorage.getItem(CW_UID_KEY) || '').trim();
+        if (cachedUid && !wallet) {
+          return cachedUid;
+        }
+
+        const endpoint = wallet ? `/api/account_uid?walletAddress=${encodeURIComponent(wallet)}` : '/api/account_uid';
+        const res = await authFetch(endpoint);
         const data = await res.json();
         if (!res.ok || !data.ok || !data.uid) {
           const message = data && data.error ? data.error : 'Failed to fetch account ID.';
           throw new Error(message);
         }
-        return String(data.uid || '').trim();
+        const uid = String(data.uid || '').trim();
+        if (uid) {
+          localStorage.setItem(CW_UID_KEY, uid);
+          if (uidKey) {
+            localStorage.setItem(uidKey, uid);
+          }
+        }
+        return uid;
       }
 
       async function autoPopulateOverviewFromWallet(options) {
@@ -2960,6 +3138,23 @@ tr:nth-child(odd) td {
         localStorage.setItem(EXPIRES_AT_KEY, String(expiresAt));
         localStorage.setItem(WALLET_KEY, walletAddress);
         localStorage.setItem(CONNECTION_TYPE_KEY, connectionType);
+        if (signinData.uid) {
+          const resolvedUid = String(signinData.uid).trim();
+          localStorage.setItem(CW_UID_KEY, resolvedUid);
+          const uidKey = getWalletUidStorageKey(walletAddress);
+          if (uidKey) {
+            localStorage.setItem(uidKey, resolvedUid);
+          }
+        }
+        upsertWalletSession(walletAddress, {
+          token: signinData.idToken,
+          idToken: signinData.idToken,
+          refreshToken: signinData.refreshToken || '',
+          expiresAt,
+          lastLoginAt: Date.now(),
+          uid: String(signinData.uid || '').trim(),
+        });
+        syncLegacySessionFromActiveWallet();
 
         await syncBoostsOnSignin(walletAddress);
 
@@ -4912,11 +5107,32 @@ def api_cw_signin_with_custom_token():
             "rawErrors": [body.get("error")] if body.get("error") else [],
         }), 400
 
+    id_token = body.get("idToken")
+    uid = None
+    if id_token:
+        try:
+            identity_result = _fetch_account_identity_payload(id_token)
+            if not identity_result.get("ok"):
+                return jsonify({
+                    "ok": False,
+                    "error": "Craft World returned an error.",
+                    "rawErrors": identity_result.get("errors") or [],
+                }), 502
+            uid_body = identity_result.get("body") or {}
+            account_payload = ((uid_body.get("data") or {}).get("account") or {})
+            uid = _extract_uid_from_identity_payload(account_payload)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Failed to resolve account UID: {exc}"}), 502
+
+    if not uid:
+        return jsonify({"ok": False, "error": "Craft World custom_jwt UID not found."}), 404
+
     return jsonify({
         "ok": True,
-        "idToken": body.get("idToken"),
+        "idToken": id_token,
         "refreshToken": body.get("refreshToken"),
         "expiresIn": int(body.get("expiresIn") or 0),
+        "uid": uid,
     })
 
 
@@ -4998,24 +5214,45 @@ def api_account_uid():
     if not jwt_token:
         return jsonify({"ok": False, "error": "Missing Craft World token."}), 401
 
-    query = """
-    query AccountUID {
-      account {
-        id
-      }
-    }
-    """
-    upstream = _cw_graphql_request(query=query, bearer_token=jwt_token)
-    body = upstream.get("body") or {}
-    errors = body.get("errors") or []
-    if errors:
-        return jsonify({"ok": False, "error": "Craft World returned an error.", "rawErrors": errors}), 502
+    identity_result = _fetch_account_identity_payload(jwt_token)
+    if not identity_result.get("ok"):
+        return jsonify({
+            "ok": False,
+            "error": "Craft World returned an error.",
+            "rawErrors": identity_result.get("errors") or [],
+        }), 502
 
-    uid = ((body.get("data") or {}).get("account") or {}).get("id")
+    body = identity_result.get("body") or {}
+    account_payload = ((body.get("data") or {}).get("account") or {})
+    uid = _extract_uid_from_identity_payload(account_payload)
     if not uid:
-        return jsonify({"ok": False, "error": "Craft World account UID not found."}), 404
+        return jsonify({"ok": False, "error": "Craft World custom_jwt UID not found."}), 404
 
-    return jsonify({"ok": True, "uid": uid})
+    requested_wallet = str(request.args.get("walletAddress") or "").strip().lower()
+    if requested_wallet:
+        wallets = account_payload.get("wallets") if isinstance(account_payload, dict) else None
+        wallet_addresses = {
+            str((w or {}).get("address") or "").strip().lower()
+            for w in (wallets or [])
+            if isinstance(w, dict)
+        }
+        trade_account = account_payload.get("tradeAccount") if isinstance(account_payload, dict) else None
+        trade_wallets = trade_account.get("wallets") if isinstance(trade_account, dict) else None
+        wallet_addresses.update({
+            str((w or {}).get("address") or "").strip().lower()
+            for w in (trade_wallets or [])
+            if isinstance(w, dict)
+        })
+
+        if requested_wallet not in wallet_addresses:
+            return jsonify({
+                "ok": False,
+                "error": "Authenticated account does not include the signed wallet.",
+                "uid": uid,
+                "walletAddress": requested_wallet,
+            }), 409
+
+    return jsonify({"ok": True, "uid": uid, "accountId": account_payload.get("id"), "source": "linkedAccounts.custom_jwt|tradeAccount"})
 
 
 @app.route("/api/boosts/mastery", methods=["POST"])
@@ -11904,8 +12141,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
 
 
 
