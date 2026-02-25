@@ -10244,6 +10244,85 @@ def _build_reward_snapshot_for_mp(
 
 
 
+
+
+def _parse_donation_text(raw_text: str) -> List[Dict[str, Any]]:
+    """Parse donation input like `MUD=100, GAS 42000` into normalized rows."""
+    donations: List[Dict[str, Any]] = []
+    if not raw_text:
+        return donations
+
+    normalized = raw_text.replace("\n", ",").replace(";", ",")
+    parts = [p.strip() for p in normalized.split(",") if p.strip()]
+
+    for part in parts:
+        symbol = ""
+        amount_raw = ""
+        for sep in ["=", ":", " "]:
+            if sep in part:
+                symbol, amount_raw = part.split(sep, 1)
+                break
+
+        symbol = symbol.strip().upper()
+        if not symbol:
+            continue
+
+        try:
+            amount = float(amount_raw.strip())
+        except ValueError:
+            continue
+
+        if amount <= 0:
+            continue
+
+        donations.append({"symbol": symbol, "amount": amount})
+
+    return donations
+
+
+def _build_resource_efficiency_rows(masterpiece_id: int, mp: Dict[str, Any], prices: Dict[str, float]) -> List[Dict[str, Any]]:
+    """Build per-resource points/cost/battery stats for a masterpiece."""
+    resources = mp.get("resources") or []
+    if not resources:
+        resources = [
+            {"symbol": sym, "amount": 0.0, "target": float("inf")}
+            for sym in ALL_FACTORY_TOKENS
+        ]
+
+    rows: List[Dict[str, Any]] = []
+    for resource in resources:
+        symbol = (resource.get("symbol") or "").upper()
+        if not symbol:
+            continue
+
+        current_amt = float(resource.get("amount") or 0.0)
+        target_amt = float(resource.get("target") or 0.0)
+        remaining = max(0.0, target_amt - current_amt)
+        if remaining <= 0:
+            continue
+
+        prediction = predict_reward(masterpiece_id, [{"symbol": symbol, "amount": 1}])
+        points_per_unit = float(prediction.get("masterpiecePoints") or 0.0)
+        battery_per_unit = float(prediction.get("requiredPower") or 0.0)
+        if points_per_unit <= 0:
+            continue
+
+        price_coin = float(prices.get(symbol, 0.0))
+        coin_per_point = (price_coin / points_per_unit) if price_coin > 0 else None
+
+        rows.append({
+            "symbol": symbol,
+            "remaining": remaining,
+            "points_per_unit": points_per_unit,
+            "battery_per_unit": battery_per_unit,
+            "price_coin": price_coin,
+            "coin_per_point": coin_per_point,
+        })
+
+    rows.sort(key=lambda row: (row["coin_per_point"] is None, row["coin_per_point"] or float("inf"), row["symbol"]))
+    return rows
+
+
 # -------- Snipe Calculator tab --------
 @app.route("/snipe", methods=["GET", "POST"])
 def snipe():
@@ -10253,6 +10332,7 @@ def snipe():
     rank_result: Optional[Dict[str, Any]] = None
     target_result: Optional[Dict[str, Any]] = None
     combo_result: Optional[Dict[str, Any]] = None
+    analyze_result: Optional[Dict[str, Any]] = None
 
     # ----- Load masterpieces for dropdowns -----
     masterpieces_data: List[Dict[str, Any]] = []
@@ -10696,6 +10776,21 @@ def snipe():
                 except Exception as e:
                     error = f"Error calculating target-points snipe: {e}"
 
+        elif mode == "analyze":
+            if not selected_mp_id:
+                error = "Please select a valid masterpiece."
+            else:
+                try:
+                    mp = fetch_masterpiece_details(selected_mp_id)
+                    prices = fetch_live_prices_in_coin()
+                    rows = _build_resource_efficiency_rows(selected_mp_id, mp, prices)
+                    analyze_result = {
+                        "mp": mp,
+                        "rows": rows,
+                    }
+                except Exception as e:
+                    error = f"Error calculating efficiency snapshot: {e}"
+
         elif mode == "combo":
             combo_text = (request.form.get("combo_text") or "").strip()
             if not selected_mp_id:
@@ -10705,25 +10800,7 @@ def snipe():
             else:
                 try:
                     # Parse text into list of {symbol, amount}
-                    donations: List[Dict[str, Any]] = []
-                    parts = [p.strip() for p in combo_text.replace("\n", ",").split(",") if p.strip()]
-                    for part in parts:
-                        # Accept formats like "MUD=100", "MUD 100", "MUD:100"
-                        for sep in ["=", ":", " "]:
-                            if sep in part:
-                                sym, amt_str = part.split(sep, 1)
-                                break
-                        else:
-                            # No separator found, skip
-                            continue
-                        sym = sym.strip().upper()
-                        try:
-                            amt = float(amt_str.strip())
-                        except ValueError:
-                            continue
-                        if amt <= 0:
-                            continue
-                        donations.append({"symbol": sym, "amount": amt})
+                    donations = _parse_donation_text(combo_text)
 
                     if not donations:
                         error = "No valid symbol/amount pairs found."
@@ -10767,7 +10844,7 @@ def snipe():
     <div class="card">
       <h1>Masterpiece Snipe &amp; Donation Tools</h1>
       <p class="subtle">
-        Three tools: <strong>Rank snipe</strong>, <strong>Target points</strong>, and <strong>Combo donation</strong>.
+        Four tools: <strong>Rank snipe</strong>, <strong>Target points</strong>, <strong>Resource efficiency snapshot</strong>, and <strong>Combo donation</strong>.
         All use <code>predictReward</code> + live COIN prices.
       </p>
 
@@ -10979,9 +11056,71 @@ def snipe():
         {% endif %}
       </div>
 
+
+      <!-- Resource efficiency snapshot -->
+      <div class="card" style="margin-top:14px;">
+        <h2>3) Resource Efficiency Snapshot</h2>
+        <p class="subtle">Quickly compare COIN/point, battery usage, and remaining donation cap across all resources for a masterpiece.</p>
+        <form method="post" style="margin-bottom:10px;">
+          <input type="hidden" name="mode" value="analyze" />
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+            <div style="flex:2;min-width:220px;">
+              <label for="masterpiece_id_a">Masterpiece</label>
+              <select id="masterpiece_id_a" name="masterpiece_id" style="width:100%;">
+                <option value="">(choose masterpiece)</option>
+                {% for mp in mp_choices %}
+                  <option value="{{ mp.id }}" {% if selected_mp_id==mp.id %}selected{% endif %}>{{ mp.label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div style="flex:1;min-width:140px;display:flex;justify-content:flex-start;">
+              <button type="submit">Analyze efficiency</button>
+            </div>
+          </div>
+        </form>
+
+        {% if analyze_result %}
+          <div class="card" style="margin-top:6px;">
+            <h3>{{ analyze_result.mp.name }} – Efficiency snapshot</h3>
+            {% if analyze_result.rows %}
+              <div class="scroll-x">
+                <table>
+                  <tr>
+                    <th>Resource</th>
+                    <th>Points / unit</th>
+                    <th>COIN / unit</th>
+                    <th>COIN / point</th>
+                    <th>Battery / unit</th>
+                    <th>Remaining units</th>
+                  </tr>
+                  {% for r in analyze_result.rows %}
+                    <tr>
+                      <td>{{ r.symbol }}</td>
+                      <td>{{ "{:,.2f}".format(r.points_per_unit) }}</td>
+                      <td>{{ "{:,.6f}".format(r.price_coin) }}</td>
+                      <td>
+                        {% if r.coin_per_point is not none %}
+                          {{ "{:,.8f}".format(r.coin_per_point) }}
+                        {% else %}
+                          N/A
+                        {% endif %}
+                      </td>
+                      <td>{{ "{:,.2f}".format(r.battery_per_unit) }}</td>
+                      <td>{{ "{:,.0f}".format(r.remaining) }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
+            {% else %}
+              <p class="subtle">No eligible resources found for this masterpiece.</p>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+
       <!-- Combo donation calculator -->
       <div class="card" style="margin-top:14px;">
-        <h2>3) Combo Donation (multi-resource)</h2>
+        <h2>4) Combo Donation (multi-resource)</h2>
         <p class="subtle">Enter donations like <code>MUD=100000, GAS 42000, CEMENT:69</code> and we&apos;ll show total points, COIN, and battery.</p>
         <form method="post" style="margin-bottom:10px;">
           <input type="hidden" name="mode" value="combo" />
@@ -11045,6 +11184,7 @@ def snipe():
         rank_result=rank_result,
         target_result=target_result,
         combo_result=combo_result,
+        analyze_result=analyze_result,
         mp_choices=mp_choices,
         selected_mp_id=selected_mp_id,
         target_rank=target_rank,
