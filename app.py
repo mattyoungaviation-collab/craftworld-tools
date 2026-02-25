@@ -48,7 +48,23 @@ def normalize_avatar_url(raw: Optional[str]) -> Optional[str]:
 # ---------------- Database setup (users + saved boosts) ----------------
 
 import os
-DB_PATH = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
+
+
+def _resolve_db_path() -> str:
+    configured = os.environ.get("DB_PATH", "/data/craftworld_tools.db")
+    configured = str(configured or "").strip() or "/data/craftworld_tools.db"
+    target_dir = os.path.dirname(os.path.abspath(configured)) or "."
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        return configured
+    except Exception:
+        fallback = os.path.join(os.getcwd(), "craftworld_tools.db")
+        fallback_dir = os.path.dirname(os.path.abspath(fallback)) or "."
+        os.makedirs(fallback_dir, exist_ok=True)
+        return fallback
+
+
+DB_PATH = _resolve_db_path()
 CW_GRAPHQL_URL = "https://craft-world.gg/graphql"
 CW_APP_VERSION = "1.6.6"
 CW_FIREBASE_API_KEY = "AIzaSyDgDDykbRrhbdfWUpm1BUgj4ga7d_-wy_g"
