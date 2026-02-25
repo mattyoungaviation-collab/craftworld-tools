@@ -183,7 +183,6 @@ def _fetch_account_identity_payload(bearer_token: str) -> Dict[str, Any]:
         }
         wallets {
           address
-          createdAt
           type
         }
       }
