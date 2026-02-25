@@ -154,6 +154,66 @@ def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, 
     }
 
 
+
+
+def _fetch_account_payload_with_fallbacks(bearer_token: str) -> Dict[str, Any]:
+    queries = [
+        """
+        query AccountUID {
+          account {
+            id
+            linkedAccounts {
+              type
+              details
+            }
+            wallets {
+              address
+              type
+            }
+          }
+        }
+        """,
+        """
+        query AccountUID {
+          account {
+            id
+            wallets {
+              address
+              type
+            }
+          }
+        }
+        """,
+        """
+        query AccountUID {
+          account {
+            id
+          }
+        }
+        """,
+    ]
+
+    last_errors: list[Any] = []
+    for query in queries:
+        upstream = _cw_graphql_request(query=query, bearer_token=bearer_token)
+        body = upstream.get("body") or {}
+        errors = body.get("errors") or []
+        if errors:
+            last_errors = errors
+            validation_only = all(
+                isinstance(err, dict)
+                and isinstance(err.get("extensions"), dict)
+                and err.get("extensions", {}).get("code") == "GRAPHQL_VALIDATION_FAILED"
+                for err in errors
+            )
+            if validation_only:
+                continue
+            return {"ok": False, "body": body, "errors": errors}
+
+        return {"ok": True, "body": body, "errors": []}
+
+    return {"ok": False, "body": {"errors": last_errors}, "errors": last_errors}
+
 def _mask_token(token: Optional[str]) -> str:
     if not token:
         return "<missing>"
@@ -4969,26 +5029,11 @@ def api_cw_signin_with_custom_token():
     uid = None
     if id_token:
         try:
-            uid_query = """
-            query AccountUID {
-              account {
-                id
-                linkedAccounts {
-                  type
-                  details
-                }
-                wallets {
-                  address
-                  createdAt
-                  type
-                }
-              }
-            }
-            """
-            uid_upstream = _cw_graphql_request(query=uid_query, bearer_token=id_token)
-            uid_body = uid_upstream.get("body") or {}
-            account_payload = ((uid_body.get("data") or {}).get("account") or {})
-            uid = _extract_uid_from_account_payload(account_payload)
+            identity_result = _fetch_account_payload_with_fallbacks(id_token)
+            if identity_result.get("ok"):
+                uid_body = identity_result.get("body") or {}
+                account_payload = ((uid_body.get("data") or {}).get("account") or {})
+                uid = _extract_uid_from_account_payload(account_payload)
         except Exception:
             uid = None
 
@@ -5079,28 +5124,15 @@ def api_account_uid():
     if not jwt_token:
         return jsonify({"ok": False, "error": "Missing Craft World token."}), 401
 
-    query = """
-    query AccountUID {
-      account {
-        id
-        linkedAccounts {
-          type
-          details
-        }
-        wallets {
-          address
-          createdAt
-          type
-        }
-      }
-    }
-    """
-    upstream = _cw_graphql_request(query=query, bearer_token=jwt_token)
-    body = upstream.get("body") or {}
-    errors = body.get("errors") or []
-    if errors:
-        return jsonify({"ok": False, "error": "Craft World returned an error.", "rawErrors": errors}), 502
+    identity_result = _fetch_account_payload_with_fallbacks(jwt_token)
+    if not identity_result.get("ok"):
+        return jsonify({
+            "ok": False,
+            "error": "Craft World returned an error.",
+            "rawErrors": identity_result.get("errors") or [],
+        }), 502
 
+    body = identity_result.get("body") or {}
     account_payload = ((body.get("data") or {}).get("account") or {})
     uid = _extract_uid_from_account_payload(account_payload)
     if not uid:
