@@ -71,6 +71,32 @@ def _token_cache_key(jwt_token: str) -> str:
     return hashlib.sha256(jwt_token.encode("utf-8")).hexdigest()
 
 
+def _extract_uid_from_account_payload(account_payload: Any) -> Optional[str]:
+    if not isinstance(account_payload, dict):
+        return None
+
+    linked_accounts = account_payload.get("linkedAccounts")
+    if isinstance(linked_accounts, list):
+        for entry in linked_accounts:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("type") or "").strip().lower() != "custom_jwt":
+                continue
+            details = entry.get("details")
+            if isinstance(details, str):
+                try:
+                    details = json.loads(details)
+                except Exception:
+                    details = {}
+            if isinstance(details, dict):
+                candidate = str(details.get("id") or details.get("user_id") or "").strip()
+                if candidate:
+                    return candidate
+
+    account_id = str(account_payload.get("id") or "").strip()
+    return account_id or None
+
+
 def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
     if not authorization_value:
         return None
@@ -4947,12 +4973,22 @@ def api_cw_signin_with_custom_token():
             query AccountUID {
               account {
                 id
+                linkedAccounts {
+                  type
+                  details
+                }
+                wallets {
+                  address
+                  createdAt
+                  type
+                }
               }
             }
             """
             uid_upstream = _cw_graphql_request(query=uid_query, bearer_token=id_token)
             uid_body = uid_upstream.get("body") or {}
-            uid = ((uid_body.get("data") or {}).get("account") or {}).get("id")
+            account_payload = ((uid_body.get("data") or {}).get("account") or {})
+            uid = _extract_uid_from_account_payload(account_payload)
         except Exception:
             uid = None
 
@@ -5047,6 +5083,15 @@ def api_account_uid():
     query AccountUID {
       account {
         id
+        linkedAccounts {
+          type
+          details
+        }
+        wallets {
+          address
+          createdAt
+          type
+        }
       }
     }
     """
@@ -5056,11 +5101,12 @@ def api_account_uid():
     if errors:
         return jsonify({"ok": False, "error": "Craft World returned an error.", "rawErrors": errors}), 502
 
-    uid = ((body.get("data") or {}).get("account") or {}).get("id")
+    account_payload = ((body.get("data") or {}).get("account") or {})
+    uid = _extract_uid_from_account_payload(account_payload)
     if not uid:
         return jsonify({"ok": False, "error": "Craft World account UID not found."}), 404
 
-    return jsonify({"ok": True, "uid": uid})
+    return jsonify({"ok": True, "uid": uid, "accountId": account_payload.get("id")})
 
 
 @app.route("/api/boosts/mastery", methods=["POST"])
