@@ -1241,6 +1241,8 @@ BASE_TEMPLATE = """
       --text-soft: #9ea4d1;
       --danger: #ff5c7a;
       --success: #4ade80;
+      --success-strong: #22c55e;
+      --danger-strong: #ef4444;
       --border-subtle: rgba(255, 255, 255, 0.03);
       --border-strong: rgba(92, 242, 255, 0.35);
       --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.55);
@@ -1314,6 +1316,14 @@ body {
       gap: 14px;
     }
 
+    @media (max-width: 1100px) {
+      .nav-inner {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+      }
+    }
+
     .nav-title {
       font-weight: 700;
       letter-spacing: 0.04em;
@@ -1340,6 +1350,19 @@ body {
       align-items: center;
       justify-content: flex-end;
       font-size: 14px;
+    }
+
+    @media (max-width: 1100px) {
+      .nav-links {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding-bottom: 4px;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .nav-links::-webkit-scrollbar {
+        height: 6px;
+      }
     }
 
     .nav-links a,
@@ -1390,6 +1413,14 @@ body {
   border: 1px solid rgba(92, 242, 255, 0.35);
   font-size: 12px;
   color: var(--text-main);
+}
+
+@media (max-width: 1100px) {
+  .account-power-widget {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
 }
 .account-power-widget .label {
   color: var(--text-soft);
@@ -1597,6 +1628,32 @@ body {
       padding: 18px 12px 40px;
     }
 
+    .container {
+      max-width: 1180px;
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      padding: 14px 12px 34px;
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        padding: 10px 8px 26px;
+      }
+
+      .card {
+        padding: 14px 12px;
+        border-radius: 14px;
+      }
+
+      button,
+      input[type="text"],
+      input[type="number"],
+      input[type="password"],
+      select {
+        min-height: 42px;
+      }
+    }
+
     .page-inner {
       max-width: 1180px;
       margin: 0 auto;
@@ -1748,6 +1805,21 @@ table {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
 }
 
+th, td {
+  padding: 8px 10px;
+  vertical-align: middle;
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll table {
+  min-width: 680px;
+}
+
 tr:nth-child(even) td {
   background: rgba(15, 23, 42, 0.45);
 }
@@ -1793,6 +1865,18 @@ tr:nth-child(odd) td {
       color: var(--danger);
       border: 1px solid rgba(248, 113, 113, 0.5);
       box-shadow: 0 0 12px rgba(248, 113, 113, 0.35);
+    }
+
+    .num-positive,
+    .profit-pos {
+      color: var(--success-strong) !important;
+      font-weight: 600;
+    }
+
+    .num-negative,
+    .profit-neg {
+      color: var(--danger-strong) !important;
+      font-weight: 600;
     }
 
     .error {
@@ -6096,7 +6180,7 @@ def profitability():
           <div class="error">{{error}}</div>
         {% endif %}
 
-        <div style="margin-top:14px;overflow-x:auto;">
+        <div class="table-scroll" style="margin-top:14px;">
 <table>
   <tr>
     <th>Run</th>
@@ -6164,13 +6248,13 @@ def profitability():
     <!-- NEW QUOTE VALUES -->
     <td>{{ '%.6f'|format(r.cost_coin_per_craft) }}</td>
     <td>{{ '%.6f'|format(r.value_coin_per_craft) }}</td>
-    <td>{{ '%.6f'|format(r.profit_coin_per_craft) }}</td>
-    <td>{{ '%.2f'|format(r.margin_pct) }}</td>
+    <td class="{{ 'num-positive' if r.profit_coin_per_craft >= 0 else 'num-negative' }}">{{ '%+.6f'|format(r.profit_coin_per_craft) }}</td>
+    <td class="{{ 'num-positive' if r.margin_pct >= 0 else 'num-negative' }}">{{ '%+.2f'|format(r.margin_pct) }}</td>
 
-    <td>{{ '%.6f'|format(r.profit_hour_per) }}</td>
-    <td>{{ '%.6f'|format(r.profit_hour_total) }}</td>
-    <td>{{ '%.6f'|format(r.profit_day_total) }}</td>
-    <td>{{ '%.4f'|format(r.usd_hour_total) }}</td>
+    <td class="{{ 'num-positive' if r.profit_hour_per >= 0 else 'num-negative' }}">{{ '%+.6f'|format(r.profit_hour_per) }}</td>
+    <td class="{{ 'num-positive' if r.profit_hour_total >= 0 else 'num-negative' }}">{{ '%+.6f'|format(r.profit_hour_total) }}</td>
+    <td class="{{ 'num-positive' if r.profit_day_total >= 0 else 'num-negative' }}">{{ '%+.6f'|format(r.profit_day_total) }}</td>
+    <td class="{{ 'num-positive' if r.usd_hour_total >= 0 else 'num-negative' }}">{{ '%+.4f'|format(r.usd_hour_total) }}</td>
   </tr>
   {% endfor %}
 </table>
@@ -12158,8 +12242,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
 
 
 
