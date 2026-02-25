@@ -76,26 +76,26 @@ def _extract_uid_from_account_payload(account_payload: Any) -> Optional[str]:
         return None
 
     linked_accounts = account_payload.get("linkedAccounts")
-    if isinstance(linked_accounts, list):
-        for entry in linked_accounts:
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get("type") or "").strip().lower() != "custom_jwt":
-                continue
-            details = entry.get("details")
-            if isinstance(details, str):
-                try:
-                    details = json.loads(details)
-                except Exception:
-                    details = {}
-            if isinstance(details, dict):
-                candidate = str(details.get("id") or details.get("user_id") or "").strip()
-                if candidate:
-                    return candidate
+    if not isinstance(linked_accounts, list):
+        return None
 
-    account_id = str(account_payload.get("id") or "").strip()
-    return account_id or None
+    for entry in linked_accounts:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type") or "").strip().lower() != "custom_jwt":
+            continue
+        details = entry.get("details")
+        if isinstance(details, str):
+            try:
+                details = json.loads(details)
+            except Exception:
+                details = {}
+        if isinstance(details, dict):
+            candidate = str(details.get("id") or details.get("user_id") or "").strip()
+            if candidate:
+                return candidate
 
+    return None
 
 def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
     if not authorization_value:
@@ -156,63 +156,31 @@ def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, 
 
 
 
-def _fetch_account_payload_with_fallbacks(bearer_token: str) -> Dict[str, Any]:
-    queries = [
-        """
-        query AccountUID {
-          account {
-            id
-            linkedAccounts {
-              type
-              details
-            }
-            wallets {
-              address
-              type
-            }
-          }
+def _fetch_account_identity_payload(bearer_token: str) -> Dict[str, Any]:
+    query = """
+    query AccountIdentity {
+      account {
+        id
+        linkedAccounts {
+          type
+          details
         }
-        """,
-        """
-        query AccountUID {
-          account {
-            id
-            wallets {
-              address
-              type
-            }
-          }
+        wallets {
+          address
+          createdAt
+          type
         }
-        """,
-        """
-        query AccountUID {
-          account {
-            id
-          }
-        }
-        """,
-    ]
+      }
+    }
+    """
 
-    last_errors: list[Any] = []
-    for query in queries:
-        upstream = _cw_graphql_request(query=query, bearer_token=bearer_token)
-        body = upstream.get("body") or {}
-        errors = body.get("errors") or []
-        if errors:
-            last_errors = errors
-            validation_only = all(
-                isinstance(err, dict)
-                and isinstance(err.get("extensions"), dict)
-                and err.get("extensions", {}).get("code") == "GRAPHQL_VALIDATION_FAILED"
-                for err in errors
-            )
-            if validation_only:
-                continue
-            return {"ok": False, "body": body, "errors": errors}
+    upstream = _cw_graphql_request(query=query, bearer_token=bearer_token)
+    body = upstream.get("body") or {}
+    errors = body.get("errors") or []
+    if errors:
+        return {"ok": False, "body": body, "errors": errors}
 
-        return {"ok": True, "body": body, "errors": []}
-
-    return {"ok": False, "body": {"errors": last_errors}, "errors": last_errors}
+    return {"ok": True, "body": body, "errors": []}
 
 def _mask_token(token: Optional[str]) -> str:
     if not token:
@@ -2631,7 +2599,9 @@ tr:nth-child(odd) td {
           return cachedUid;
         }
 
-        const res = await authFetch('/api/account_uid');
+        const wallet = String(getActiveWallet() || '').trim();
+        const endpoint = wallet ? `/api/account_uid?walletAddress=${encodeURIComponent(wallet)}` : '/api/account_uid';
+        const res = await authFetch(endpoint);
         const data = await res.json();
         if (!res.ok || !data.ok || !data.uid) {
           const message = data && data.error ? data.error : 'Failed to fetch account ID.';
@@ -5029,13 +4999,21 @@ def api_cw_signin_with_custom_token():
     uid = None
     if id_token:
         try:
-            identity_result = _fetch_account_payload_with_fallbacks(id_token)
-            if identity_result.get("ok"):
-                uid_body = identity_result.get("body") or {}
-                account_payload = ((uid_body.get("data") or {}).get("account") or {})
-                uid = _extract_uid_from_account_payload(account_payload)
-        except Exception:
-            uid = None
+            identity_result = _fetch_account_identity_payload(id_token)
+            if not identity_result.get("ok"):
+                return jsonify({
+                    "ok": False,
+                    "error": "Craft World returned an error.",
+                    "rawErrors": identity_result.get("errors") or [],
+                }), 502
+            uid_body = identity_result.get("body") or {}
+            account_payload = ((uid_body.get("data") or {}).get("account") or {})
+            uid = _extract_uid_from_account_payload(account_payload)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Failed to resolve account UID: {exc}"}), 502
+
+    if not uid:
+        return jsonify({"ok": False, "error": "Craft World custom_jwt UID not found."}), 404
 
     return jsonify({
         "ok": True,
@@ -5124,7 +5102,7 @@ def api_account_uid():
     if not jwt_token:
         return jsonify({"ok": False, "error": "Missing Craft World token."}), 401
 
-    identity_result = _fetch_account_payload_with_fallbacks(jwt_token)
+    identity_result = _fetch_account_identity_payload(jwt_token)
     if not identity_result.get("ok"):
         return jsonify({
             "ok": False,
@@ -5136,9 +5114,25 @@ def api_account_uid():
     account_payload = ((body.get("data") or {}).get("account") or {})
     uid = _extract_uid_from_account_payload(account_payload)
     if not uid:
-        return jsonify({"ok": False, "error": "Craft World account UID not found."}), 404
+        return jsonify({"ok": False, "error": "Craft World custom_jwt UID not found."}), 404
 
-    return jsonify({"ok": True, "uid": uid, "accountId": account_payload.get("id")})
+    requested_wallet = str(request.args.get("walletAddress") or "").strip().lower()
+    if requested_wallet:
+        wallets = account_payload.get("wallets") if isinstance(account_payload, dict) else None
+        wallet_addresses = {
+            str((w or {}).get("address") or "").strip().lower()
+            for w in (wallets or [])
+            if isinstance(w, dict)
+        }
+        if requested_wallet not in wallet_addresses:
+            return jsonify({
+                "ok": False,
+                "error": "Authenticated account does not include the signed wallet.",
+                "uid": uid,
+                "walletAddress": requested_wallet,
+            }), 409
+
+    return jsonify({"ok": True, "uid": uid, "accountId": account_payload.get("id"), "source": "linkedAccounts.custom_jwt"})
 
 
 @app.route("/api/boosts/mastery", methods=["POST"])
