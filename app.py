@@ -163,6 +163,15 @@ def _normalize_cw_token(token: Optional[str]) -> Optional[str]:
     return value
 
 
+def _normalize_wallet_address_for_cw(value: Optional[str]) -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith("ronin:"):
+        raw = f"0x{raw.split(':', 1)[1]}"
+    return raw
+
+
 def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, bearer_token: Optional[str] = None) -> Dict[str, Any]:
     headers = {
         "Content-Type": "application/json",
@@ -2386,7 +2395,11 @@ tr:nth-child(odd) td {
       let providerDisconnectHandler = null;
 
       function normalizeWalletAddress(addr) {
-        return String(addr || '').trim().toLowerCase();
+        const raw = String(addr || '').trim().toLowerCase();
+        if (raw.startsWith('ronin:')) {
+          return `0x${raw.slice(6)}`;
+        }
+        return raw;
       }
 
       function isHexWalletAddress(value) {
@@ -3151,9 +3164,13 @@ tr:nth-child(odd) td {
 
         statusEl.textContent = `Connecting via ${getProviderDisplayName(connectionType)}...`;
         const accounts = await provider.request({ method: 'eth_requestAccounts' });
-        const walletAddress = (accounts && accounts[0]) ? String(accounts[0]).toLowerCase() : '';
+        const providerWalletAddress = (accounts && accounts[0]) ? String(accounts[0]).trim() : '';
+        const walletAddress = normalizeWalletAddress(providerWalletAddress);
         if (!walletAddress) {
           throw new Error('No wallet address returned by provider.');
+        }
+        if (!isHexWalletAddress(walletAddress)) {
+          throw new Error('Wallet returned an invalid address format.');
         }
 
         await ensureRoninChain(provider);
@@ -3171,7 +3188,7 @@ tr:nth-child(odd) td {
         statusEl.textContent = 'Please sign nonce in wallet...';
         const signature = await provider.request({
           method: 'personal_sign',
-          params: [nonceData.nonce, walletAddress],
+          params: [nonceData.nonce, providerWalletAddress || walletAddress],
         });
         if (!signature) {
           throw new Error('Wallet signature was not returned.');
@@ -5094,7 +5111,7 @@ def resource_view(token: str):
 @app.route("/api/cw/get_nonce", methods=["POST"])
 def api_cw_get_nonce():
     payload = request.get_json(silent=True) or {}
-    wallet_address = (payload.get("walletAddress") or "").strip()
+    wallet_address = _normalize_wallet_address_for_cw(payload.get("walletAddress"))
     if not wallet_address:
         return jsonify({"ok": False, "error": "walletAddress is required."}), 400
 
@@ -5129,7 +5146,7 @@ def api_cw_get_nonce():
 @app.route("/api/cw/login_for_custom_token", methods=["POST"])
 def api_cw_login_for_custom_token():
     payload = request.get_json(silent=True) or {}
-    wallet_address = (payload.get("walletAddress") or "").strip()
+    wallet_address = _normalize_wallet_address_for_cw(payload.get("walletAddress"))
     signature = (payload.get("signature") or "").strip()
     if not wallet_address or not signature:
         return jsonify({"ok": False, "error": "walletAddress and signature are required."}), 400
@@ -12451,7 +12468,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
