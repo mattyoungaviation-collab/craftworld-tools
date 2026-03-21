@@ -39,7 +39,7 @@ def call_graphql_with_jwt(jwt_token: str, query: str, variables: Optional[Dict[s
         "Authorization": f"Bearer {normalized_token}",
         "Content-Type": "application/json",
         # IMPORTANT: must be >= minAppVersion from server (currently 1.6.2)
-        "x-app-version": "1.7.0",
+        "x-app-version": "1.7.3",
     }
 
     payload: Dict[str, Any] = {"query": query}
