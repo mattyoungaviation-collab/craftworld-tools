@@ -164,21 +164,32 @@ def _normalize_cw_token(token: Optional[str]) -> Optional[str]:
 
 
 def _normalize_wallet_address_for_cw(value: Optional[str]) -> str:
-    raw = (value or "").strip().lower()
+    raw = (value or "").strip()
     if not raw:
         return ""
-    if raw.startswith("ronin:"):
+    if raw.lower().startswith("ronin:"):
         raw = f"0x{raw.split(':', 1)[1]}"
     return raw
 
 
 def _candidate_wallet_addresses_for_cw(value: Optional[str]) -> List[str]:
-    normalized = _normalize_wallet_address_for_cw(value)
-    if not normalized:
+    raw = (value or "").strip()
+    normalized = _normalize_wallet_address_for_cw(raw)
+    if not raw and not normalized:
         return []
-    candidates: List[str] = [normalized]
-    if normalized.startswith("0x") and len(normalized) > 2:
+    candidates: List[str] = []
+    if raw:
+        candidates.append(raw)
+    if normalized:
+        candidates.append(normalized)
+    if raw.lower().startswith("ronin:") and len(raw) > 6:
+        candidates.append(f"0x{raw.split(':', 1)[1]}")
+    if raw.lower().startswith("0x") and len(raw) > 2:
+        candidates.append(f"ronin:{raw[2:]}")
+    if normalized.lower().startswith("0x") and len(normalized) > 2:
         candidates.append(f"ronin:{normalized[2:]}")
+    # Also try lowercase variants for APIs that require normalized lowercase.
+    candidates.extend([c.lower() for c in list(candidates) if c])
     deduped: List[str] = []
     for item in candidates:
         if item and item not in deduped:
@@ -2404,6 +2415,7 @@ tr:nth-child(odd) td {
       let lastErrorRaw = null;
       let authStatus = 'disconnected';
       let statusPollInterval = null;
+      let authRequestSeq = 0;
       let activeWalletProvider = null;
       let providerAccountsChangedHandler = null;
       let providerChainChangedHandler = null;
@@ -2412,6 +2424,15 @@ tr:nth-child(odd) td {
       function normalizeWalletAddress(addr) {
         const raw = String(addr || '').trim().toLowerCase();
         if (raw.startsWith('ronin:')) {
+          return `0x${raw.slice(6)}`;
+        }
+        return raw;
+      }
+
+      function normalizeWalletAddressForApi(addr) {
+        const raw = String(addr || '').trim();
+        if (!raw) return '';
+        if (raw.toLowerCase().startsWith('ronin:')) {
           return `0x${raw.slice(6)}`;
         }
         return raw;
@@ -2971,6 +2992,7 @@ tr:nth-child(odd) td {
       }
 
       function handleWalletSessionInvalidation(message) {
+        authRequestSeq += 1;
         stopStatusPolling();
         detachWalletProviderListeners();
         clearSession();
@@ -3021,6 +3043,7 @@ tr:nth-child(odd) td {
       }
 
       async function refreshAccountStatusOnce() {
+        const currentSeq = ++authRequestSeq;
         const session = getSession();
         const expired = isSessionExpired(session);
 
@@ -3056,6 +3079,9 @@ tr:nth-child(odd) td {
         try {
           const res = await authFetch('/api/account_status');
           const data = await res.json();
+          if (currentSeq !== authRequestSeq) {
+            return;
+          }
           if (!data.ok || data.auth !== 'ok') {
             setAuthStatus('error', session.wallet);
             currentPower = null;
@@ -3191,11 +3217,12 @@ tr:nth-child(odd) td {
         statusEl.textContent = `Connecting via ${getProviderDisplayName(connectionType)}...`;
         const accounts = await provider.request({ method: 'eth_requestAccounts' });
         const providerWalletAddress = (accounts && accounts[0]) ? String(accounts[0]).trim() : '';
-        const walletAddress = normalizeWalletAddress(providerWalletAddress);
-        if (!walletAddress) {
+        const apiWalletAddress = normalizeWalletAddressForApi(providerWalletAddress);
+        const walletAddress = normalizeWalletAddress(apiWalletAddress);
+        if (!apiWalletAddress) {
           throw new Error('No wallet address returned by provider.');
         }
-        if (!isHexWalletAddress(walletAddress)) {
+        if (!isHexWalletAddress(apiWalletAddress)) {
           throw new Error('Wallet returned an invalid address format.');
         }
 
@@ -3204,7 +3231,7 @@ tr:nth-child(odd) td {
         const nonceRes = await fetch('/api/cw/get_nonce', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress }),
+          body: JSON.stringify({ walletAddress: apiWalletAddress }),
         });
         const nonceData = await nonceRes.json();
         if (!nonceData.ok || !nonceData.nonce) {
@@ -3224,7 +3251,7 @@ tr:nth-child(odd) td {
         const customRes = await fetch('/api/cw/login_for_custom_token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress, signature }),
+          body: JSON.stringify({ walletAddress: apiWalletAddress, signature }),
         });
         const customData = await customRes.json();
         if (!customData.ok || !customData.customToken) {
@@ -3414,6 +3441,7 @@ tr:nth-child(odd) td {
 
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
+            authRequestSeq += 1;
             stopStatusPolling();
             await disconnectActiveWalletProvider();
             detachWalletProviderListeners();
@@ -12531,8 +12559,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
 
 
 
