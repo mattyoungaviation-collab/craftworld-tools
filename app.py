@@ -163,6 +163,40 @@ def _normalize_cw_token(token: Optional[str]) -> Optional[str]:
     return value
 
 
+def _normalize_wallet_address_for_cw(value: Optional[str]) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw.lower().startswith("ronin:"):
+        raw = f"0x{raw.split(':', 1)[1]}"
+    return raw
+
+
+def _candidate_wallet_addresses_for_cw(value: Optional[str]) -> List[str]:
+    raw = (value or "").strip()
+    normalized = _normalize_wallet_address_for_cw(raw)
+    if not raw and not normalized:
+        return []
+    candidates: List[str] = []
+    if raw:
+        candidates.append(raw)
+    if normalized:
+        candidates.append(normalized)
+    if raw.lower().startswith("ronin:") and len(raw) > 6:
+        candidates.append(f"0x{raw.split(':', 1)[1]}")
+    if raw.lower().startswith("0x") and len(raw) > 2:
+        candidates.append(f"ronin:{raw[2:]}")
+    if normalized.lower().startswith("0x") and len(normalized) > 2:
+        candidates.append(f"ronin:{normalized[2:]}")
+    # Also try lowercase variants for APIs that require normalized lowercase.
+    candidates.extend([c.lower() for c in list(candidates) if c])
+    deduped: List[str] = []
+    for item in candidates:
+        if item and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
 def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, bearer_token: Optional[str] = None) -> Dict[str, Any]:
     headers = {
         "Content-Type": "application/json",
@@ -2371,6 +2405,7 @@ tr:nth-child(odd) td {
       const CW_UID_KEY = 'cw_uid';
       const CW_SESSION_INDEX_KEY = 'cw_sessions';
       const CW_ACTIVE_WALLET_KEY = 'cw_active_wallet';
+      const CW_MANUAL_DISCONNECT_KEY = 'cw_manual_disconnect';
       const ACCOUNT_STATUS_KEY = 'cw_account_status';
       const CONNECTION_TYPE_KEY = 'cw_connection_type';
       let refillMs = 0;
@@ -2380,13 +2415,27 @@ tr:nth-child(odd) td {
       let lastErrorRaw = null;
       let authStatus = 'disconnected';
       let statusPollInterval = null;
+      let authRequestSeq = 0;
       let activeWalletProvider = null;
       let providerAccountsChangedHandler = null;
       let providerChainChangedHandler = null;
       let providerDisconnectHandler = null;
 
       function normalizeWalletAddress(addr) {
-        return String(addr || '').trim().toLowerCase();
+        const raw = String(addr || '').trim().toLowerCase();
+        if (raw.startsWith('ronin:')) {
+          return `0x${raw.slice(6)}`;
+        }
+        return raw;
+      }
+
+      function normalizeWalletAddressForApi(addr) {
+        const raw = String(addr || '').trim();
+        if (!raw) return '';
+        if (raw.toLowerCase().startsWith('ronin:')) {
+          return `0x${raw.slice(6)}`;
+        }
+        return raw;
       }
 
       function isHexWalletAddress(value) {
@@ -2594,12 +2643,23 @@ tr:nth-child(odd) td {
         const connectionType = String(localStorage.getItem(CONNECTION_TYPE_KEY) || '').trim().toLowerCase();
         const provider = activeWalletProvider;
 
-        if (provider && connectionType === 'walletconnect') {
+        if (provider) {
           try {
-            if (typeof provider.disconnect === 'function') {
-              await provider.disconnect();
-            } else if (typeof provider.close === 'function') {
-              await provider.close();
+            if (connectionType === 'walletconnect') {
+              if (typeof provider.disconnect === 'function') {
+                await provider.disconnect();
+              } else if (typeof provider.close === 'function') {
+                await provider.close();
+              }
+            } else if (typeof provider.request === 'function') {
+              try {
+                await provider.request({
+                  method: 'wallet_revokePermissions',
+                  params: [{ eth_accounts: {} }],
+                });
+              } catch (_) {
+                // Not all injected wallets support revoke permissions.
+              }
             }
           } catch (_) {
             // Ignore provider-level disconnect failures and continue local cleanup.
@@ -2932,6 +2992,7 @@ tr:nth-child(odd) td {
       }
 
       function handleWalletSessionInvalidation(message) {
+        authRequestSeq += 1;
         stopStatusPolling();
         detachWalletProviderListeners();
         clearSession();
@@ -2982,6 +3043,7 @@ tr:nth-child(odd) td {
       }
 
       async function refreshAccountStatusOnce() {
+        const currentSeq = ++authRequestSeq;
         const session = getSession();
         const expired = isSessionExpired(session);
 
@@ -3017,6 +3079,9 @@ tr:nth-child(odd) td {
         try {
           const res = await authFetch('/api/account_status');
           const data = await res.json();
+          if (currentSeq !== authRequestSeq) {
+            return;
+          }
           if (!data.ok || data.auth !== 'ok') {
             setAuthStatus('error', session.wallet);
             currentPower = null;
@@ -3151,9 +3216,14 @@ tr:nth-child(odd) td {
 
         statusEl.textContent = `Connecting via ${getProviderDisplayName(connectionType)}...`;
         const accounts = await provider.request({ method: 'eth_requestAccounts' });
-        const walletAddress = (accounts && accounts[0]) ? String(accounts[0]).toLowerCase() : '';
-        if (!walletAddress) {
+        const providerWalletAddress = (accounts && accounts[0]) ? String(accounts[0]).trim() : '';
+        const apiWalletAddress = normalizeWalletAddressForApi(providerWalletAddress);
+        const walletAddress = normalizeWalletAddress(apiWalletAddress);
+        if (!apiWalletAddress) {
           throw new Error('No wallet address returned by provider.');
+        }
+        if (!isHexWalletAddress(apiWalletAddress)) {
+          throw new Error('Wallet returned an invalid address format.');
         }
 
         await ensureRoninChain(provider);
@@ -3161,7 +3231,7 @@ tr:nth-child(odd) td {
         const nonceRes = await fetch('/api/cw/get_nonce', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress }),
+          body: JSON.stringify({ walletAddress: apiWalletAddress }),
         });
         const nonceData = await nonceRes.json();
         if (!nonceData.ok || !nonceData.nonce) {
@@ -3171,7 +3241,7 @@ tr:nth-child(odd) td {
         statusEl.textContent = 'Please sign nonce in wallet...';
         const signature = await provider.request({
           method: 'personal_sign',
-          params: [nonceData.nonce, walletAddress],
+          params: [nonceData.nonce, providerWalletAddress || walletAddress],
         });
         if (!signature) {
           throw new Error('Wallet signature was not returned.');
@@ -3181,7 +3251,7 @@ tr:nth-child(odd) td {
         const customRes = await fetch('/api/cw/login_for_custom_token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress, signature }),
+          body: JSON.stringify({ walletAddress: apiWalletAddress, signature }),
         });
         const customData = await customRes.json();
         if (!customData.ok || !customData.customToken) {
@@ -3227,6 +3297,7 @@ tr:nth-child(odd) td {
           uid: String(signinData.uid || '').trim(),
         });
         syncLegacySessionFromActiveWallet();
+        localStorage.removeItem(CW_MANUAL_DISCONNECT_KEY);
 
         await syncBoostsOnSignin(walletAddress);
 
@@ -3370,10 +3441,12 @@ tr:nth-child(odd) td {
 
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
+            authRequestSeq += 1;
             stopStatusPolling();
             await disconnectActiveWalletProvider();
             detachWalletProviderListeners();
             clearSession();
+            localStorage.setItem(CW_MANUAL_DISCONNECT_KEY, '1');
             if (countdownInterval) {
               clearInterval(countdownInterval);
               countdownInterval = null;
@@ -3388,9 +3461,15 @@ tr:nth-child(odd) td {
         }
 
         const restoreSessionForConnectedWallet = async () => {
+          const manuallyDisconnected = localStorage.getItem(CW_MANUAL_DISCONNECT_KEY) === '1';
+          if (manuallyDisconnected) {
+            syncLegacySessionFromActiveWallet();
+            return;
+          }
           try {
             const connectedWallet = await detectConnectedWalletAddress();
-            if (connectedWallet) {
+            const existingSession = getSession();
+            if (connectedWallet && existingSession.cwToken) {
               setActiveWallet(connectedWallet);
             }
           } catch (_) {
@@ -5094,8 +5173,9 @@ def resource_view(token: str):
 @app.route("/api/cw/get_nonce", methods=["POST"])
 def api_cw_get_nonce():
     payload = request.get_json(silent=True) or {}
-    wallet_address = (payload.get("walletAddress") or "").strip()
-    if not wallet_address:
+    wallet_address = _normalize_wallet_address_for_cw(payload.get("walletAddress"))
+    wallet_candidates = _candidate_wallet_addresses_for_cw(payload.get("walletAddress"))
+    if not wallet_candidates:
         return jsonify({"ok": False, "error": "walletAddress is required."}), 400
 
     query = """
@@ -5104,23 +5184,36 @@ def api_cw_get_nonce():
     }
     """
 
-    try:
-        upstream = _cw_graphql_request(query=query, variables={"walletAddress": wallet_address})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": f"Failed to fetch nonce: {exc}", "rawErrors": []}), 502
+    raw_errors: List[Any] = []
+    nonce = None
+    last_exception: Optional[Exception] = None
+    for candidate in wallet_candidates:
+        try:
+            upstream = _cw_graphql_request(query=query, variables={"walletAddress": candidate})
+        except Exception as exc:
+            last_exception = exc
+            continue
+        body = upstream.get("body") if isinstance(upstream, dict) else {}
+        candidate_errors = body.get("errors") if isinstance(body, dict) else None
+        nonce_payload = ((body.get("data") or {}).get("getNonce") if isinstance(body, dict) else None)
+        if isinstance(nonce_payload, dict):
+            nonce = nonce_payload.get("nonce")
+        else:
+            nonce = nonce_payload
+        if upstream.get("ok") and (not candidate_errors) and nonce:
+            wallet_address = candidate
+            break
+        if candidate_errors:
+            raw_errors.extend(candidate_errors)
 
-    body = upstream.get("body") if isinstance(upstream, dict) else {}
-    raw_errors = body.get("errors") if isinstance(body, dict) else None
-    nonce_payload = ((body.get("data") or {}).get("getNonce") if isinstance(body, dict) else None)
-    if isinstance(nonce_payload, dict):
-        nonce = nonce_payload.get("nonce")
-    else:
-        nonce = nonce_payload
-    if (not upstream.get("ok")) or raw_errors or (not nonce):
+    if last_exception is not None and not nonce:
+        return jsonify({"ok": False, "error": f"Failed to fetch nonce: {last_exception}", "rawErrors": raw_errors}), 502
+
+    if not nonce:
         return jsonify({
             "ok": False,
             "error": "Failed to fetch nonce.",
-            "rawErrors": raw_errors or [],
+            "rawErrors": raw_errors,
         }), 400
 
     return jsonify({"ok": True, "walletAddress": wallet_address, "nonce": nonce})
@@ -5129,9 +5222,10 @@ def api_cw_get_nonce():
 @app.route("/api/cw/login_for_custom_token", methods=["POST"])
 def api_cw_login_for_custom_token():
     payload = request.get_json(silent=True) or {}
-    wallet_address = (payload.get("walletAddress") or "").strip()
+    wallet_address = _normalize_wallet_address_for_cw(payload.get("walletAddress"))
+    wallet_candidates = _candidate_wallet_addresses_for_cw(payload.get("walletAddress"))
     signature = (payload.get("signature") or "").strip()
-    if not wallet_address or not signature:
+    if not wallet_candidates or not signature:
         return jsonify({"ok": False, "error": "walletAddress and signature are required."}), 400
 
     mutation = """
@@ -5142,26 +5236,40 @@ def api_cw_login_for_custom_token():
     }
     """
 
-    try:
-        upstream = _cw_graphql_request(
-            query=mutation,
-            variables={"signature": signature, "walletAddress": wallet_address},
-        )
-    except Exception as exc:
-        return jsonify({"ok": False, "error": f"Failed to log in: {exc}", "rawErrors": []}), 502
+    raw_errors: List[Any] = []
+    custom_token = None
+    last_exception: Optional[Exception] = None
+    for candidate in wallet_candidates:
+        try:
+            upstream = _cw_graphql_request(
+                query=mutation,
+                variables={"signature": signature, "walletAddress": candidate},
+            )
+        except Exception as exc:
+            last_exception = exc
+            continue
 
-    body = upstream.get("body") if isinstance(upstream, dict) else {}
-    raw_errors = body.get("errors") if isinstance(body, dict) else None
-    token_payload = ((body.get("data") or {}).get("loginForCustomToken") if isinstance(body, dict) else None)
-    if isinstance(token_payload, dict):
-        custom_token = token_payload.get("customToken")
-    else:
-        custom_token = token_payload
-    if (not upstream.get("ok")) or raw_errors or (not custom_token):
+        body = upstream.get("body") if isinstance(upstream, dict) else {}
+        candidate_errors = body.get("errors") if isinstance(body, dict) else None
+        token_payload = ((body.get("data") or {}).get("loginForCustomToken") if isinstance(body, dict) else None)
+        if isinstance(token_payload, dict):
+            custom_token = token_payload.get("customToken")
+        else:
+            custom_token = token_payload
+        if upstream.get("ok") and (not candidate_errors) and custom_token:
+            wallet_address = candidate
+            break
+        if candidate_errors:
+            raw_errors.extend(candidate_errors)
+
+    if last_exception is not None and not custom_token:
+        return jsonify({"ok": False, "error": f"Failed to log in: {last_exception}", "rawErrors": raw_errors}), 502
+
+    if not custom_token:
         return jsonify({
             "ok": False,
             "error": "Failed to exchange signature.",
-            "rawErrors": raw_errors or [],
+            "rawErrors": raw_errors,
         }), 400
 
     return jsonify({"ok": True, "walletAddress": wallet_address, "customToken": custom_token})
@@ -12451,12 +12559,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
-
-
-
 
 
 
