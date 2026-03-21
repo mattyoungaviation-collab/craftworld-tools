@@ -5321,24 +5321,27 @@ def api_cw_signin_with_custom_token():
         }), 400
 
     id_token = body.get("idToken")
-    uid = None
+    uid = str(body.get("localId") or "").strip() or None
+    identity_lookup_errors: List[Any] = []
     if id_token:
         try:
             identity_result = _fetch_account_identity_payload(id_token)
             if not identity_result.get("ok"):
-                return jsonify({
-                    "ok": False,
-                    "error": "Craft World returned an error.",
-                    "rawErrors": identity_result.get("errors") or [],
-                }), 502
+                identity_lookup_errors = identity_result.get("errors") or []
             uid_body = identity_result.get("body") or {}
             account_payload = ((uid_body.get("data") or {}).get("account") or {})
-            uid = _extract_uid_from_identity_payload(account_payload)
+            resolved_uid = _extract_uid_from_identity_payload(account_payload)
+            if resolved_uid:
+                uid = resolved_uid
         except Exception as exc:
-            return jsonify({"ok": False, "error": f"Failed to resolve account UID: {exc}"}), 502
+            identity_lookup_errors = [{"message": f"Failed to resolve account UID: {exc}"}]
 
     if not uid:
-        return jsonify({"ok": False, "error": "Craft World custom_jwt UID not found."}), 404
+        return jsonify({
+            "ok": False,
+            "error": "Craft World custom_jwt UID not found.",
+            "rawErrors": identity_lookup_errors,
+        }), 404
 
     return jsonify({
         "ok": True,
@@ -5346,6 +5349,8 @@ def api_cw_signin_with_custom_token():
         "refreshToken": body.get("refreshToken"),
         "expiresIn": int(body.get("expiresIn") or 0),
         "uid": uid,
+        "uidSource": "craft_world" if uid and not str(body.get("localId") or "").strip() == uid else "firebase_local_id",
+        "warnings": identity_lookup_errors,
     })
 
 
@@ -12579,7 +12584,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
