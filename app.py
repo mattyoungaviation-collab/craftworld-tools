@@ -3234,7 +3234,7 @@ tr:nth-child(odd) td {
         statusEl.textContent = `Connected: ${shortWallet(walletAddress)}`;
       }
 
-      window.addEventListener('DOMContentLoaded', () => {
+      window.addEventListener('DOMContentLoaded', async () => {
         const modal = document.getElementById('cw-token-modal');
         const connectBtn = document.getElementById('cw-connect-btn');
         const statusEl = document.getElementById('cw-wallet-status');
