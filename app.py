@@ -66,7 +66,7 @@ def _resolve_db_path() -> str:
 
 DB_PATH = _resolve_db_path()
 CW_GRAPHQL_URL = "https://craft-world.gg/graphql"
-CW_APP_VERSION = "1.6.6"
+CW_APP_VERSION = "1.7.3"
 CW_FIREBASE_API_KEY = "AIzaSyDgDDykbRrhbdfWUpm1BUgj4ga7d_-wy_g"
 CW_IDENTITY_SIGNIN_URL = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={CW_FIREBASE_API_KEY}"
 
@@ -2416,6 +2416,7 @@ tr:nth-child(odd) td {
       let authStatus = 'disconnected';
       let statusPollInterval = null;
       let authRequestSeq = 0;
+      let connectRequestSeq = 0;
       let activeWalletProvider = null;
       let providerAccountsChangedHandler = null;
       let providerChainChangedHandler = null;
@@ -3199,6 +3200,12 @@ tr:nth-child(odd) td {
       }
 
       async function connectWalletAndSignin(options) {
+        const runSeq = Number((options && options.connectSeq) || 0);
+        const ensureConnectActive = () => {
+          if (runSeq && runSeq !== connectRequestSeq) {
+            throw new Error('Connection cancelled.');
+          }
+        };
         const statusEl = document.getElementById('cw-wallet-status');
         const help = document.getElementById('cw-token-help');
         const connectionType = (options && options.connectionType) || 'injected';
@@ -3214,8 +3221,10 @@ tr:nth-child(odd) td {
           }
         }
 
+        ensureConnectActive();
         statusEl.textContent = `Connecting via ${getProviderDisplayName(connectionType)}...`;
         const accounts = await provider.request({ method: 'eth_requestAccounts' });
+        ensureConnectActive();
         const providerWalletAddress = (accounts && accounts[0]) ? String(accounts[0]).trim() : '';
         const apiWalletAddress = normalizeWalletAddressForApi(providerWalletAddress);
         const walletAddress = normalizeWalletAddress(apiWalletAddress);
@@ -3227,6 +3236,7 @@ tr:nth-child(odd) td {
         }
 
         await ensureRoninChain(provider);
+        ensureConnectActive();
         statusEl.textContent = `Connected ${shortWallet(walletAddress)}. Requesting nonce...`;
         const nonceRes = await fetch('/api/cw/get_nonce', {
           method: 'POST',
@@ -3234,6 +3244,7 @@ tr:nth-child(odd) td {
           body: JSON.stringify({ walletAddress: apiWalletAddress }),
         });
         const nonceData = await nonceRes.json();
+        ensureConnectActive();
         if (!nonceData.ok || !nonceData.nonce) {
           throw new Error(nonceData.error || 'Failed to get nonce.');
         }
@@ -3243,6 +3254,7 @@ tr:nth-child(odd) td {
           method: 'personal_sign',
           params: [nonceData.nonce, providerWalletAddress || walletAddress],
         });
+        ensureConnectActive();
         if (!signature) {
           throw new Error('Wallet signature was not returned.');
         }
@@ -3254,6 +3266,7 @@ tr:nth-child(odd) td {
           body: JSON.stringify({ walletAddress: apiWalletAddress, signature }),
         });
         const customData = await customRes.json();
+        ensureConnectActive();
         if (!customData.ok || !customData.customToken) {
           throw new Error(customData.error || 'Failed to exchange signature for custom token.');
         }
@@ -3265,10 +3278,12 @@ tr:nth-child(odd) td {
           body: JSON.stringify({ customToken: customData.customToken }),
         });
         const signinData = await signinRes.json();
+        ensureConnectActive();
         if (!signinData.ok || !signinData.idToken) {
           throw new Error(signinData.error || 'Failed Firebase sign-in.');
         }
 
+        ensureConnectActive();
         const expiresIn = Number(signinData.expiresIn || 0);
         const expiresAt = Date.now() + (Math.max(0, expiresIn) * 1000);
         upsertWalletSession(walletAddress, {
@@ -3398,11 +3413,15 @@ tr:nth-child(odd) td {
             help.textContent = '';
             setAuthStatus('connecting', getSession().wallet);
             stopStatusPolling();
-            await connectWalletAndSignin({ connectionType });
+            const connectSeq = ++connectRequestSeq;
+            await connectWalletAndSignin({ connectionType, connectSeq });
             await startStatusPolling();
             await autoPopulateOverviewFromWallet({ force: true });
           } catch (err) {
             const message = String(err && err.message ? err.message : err);
+            if (message === 'Connection cancelled.') {
+              return;
+            }
             help.textContent = message;
             showBanner(message);
             if (connectionType === 'walletconnect') {
@@ -3442,6 +3461,7 @@ tr:nth-child(odd) td {
         if (clearBtn) {
           clearBtn.addEventListener('click', async () => {
             authRequestSeq += 1;
+            connectRequestSeq += 1;
             stopStatusPolling();
             await disconnectActiveWalletProvider();
             detachWalletProviderListeners();
