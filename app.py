@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
 
+import base64
 import hashlib
 import json
 import math
@@ -118,6 +119,10 @@ def _extract_uid_from_identity_payload(identity_payload: Any) -> Optional[str]:
     if not isinstance(identity_payload, dict):
         return None
 
+    direct_uid_value = str(identity_payload.get("uid") or identity_payload.get("id") or "").strip()
+    if direct_uid_value:
+        return direct_uid_value
+
     # Schema variant A: account.linkedAccounts
     direct_uid = _extract_uid_from_account_payload(identity_payload)
     if direct_uid:
@@ -126,10 +131,38 @@ def _extract_uid_from_identity_payload(identity_payload: Any) -> Optional[str]:
     # Schema variant B: account.tradeAccount.linkedAccounts
     trade_account = identity_payload.get("tradeAccount")
     if isinstance(trade_account, dict):
+        trade_uid_value = str(trade_account.get("uid") or trade_account.get("id") or "").strip()
+        if trade_uid_value:
+            return trade_uid_value
         trade_uid = _extract_uid_from_account_payload(trade_account)
         if trade_uid:
             return trade_uid
 
+    return None
+
+
+def _extract_uid_from_jwt_payload(jwt_token: Optional[str]) -> Optional[str]:
+    raw = str(jwt_token or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("jwt_"):
+        raw = raw[4:]
+    parts = raw.split(".")
+    if len(parts) < 2:
+        return None
+
+    payload_b64 = parts[1]
+    padding = "=" * (-len(payload_b64) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(payload_b64 + padding)
+        payload = json.loads(decoded.decode("utf-8"))
+    except Exception:
+        return None
+
+    for key in ("uid", "user_id", "sub"):
+        candidate = str(payload.get(key) or "").strip()
+        if candidate:
+            return candidate
     return None
 
 def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
@@ -227,40 +260,31 @@ def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, 
 
 def _fetch_account_identity_payload(bearer_token: str) -> Dict[str, Any]:
     queries = [
-        # Variant A: linkedAccounts is directly on Account.
+        # Variant A: minimal account identity.
         """
         query AccountIdentity {
           account {
+            uid
             id
             linkedAccounts {
               type
               details
             }
-            wallets {
-              address
-              type
-            }
           }
         }
         """,
-        # Variant B: linkedAccounts hangs off tradeAccount.
+        # Variant B: linkedAccounts hangs off tradeAccount (if available in this schema).
         """
         query AccountIdentity {
           account {
+            uid
             id
-            wallets {
-              address
-              type
-            }
             tradeAccount {
+              uid
               id
               linkedAccounts {
                 type
                 details
-              }
-              wallets {
-                address
-                type
               }
             }
           }
@@ -5335,6 +5359,8 @@ def api_cw_signin_with_custom_token():
                 uid = resolved_uid
         except Exception as exc:
             identity_lookup_errors = [{"message": f"Failed to resolve account UID: {exc}"}]
+        if not uid:
+            uid = _extract_uid_from_jwt_payload(id_token)
 
     if not uid:
         return jsonify({
@@ -12584,8 +12610,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
 
 
 
