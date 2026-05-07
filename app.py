@@ -2331,6 +2331,7 @@ tr:nth-child(odd) td {
         <a href="{{ url_for('masterpieces_view') }}" class="{{ 'active' if active_page=='masterpieces' else '' }}">Masterpieces</a>
         <a href="{{ url_for('snipe') }}" class="{{ 'active' if active_page=='snipe' else '' }}">Snipe</a>
         <a href="{{ url_for('calculate') }}" class="{{ 'active' if active_page=='calculate' else '' }}">Calculate</a>
+        <a href="{{ url_for('factory_converter') }}" class="{{ 'active' if active_page=='factory_converter' else '' }}">Factory Converter</a>
         <a href="{{ url_for('upgrade_calculate') }}" class="{{ 'active' if active_page=='upgrade_calculate' else '' }}">Upgrade Calculate</a>
         <a href="{{ url_for('charts') }}" class="{{ 'active' if active_page=='charts' else '' }}">Charts</a>
 
@@ -11868,6 +11869,246 @@ def calculate():
     return html
 
 
+@app.route("/factory-converter", methods=["GET", "POST"])
+def factory_converter():
+    error: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+
+    factories = FACTORIES_FROM_CSV or {}
+    all_tokens = list(factories.keys())
+    tokens: List[str] = [t for t in FACTORY_DISPLAY_ORDER if t in factories]
+    for tok in sorted(all_tokens):
+        if tok not in tokens:
+            tokens.append(tok)
+
+    selected_token = tokens[0] if tokens else ""
+    selected_level: Optional[int] = None
+    mode = "input_to_output"
+    quantity_value = 1.0
+    selected_input_token = ""
+
+    if request.method == "POST":
+        selected_token = (request.form.get("factory") or selected_token).strip().upper()
+        mode = (request.form.get("mode") or "input_to_output").strip()
+        quantity_raw = (request.form.get("quantity") or "1").strip() or "1"
+        level_str = (request.form.get("level") or "").strip()
+        selected_input_token = (request.form.get("input_token") or "").strip().upper()
+
+        try:
+            quantity_value = float(quantity_raw)
+        except Exception:
+            quantity_value = 1.0
+        quantity_value = max(0.0, quantity_value)
+
+        try:
+            if level_str:
+                selected_level = int(level_str)
+        except Exception:
+            selected_level = None
+
+        try:
+            levels = sorted((factories.get(selected_token) or {}).keys())
+            if not levels:
+                raise RuntimeError(f"No recipe levels found for {selected_token}.")
+            if selected_level is None:
+                selected_level = levels[-1]
+
+            recipe = (factories.get(selected_token) or {}).get(selected_level) or {}
+            inputs: Dict[str, float] = dict(recipe.get("inputs") or {})
+            if not inputs:
+                raise RuntimeError("This factory has no input recipe in CSV data.")
+
+            if selected_input_token not in inputs:
+                selected_input_token = sorted(inputs.keys())[0]
+
+            output_token = str(recipe.get("output_token") or selected_token).upper()
+            output_amount = float(recipe.get("output_amount") or 0.0)
+            input_amount = float(inputs.get(selected_input_token) or 0.0)
+            if output_amount <= 0 or input_amount <= 0:
+                raise RuntimeError("Invalid recipe amounts in CSV for selected factory/level.")
+
+            ratio_out_per_in = output_amount / input_amount
+
+            if mode == "output_to_input":
+                output_qty = quantity_value
+                input_qty = output_qty / ratio_out_per_in
+            else:
+                input_qty = quantity_value
+                output_qty = input_qty * ratio_out_per_in
+
+            prices = fetch_live_prices_in_coin() or {}
+            in_price = float(prices.get(selected_input_token, 0.0) or 0.0)
+            out_price = float(prices.get(output_token, 0.0) or 0.0)
+
+            input_value_coin = input_qty * in_price
+            output_value_coin = output_qty * out_price
+            pnl_coin = output_value_coin - input_value_coin
+
+            result = {
+                "token": selected_token,
+                "level": selected_level,
+                "input_token": selected_input_token,
+                "output_token": output_token,
+                "input_qty": input_qty,
+                "output_qty": output_qty,
+                "ratio_out_per_in": ratio_out_per_in,
+                "input_value_coin": input_value_coin,
+                "output_value_coin": output_value_coin,
+                "pnl_coin": pnl_coin,
+                "input_price": in_price,
+                "output_price": out_price,
+            }
+        except Exception as e:
+            error = f"Error: {e}"
+
+    levels_for_selected = (
+        sorted(factories.get(selected_token, {}).keys())
+        if selected_token in factories else []
+    )
+    if selected_level is None and levels_for_selected:
+        selected_level = levels_for_selected[-1]
+
+    recipe_for_selection = ((factories.get(selected_token) or {}).get(selected_level or -1) or {})
+    input_options = sorted((recipe_for_selection.get("inputs") or {}).keys())
+    if input_options and selected_input_token not in input_options:
+        selected_input_token = input_options[0]
+
+    factory_levels_json = json.dumps({tok: sorted(levels.keys()) for tok, levels in factories.items()})
+    factory_inputs_json = json.dumps({
+        tok: {str(lvl): sorted((data.get("inputs") or {}).keys()) for lvl, data in levels.items()}
+        for tok, levels in factories.items()
+    })
+
+    content = render_template_string("""
+    <div class="card">
+      <h1>Factory Input/Output Converter + PnL</h1>
+      <p class="subtle">Select a factory/level and convert either direction: input → output or output → required input. PnL is based on live COIN prices.</p>
+
+      <form method="post">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;">
+          <div style="flex:1;min-width:170px;">
+            <label>Factory</label>
+            <select id="factory" name="factory" style="width:100%;">
+              {% for tok in tokens %}<option value="{{ tok }}" {% if tok == selected_token %}selected{% endif %}>{{ tok }}</option>{% endfor %}
+            </select>
+          </div>
+          <div style="flex:1;min-width:120px;">
+            <label>Level</label>
+            <select id="level" name="level" style="width:100%;">
+              {% for lvl in levels_for_selected %}<option value="{{ lvl }}" {% if lvl == selected_level %}selected{% endif %}>L{{ lvl }}</option>{% endfor %}
+            </select>
+          </div>
+          <div style="flex:1;min-width:170px;">
+            <label>Input token</label>
+            <select id="input_token" name="input_token" style="width:100%;">
+              {% for tok in input_options %}<option value="{{ tok }}" {% if tok == selected_input_token %}selected{% endif %}>{{ tok }}</option>{% endfor %}
+            </select>
+          </div>
+          <div style="flex:1;min-width:190px;">
+            <label>Conversion mode</label>
+            <select name="mode" style="width:100%;">
+              <option value="input_to_output" {% if mode=='input_to_output' %}selected{% endif %}>Input → Output</option>
+              <option value="output_to_input" {% if mode=='output_to_input' %}selected{% endif %}>Output → Required Input</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:160px;">
+            <label>Quantity</label>
+            <input name="quantity" type="number" step="0.000001" min="0" value="{{ quantity_value }}" style="width:100%;">
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <button type="submit">Convert</button>
+        </div>
+      </form>
+
+      {% if error %}<div class="error" style="margin-top:10px;">{{ error }}</div>{% endif %}
+
+      {% if result %}
+      <div class="card" style="margin-top:12px;">
+        <h2>{{ result.token }} L{{ result.level }}</h2>
+        <p class="subtle">
+          Ratio: <strong>{{ "%.6f"|format(result.ratio_out_per_in) }}</strong> {{ result.output_token }} per 1 {{ result.input_token }}.
+        </p>
+        <p class="subtle">
+          <strong>Input:</strong> {{ "%.6f"|format(result.input_qty) }} {{ result.input_token }}<br>
+          <strong>Output:</strong> {{ "%.6f"|format(result.output_qty) }} {{ result.output_token }}
+        </p>
+        <p class="subtle">
+          <strong>Input value:</strong> {{ "%.6f"|format(result.input_value_coin) }} COIN ({{ "%.6f"|format(result.input_price) }} each)<br>
+          <strong>Output value:</strong> {{ "%.6f"|format(result.output_value_coin) }} COIN ({{ "%.6f"|format(result.output_price) }} each)<br>
+          <strong>PnL:</strong>
+          <span class="{{ 'pill' if result.pnl_coin >= 0 else 'pill-bad' }}">{{ "%+.6f"|format(result.pnl_coin) }} COIN</span>
+        </p>
+      </div>
+      {% endif %}
+
+      <script>
+        (function() {
+          const factoryLevels = {{ factory_levels_json | safe }};
+          const factoryInputs = {{ factory_inputs_json | safe }};
+          const factorySel = document.getElementById("factory");
+          const levelSel = document.getElementById("level");
+          const inputSel = document.getElementById("input_token");
+
+          function rebuildLevelsAndInputs() {
+            const tok = factorySel.value;
+            const oldLevel = levelSel.value;
+            const levels = factoryLevels[tok] || [];
+            levelSel.innerHTML = "";
+            levels.forEach((lvl) => {
+              const o = document.createElement("option");
+              o.value = String(lvl);
+              o.textContent = "L" + lvl;
+              if (String(lvl) === oldLevel) o.selected = true;
+              levelSel.appendChild(o);
+            });
+            if (!levelSel.value && levels.length) levelSel.value = String(levels[levels.length - 1]);
+            rebuildInputs();
+          }
+          function rebuildInputs() {
+            const tok = factorySel.value;
+            const lvl = levelSel.value;
+            const oldInput = inputSel.value;
+            const inputs = ((factoryInputs[tok] || {})[String(lvl)] || []);
+            inputSel.innerHTML = "";
+            inputs.forEach((inp) => {
+              const o = document.createElement("option");
+              o.value = inp;
+              o.textContent = inp;
+              if (inp === oldInput) o.selected = true;
+              inputSel.appendChild(o);
+            });
+          }
+          if (factorySel && levelSel && inputSel) {
+            factorySel.addEventListener("change", rebuildLevelsAndInputs);
+            levelSel.addEventListener("change", rebuildInputs);
+          }
+        })();
+      </script>
+    </div>
+    """,
+    tokens=tokens,
+    selected_token=selected_token,
+    levels_for_selected=levels_for_selected,
+    selected_level=selected_level,
+    input_options=input_options,
+    selected_input_token=selected_input_token,
+    mode=mode,
+    quantity_value=quantity_value,
+    result=result,
+    error=error,
+    factory_levels_json=factory_levels_json,
+    factory_inputs_json=factory_inputs_json)
+
+    html = render_template_string(
+        BASE_TEMPLATE,
+        content=content,
+        active_page="factory_converter",
+        has_uid=has_uid_flag(),
+    )
+    return html
+
+
 @app.route("/upgrade-calculate", methods=["GET", "POST"])
 def upgrade_calculate():
     error: Optional[str] = None
@@ -12610,7 +12851,6 @@ def trees():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
 
 
 
