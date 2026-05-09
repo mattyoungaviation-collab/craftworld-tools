@@ -11,14 +11,34 @@ registering duplicate /login, /register, and /logout URLs.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from flask import redirect, render_template, request, session, url_for
+from jinja2 import ChoiceLoader, FileSystemLoader
 
 from craftworld_tools.services.users import authenticate_user, create_user
 
 
 HasUidFlag = Callable[[], bool]
+
+
+def _ensure_package_template_loader(app: Any) -> None:
+    """Let a legacy root Flask app find templates in craftworld_tools/templates."""
+    package_templates = Path(__file__).resolve().parents[1] / "templates"
+    package_loader = FileSystemLoader(str(package_templates))
+    current_loader = app.jinja_loader
+
+    if isinstance(current_loader, ChoiceLoader):
+        loaders = list(current_loader.loaders)
+        for loader in loaders:
+            if isinstance(loader, FileSystemLoader) and str(package_templates) in loader.searchpath:
+                return
+        app.jinja_loader = ChoiceLoader([package_loader, *loaders])
+    elif current_loader is not None:
+        app.jinja_loader = ChoiceLoader([package_loader, current_loader])
+    else:
+        app.jinja_loader = package_loader
 
 
 def _login_user(user: dict[str, Any]) -> None:
@@ -28,6 +48,7 @@ def _login_user(user: dict[str, Any]) -> None:
 
 def register_auth_routes(app: Any, has_uid_flag: HasUidFlag) -> None:
     """Register login/register/logout routes on the provided Flask app."""
+    _ensure_package_template_loader(app)
 
     @app.route("/register", methods=["GET", "POST"])
     def register():
