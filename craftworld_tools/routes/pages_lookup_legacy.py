@@ -4,7 +4,28 @@ from __future__ import annotations
 
 from typing import Any
 
-from craftworld_tools.routes.pages_lookup import inventory_view, mastery_view, player_view, resource_view
+import craftworld_tools.routes.pages_lookup as pages_lookup
+from craftworld_tools.routes.legacy_globals import inject_app_globals
+
+
+def inventory_view():
+    inject_app_globals(pages_lookup)
+    return pages_lookup.inventory_view()
+
+
+def mastery_view():
+    inject_app_globals(pages_lookup)
+    return pages_lookup.mastery_view()
+
+
+def resource_view(token: str):
+    inject_app_globals(pages_lookup)
+    return pages_lookup.resource_view(token)
+
+
+def player_view(uid: str):
+    inject_app_globals(pages_lookup)
+    return pages_lookup.player_view(uid)
 
 
 def register_lookup_page_legacy_routes(app: Any) -> None:
