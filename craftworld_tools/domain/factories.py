@@ -1,6 +1,7 @@
-"""Factory calculation compatibility layer."""
+"""Factory calculation public interface."""
 
-from factories import (  # noqa: F401
+from .factories_core import (  # noqa: F401
+    CSV_FILE,
     FACTORIES_FROM_CSV,
     FACTORY_DISPLAY_INDEX,
     FACTORY_DISPLAY_ORDER,
