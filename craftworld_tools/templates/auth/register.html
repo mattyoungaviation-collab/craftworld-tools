@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card auth-card">
+  <h1>Create Account</h1>
+  <p class="muted">Create a login so your Mastery and Workshop boosts are saved to your account.</p>
+
+  <form method="post">
+    <label>Username</label>
+    <input name="username" autocomplete="username" required>
+    <p class="muted small">This is just for this site. It does not need to match your in-game name.</p>
+
+    <label>Password</label>
+    <input name="password" type="password" autocomplete="new-password" required>
+
+    <label>Confirm password</label>
+    <input name="confirm" type="password" autocomplete="new-password" required>
+
+    <button type="submit">Create account</button>
+  </form>
+
+  <p>Already have an account? <a href="{{ url_for('login') }}">Log in</a>.</p>
+
+  {% if error %}
+  <div class="error">{{ error }}</div>
+  {% endif %}
+</section>
+{% endblock %}
