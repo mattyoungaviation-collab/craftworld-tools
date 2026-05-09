@@ -15,6 +15,7 @@ It writes `app.py.account_data.bak` before changing the file.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -25,11 +26,11 @@ BACKUP = ROOT / "app.py.account_data.bak"
 IMPORT_LINE = "from craftworld_tools.routes.api_account_data_legacy import register_account_data_legacy_routes\n"
 REGISTER_LINE = "\n# Extracted account data API route registration\nregister_account_data_legacy_routes(app)\n"
 
-DECORATORS = [
-    '@app.route("/api/account_uid")',
-    '@app.route("/api/account_proficiencies")',
-    '@app.route("/api/account_workshop")',
-]
+TARGET_ROUTES = {
+    "/api/account_uid": "api_account_uid",
+    "/api/account_proficiencies": "api_account_proficiencies",
+    "/api/account_workshop": "api_account_workshop",
+}
 
 
 def add_import(text: str) -> str:
@@ -52,13 +53,54 @@ def add_import(text: str) -> str:
     return text[: line_end + 1] + IMPORT_LINE + text[line_end + 1 :]
 
 
-def remove_decorators(text: str) -> str:
-    for decorator in DECORATORS:
-        pattern = re.escape(decorator) + r"\s*\n"
-        text, count = re.subn(pattern, "", text, count=1)
-        if count != 1:
-            raise RuntimeError(f"Could not remove decorator: {decorator}")
-    return text
+def _route_path_from_decorator(decorator: ast.AST) -> str | None:
+    if not isinstance(decorator, ast.Call):
+        return None
+    func = decorator.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    if func.attr != "route":
+        return None
+    if not isinstance(func.value, ast.Name) or func.value.id != "app":
+        return None
+    if not decorator.args:
+        return None
+    first_arg = decorator.args[0]
+    if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+        return first_arg.value
+    return None
+
+
+def remove_route_decorators(text: str) -> str:
+    tree = ast.parse(text)
+    lines = text.splitlines(keepends=True)
+
+    decorators_to_remove: list[int] = []
+    found_routes: set[str] = set()
+
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for dec in node.decorator_list:
+            route_path = _route_path_from_decorator(dec)
+            if route_path in TARGET_ROUTES:
+                expected_name = TARGET_ROUTES[route_path]
+                if node.name != expected_name:
+                    raise RuntimeError(
+                        f"Route {route_path} was found on function {node.name}, expected {expected_name}."
+                    )
+                decorators_to_remove.append(dec.lineno)
+                found_routes.add(route_path)
+
+    missing = set(TARGET_ROUTES) - found_routes
+    if missing:
+        raise RuntimeError(f"Could not find route decorators for: {sorted(missing)}")
+
+    # Remove from bottom to top so line indexes remain stable.
+    for line_number in sorted(decorators_to_remove, reverse=True):
+        del lines[line_number - 1]
+
+    return "".join(lines)
 
 
 def add_registration(text: str) -> str:
@@ -86,7 +128,7 @@ def main() -> None:
     original = text
 
     text = add_import(text)
-    text = remove_decorators(text)
+    text = remove_route_decorators(text)
     text = add_registration(text)
 
     if text == original:
