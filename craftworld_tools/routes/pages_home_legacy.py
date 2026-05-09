@@ -1,18 +1,13 @@
-"""Home page route wrapper.
-
-Transition module for the existing root page. During this phase, app.py keeps
-the legacy function body, but this module owns the Flask route registration.
-"""
+"""Home page route wrapper."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from craftworld_tools.routes.pages_home import index
+
 
 def register_home_page_legacy_routes(app: Any) -> None:
-    """Register home/root endpoint and delegate to legacy handler."""
+    """Register home/root endpoint."""
 
-    @app.route("/", methods=["GET", "POST"])
-    def index():
-        import app as legacy_app
-        return legacy_app.index()
+    app.route("/", methods=["GET", "POST"])(index)
