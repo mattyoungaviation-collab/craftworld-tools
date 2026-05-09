@@ -14,7 +14,6 @@ from craftworld_tools.routes.api_cw_auth_legacy import register_cw_auth_legacy_r
 from craftworld_tools.routes.api_account_data_legacy import register_account_data_legacy_routes
 from craftworld_tools.routes.api_boosts_legacy import register_boosts_legacy_routes
 from craftworld_tools.routes.pages_simple_legacy import register_simple_page_legacy_routes
-from craftworld_tools.routes.pages_lookup_legacy import register_lookup_page_legacy_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -765,9 +764,6 @@ register_boosts_legacy_routes(app)
 # Extracted simple page route registration
 register_simple_page_legacy_routes(app)
 
-# Extracted lookup page route registration
-register_lookup_page_legacy_routes(app)
-
 @app.context_processor
 def inject_nav_user():
     """
@@ -798,6 +794,7 @@ def inject_nav_user():
         "ronin_rpc_url": os.getenv("RONIN_RPC_URL", "https://api.roninchain.com/rpc").strip() or "https://api.roninchain.com/rpc",
         "ronin_chain_id": int(os.getenv("RONIN_CHAIN_ID", "2020") or 2020),
     }
+@app.route("/player/<uid>")
 def player_view(uid: str):
     """
     Simple player dashboard:
@@ -4575,6 +4572,7 @@ def charts():
 
 
 
+@app.route("/resource/<token>", methods=["GET"])
 def resource_view(token: str):
     """
     Detail view for a single resource token:
@@ -6855,6 +6853,7 @@ def flex_planner():
 
 # -------- Mastery & Workshop overview (CraftWorld.tips-style) --------
 
+@app.route("/mastery")
 def mastery_view():
     """
     Read your account proficiencies (mastery) + workshop levels via GraphQL
@@ -6955,6 +6954,7 @@ def mastery_view():
 
 # -------- Inventory overview (craftworld.tips-style) --------
 
+@app.route("/inventory")
 def inventory_view():
     """
     Full inventory page:
