@@ -16,7 +16,6 @@ from craftworld_tools.routes.api_boosts_legacy import register_boosts_legacy_rou
 from craftworld_tools.routes.pages_simple_legacy import register_simple_page_legacy_routes
 from craftworld_tools.routes.pages_lookup_legacy import register_lookup_page_legacy_routes
 from craftworld_tools.routes.pages_tools_legacy import register_tool_page_legacy_routes
-from craftworld_tools.routes.pages_core_legacy import register_core_page_legacy_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -772,9 +771,6 @@ register_lookup_page_legacy_routes(app)
 
 # Extracted tool page route registration
 register_tool_page_legacy_routes(app)
-
-# Extracted core page route registration
-register_core_page_legacy_routes(app)
 
 @app.context_processor
 def inject_nav_user():
@@ -4015,6 +4011,7 @@ def attr_or_key(obj, name, default=None):
 
 # -------- Dashboard (CraftWorld.tips mode) --------
 
+@app.route("/dashboard", methods=["GET"])
 def dashboard():
     error = None
     prices = {}
@@ -5200,6 +5197,7 @@ def api_boosts_sync():
     })
 
 
+@app.route("/craft-profitability", methods=["GET"])
 def craft_profitability():
     error = None
     prices: Dict[str, float] = {}
@@ -5454,6 +5452,7 @@ def craft_profitability():
 
 # -------- Profitability tab (manual mastery + workshop) --------
 
+@app.route("/profitability", methods=["GET", "POST"])
 def profitability():
     # Require UID set in Overview (so we know whose factories to pull)
     if not has_uid_flag():
@@ -7141,6 +7140,7 @@ def inventory_view():
 # -------- Boosts tab (per-token mastery / workshop levels) --------
 
 
+@app.route("/boosts", methods=["GET", "POST"])
 def boosts():
     """
     Per-token Mastery & Workshop levels.
@@ -8753,6 +8753,7 @@ document.addEventListener('DOMContentLoaded', function () {
 """
 # ================= END MASTERPIECES TEMPLATE ==================
 
+@app.route("/masterpieces", methods=["GET", "POST"])
 def masterpieces_view():
     """
     Masterpiece Hub:
