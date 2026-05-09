@@ -68,6 +68,11 @@ _QUOTE_CACHE: Dict[str, Dict[str, float]] = {}
 _QUOTE_CACHE_TS: Dict[str, float] = {}
 QUOTE_TTL_SECONDS = 60.0  # reuse quotes for 60 seconds per symbol
 
+# Cache the full flat price book too. Several app tabs call this helper, and
+# matching Profitability's exactInputQuote model can require many upstream calls.
+_LIVE_PRICES_CACHE: Dict[str, float] = {}
+_LIVE_PRICES_CACHE_TS: float = 0.0
+LIVE_PRICES_TTL_SECONDS = 60.0
 
 
 def _normalize_symbol(sym_raw: Optional[str]) -> str:
@@ -103,7 +108,8 @@ def _get_usd_price(token_address: Optional[str]) -> Optional[float]:
         return float(price_str)
     except Exception:
         return None
-        
+
+
 def fetch_exchange_prices_buy_sell() -> Dict[str, Dict[str, float]]:
     """
     Call Craft World's exchangePriceList and return:
@@ -160,6 +166,7 @@ def fetch_exchange_prices_buy_sell() -> Dict[str, Dict[str, float]]:
     per_symbol[base_symbol].setdefault("BUY", 1.0)
 
     return per_symbol
+
 
 EXACT_INPUT_QUOTE_QUERY = """
     query exactInputQuoteQuery($input: ExactInputInput!) {
@@ -287,33 +294,44 @@ def fetch_buy_sell_for_profitability(
     return per_symbol
 
 
+def _pick_price(rec_map: Dict[str, float], preferred: str) -> Optional[float]:
+    """Select a quote from the BUY/SELL map with safe fallbacks."""
+    preferred = preferred.upper()
+    fallback = "BUY" if preferred == "SELL" else "SELL"
+    if preferred in rec_map:
+        return float(rec_map[preferred])
+    if fallback in rec_map:
+        return float(rec_map[fallback])
+    if rec_map:
+        return float(next(iter(rec_map.values())))
+    return None
+
 
 def fetch_exchange_prices_coin() -> Dict[str, float]:
     """
-    Call Craft World's exchangePriceList and return a flat
-    token -> price_in_COIN map.
+    Return a flat token -> price_in_COIN map using the same quote source as
+    the Profitability tab.
 
-    This is a SELL-focused view:
-      - Prefer SELL quotes
-      - Fall back to BUY if SELL missing
-      - Else use any available quote
+    For the flat map we keep a SELL-focused view:
+      - Prefer exactInputQuote SELL quotes: resource -> COIN
+      - Fall back to BUY or exchangePriceList when exact quotes are missing
+
+    Tabs that need separate BUY input costs should call
+    fetch_buy_sell_for_profitability() directly, like Profitability does.
     """
-    per_symbol = fetch_exchange_prices_buy_sell()
+    symbols = sorted({sym for sym in TOKEN_ADDRESSES.keys() if sym})
+    per_symbol = fetch_buy_sell_for_profitability(symbols)
 
     prices_coin: Dict[str, float] = {}
     for sym_u, rec_map in per_symbol.items():
         sym_u = sym_u.upper()
-        if "SELL" in rec_map:
-            prices_coin[sym_u] = float(rec_map["SELL"])
-        elif "BUY" in rec_map:
-            prices_coin[sym_u] = float(rec_map["BUY"])
-        elif rec_map:
-            prices_coin[sym_u] = float(next(iter(rec_map.values())))
+        selected = _pick_price(rec_map, "SELL")
+        if selected is not None:
+            prices_coin[sym_u] = selected
 
     # Ensure base COIN is 1.0 in its own units
     prices_coin.setdefault("COIN", 1.0)
     return prices_coin
-
 
 
 def fetch_live_prices_in_coin() -> Dict[str, float]:
@@ -322,7 +340,16 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
     Returns a dict:
       - token -> price in COIN
       - special key "_COIN_USD" for COIN price in USD (may be 0.0 if Gecko fails)
+
+    The token price book now uses the same exactInputQuote-driven SELL model
+    as Profitability, instead of only the older exchangePriceList snapshot.
     """
+    global _LIVE_PRICES_CACHE, _LIVE_PRICES_CACHE_TS
+
+    now = time.time()
+    if _LIVE_PRICES_CACHE and (now - _LIVE_PRICES_CACHE_TS) < LIVE_PRICES_TTL_SECONDS:
+        return dict(_LIVE_PRICES_CACHE)
+
     prices_coin = fetch_exchange_prices_coin()
 
     coin_addr = TOKEN_ADDRESSES.get("COIN")
@@ -377,14 +404,6 @@ def fetch_live_prices_in_coin() -> Dict[str, float]:
     if fish_price:
         prices_coin["WORM"] = float(fish_price) / 270.0
 
+    _LIVE_PRICES_CACHE = dict(prices_coin)
+    _LIVE_PRICES_CACHE_TS = now
     return prices_coin
-
-
-
-
-
-
-
-
-
-
