@@ -10,7 +10,6 @@ import requests
 from flask import Flask, request, render_template_string, session, url_for, redirect, jsonify
 from craftworld_tools.routes.auth import register_auth_routes
 from craftworld_tools.routes.api_account import register_account_api_routes
-from craftworld_tools.routes.api_cw_auth_legacy import register_cw_auth_legacy_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -748,9 +747,6 @@ register_auth_routes(app, has_uid_flag)
 
 # Extracted account status API route
 register_account_api_routes(app, get_cached_account_status)
-
-# Extracted Craft World auth route registration
-register_cw_auth_legacy_routes(app)
 
 @app.context_processor
 def inject_nav_user():
@@ -4836,6 +4832,7 @@ def resource_view(token: str):
     return html
 
 
+@app.route("/api/cw/get_nonce", methods=["POST"])
 def api_cw_get_nonce():
     payload = request.get_json(silent=True) or {}
     wallet_address = _normalize_wallet_address_for_cw(payload.get("walletAddress"))
@@ -4884,6 +4881,7 @@ def api_cw_get_nonce():
     return jsonify({"ok": True, "walletAddress": wallet_address, "nonce": nonce})
 
 
+@app.route("/api/cw/login_for_custom_token", methods=["POST"])
 def api_cw_login_for_custom_token():
     payload = request.get_json(silent=True) or {}
     wallet_address = _normalize_wallet_address_for_cw(payload.get("walletAddress"))
@@ -4939,6 +4937,7 @@ def api_cw_login_for_custom_token():
     return jsonify({"ok": True, "walletAddress": wallet_address, "customToken": custom_token})
 
 
+@app.route("/api/cw/signin_with_custom_token", methods=["POST"])
 def api_cw_signin_with_custom_token():
     payload = request.get_json(silent=True) or {}
     custom_token = (payload.get("customToken") or "").strip()
