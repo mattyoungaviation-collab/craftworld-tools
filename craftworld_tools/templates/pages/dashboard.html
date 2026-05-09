@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+  <h1>Craft World Tools</h1>
+  <p class="muted">Dashboard template placeholder. The existing inline dashboard can move here during the page route extraction pass.</p>
+  {% if uid %}
+  <p>Current Account ID: <strong>{{ uid }}</strong></p>
+  {% endif %}
+</section>
+{% endblock %}
