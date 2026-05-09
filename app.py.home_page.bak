@@ -17,7 +17,6 @@ from craftworld_tools.routes.pages_simple_legacy import register_simple_page_leg
 from craftworld_tools.routes.pages_lookup_legacy import register_lookup_page_legacy_routes
 from craftworld_tools.routes.pages_tools_legacy import register_tool_page_legacy_routes
 from craftworld_tools.routes.pages_core_legacy import register_core_page_legacy_routes
-from craftworld_tools.routes.pages_home_legacy import register_home_page_legacy_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -776,9 +775,6 @@ register_tool_page_legacy_routes(app)
 
 # Extracted core page route registration
 register_core_page_legacy_routes(app)
-
-# Extracted home page route registration
-register_home_page_legacy_routes(app)
 
 @app.context_processor
 def inject_nav_user():
@@ -3421,6 +3417,7 @@ tr:nth-child(odd) td {
 
 
 # -------- Overview tab --------
+@app.route("/", methods=["GET", "POST"])
 def index():
     error: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
