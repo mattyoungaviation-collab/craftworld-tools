@@ -9,7 +9,6 @@ import time
 import requests
 from flask import Flask, request, render_template_string, session, url_for, redirect, jsonify
 from craftworld_tools.routes.auth import register_auth_routes
-from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
