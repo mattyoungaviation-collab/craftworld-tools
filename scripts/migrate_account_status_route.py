@@ -13,6 +13,7 @@ It writes `app.py.account_status.bak` before changing the file.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -22,12 +23,8 @@ BACKUP = ROOT / "app.py.account_status.bak"
 
 IMPORT_LINE = "from craftworld_tools.routes.api_account import register_account_api_routes\n"
 REGISTER_LINE = "\n# Extracted account status API route\nregister_account_api_routes(app, get_cached_account_status)\n"
-
-ROUTE_PATTERN = (
-    r"\n@app\.route\(\"/api/account_status\"\)\n"
-    r"def api_account_status\(\):\n"
-    r"(?:(?!\n@app\.route).)*"
-)
+TARGET_ENDPOINT = "api_account_status"
+TARGET_ROUTE = "/api/account_status"
 
 
 def add_import(text: str) -> str:
@@ -45,11 +42,49 @@ def add_import(text: str) -> str:
     return text[: line_end + 1] + IMPORT_LINE + text[line_end + 1 :]
 
 
+def _decorator_has_target_route(decorator: ast.AST) -> bool:
+    if not isinstance(decorator, ast.Call):
+        return False
+    func = decorator.func
+    if not isinstance(func, ast.Attribute):
+        return False
+    if func.attr != "route":
+        return False
+    if not isinstance(func.value, ast.Name) or func.value.id != "app":
+        return False
+    if not decorator.args:
+        return False
+    first_arg = decorator.args[0]
+    return isinstance(first_arg, ast.Constant) and first_arg.value == TARGET_ROUTE
+
+
 def remove_route(text: str) -> str:
-    new_text, count = re.subn(ROUTE_PATTERN, "\n", text, count=1, flags=re.DOTALL)
-    if count != 1:
-        raise RuntimeError("Could not remove /api/account_status route block. Pattern did not match exactly once.")
-    return new_text
+    tree = ast.parse(text)
+    matches: list[ast.FunctionDef] = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name == TARGET_ENDPOINT or any(_decorator_has_target_route(dec) for dec in node.decorator_list):
+            matches.append(node)
+
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected exactly one {TARGET_ROUTE} function block, found {len(matches)}. "
+            "Run: Select-String -Path app.py -Pattern account_status -Context 3,20"
+        )
+
+    node = matches[0]
+    lines = text.splitlines(keepends=True)
+    start_line = min([dec.lineno for dec in node.decorator_list] or [node.lineno])
+    end_line = getattr(node, "end_lineno", None)
+    if end_line is None:
+        raise RuntimeError("Python AST did not provide end_lineno. Use Python 3.8 or newer.")
+
+    # Convert 1-based inclusive line numbers to 0-based slice.
+    start_idx = start_line - 1
+    end_idx = end_line
+    del lines[start_idx:end_idx]
+    return "".join(lines)
 
 
 def add_registration(text: str) -> str:
