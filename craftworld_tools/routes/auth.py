@@ -3,7 +3,7 @@
 This module is ready to be wired into app.py with:
 
     from craftworld_tools.routes.auth import register_auth_routes
-    register_auth_routes(app, BASE_TEMPLATE, has_uid_flag, get_db_connection)
+    register_auth_routes(app, BASE_TEMPLATE, has_uid_flag)
 
 The old inline routes in app.py should be removed at the same time to avoid
 registering duplicate /login, /register, and /logout URLs.
@@ -14,10 +14,10 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from flask import redirect, render_template_string, request, session, url_for
-from werkzeug.security import check_password_hash, generate_password_hash
+
+from craftworld_tools.services.users import authenticate_user, create_user
 
 
-GetDbConnection = Callable[[], Any]
 HasUidFlag = Callable[[], bool]
 
 
@@ -83,11 +83,15 @@ def _render_page(base_template: str, content_template: str, *, error: Optional[s
     )
 
 
+def _login_user(user: dict[str, Any]) -> None:
+    session["user_id"] = int(user["id"])
+    session["username"] = user["username"]
+
+
 def register_auth_routes(
     app: Any,
     base_template: str,
     has_uid_flag: HasUidFlag,
-    get_db_connection: GetDbConnection,
 ) -> None:
     """Register login/register/logout routes on the provided Flask app."""
 
@@ -104,26 +108,12 @@ def register_auth_routes(
             elif password != confirm:
                 error = "Passwords do not match."
             else:
-                conn = get_db_connection()
                 try:
-                    cur = conn.cursor()
-                    cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-                    existing = cur.fetchone()
-                    if existing:
-                        error = "That username is already taken."
-                    else:
-                        pwd_hash = generate_password_hash(password)
-                        cur.execute(
-                            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                            (username, pwd_hash),
-                        )
-                        conn.commit()
-                        user_id = cur.lastrowid
-                        session["user_id"] = user_id
-                        session["username"] = username
-                        return redirect(url_for("boosts"))
-                finally:
-                    conn.close()
+                    user = create_user(username, password)
+                    _login_user(user)
+                    return redirect(url_for("boosts"))
+                except ValueError as exc:
+                    error = str(exc)
 
         return _render_page(base_template, REGISTER_TEMPLATE, error=error, has_uid_flag=has_uid_flag)
 
@@ -137,27 +127,12 @@ def register_auth_routes(
             if not username or not password:
                 error = "Username and password are required."
             else:
-                conn = get_db_connection()
-                try:
-                    cur = conn.cursor()
-                    cur.execute(
-                        "SELECT id, password_hash FROM users WHERE username = ?",
-                        (username,),
-                    )
-                    row = cur.fetchone()
-                    if not row:
-                        error = "Invalid username or password."
-                    else:
-                        user_id = row["id"]
-                        pwd_hash = row["password_hash"]
-                        if not check_password_hash(pwd_hash, password):
-                            error = "Invalid username or password."
-                        else:
-                            session["user_id"] = user_id
-                            session["username"] = username
-                            return redirect(url_for("boosts"))
-                finally:
-                    conn.close()
+                user = authenticate_user(username, password)
+                if user is None:
+                    error = "Invalid username or password."
+                else:
+                    _login_user(user)
+                    return redirect(url_for("boosts"))
 
         return _render_page(base_template, LOGIN_TEMPLATE, error=error, has_uid_flag=has_uid_flag)
 
