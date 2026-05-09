@@ -15,6 +15,7 @@ from craftworld_api import fetch_available_avatars, fetch_craftworld, fetch_mast
 from crafting_planner import CRAFTING_CHAINS, Modifiers, build_chain_report, plan_craft, rank_opportunities
 from factories import FACTORIES_FROM_CSV, FACTORY_DISPLAY_INDEX, FACTORY_DISPLAY_ORDER, MASTERY_BONUSES, WORKSHOP_MODIFIERS, compute_best_setups_csv, compute_factory_result_csv
 from pricing import TOKEN_ADDRESSES, fetch_buy_sell_for_profitability, fetch_live_prices_in_coin
+from craftworld_tools.services.masterpiece_view_model import build_masterpiece_summary_html
 
 def dashboard():
     error = None
@@ -1684,6 +1685,7 @@ def craft_profitability():
 
 
 def masterpieces_view():
+    rich_masterpiece_summary_html = ""
     """
     Masterpiece Hub:
       - Donation Planner (per-unit MP points, live COIN cost, tier progress)
