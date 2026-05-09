@@ -15,7 +15,6 @@ from craftworld_tools.routes.api_account_data_legacy import register_account_dat
 from craftworld_tools.routes.api_boosts_legacy import register_boosts_legacy_routes
 from craftworld_tools.routes.pages_simple_legacy import register_simple_page_legacy_routes
 from craftworld_tools.routes.pages_lookup_legacy import register_lookup_page_legacy_routes
-from craftworld_tools.routes.pages_tools_legacy import register_tool_page_legacy_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -768,9 +767,6 @@ register_simple_page_legacy_routes(app)
 
 # Extracted lookup page route registration
 register_lookup_page_legacy_routes(app)
-
-# Extracted tool page route registration
-register_tool_page_legacy_routes(app)
 
 @app.context_processor
 def inject_nav_user():
@@ -6079,6 +6075,7 @@ def profitability():
 
 # -------- Flex Planner tab (smart flex-plot suggestions) --------
 
+@app.route("/flex", methods=["GET", "POST"])
 def flex_planner():
     # Require UID so we can pull your inventory.
     if not has_uid_flag():
@@ -10152,6 +10149,7 @@ def _build_resource_efficiency_rows(masterpiece_id: int, mp: Dict[str, Any], pri
 
 
 # -------- Snipe Calculator tab --------
+@app.route("/snipe", methods=["GET", "POST"])
 def snipe():
     error: Optional[str] = None
 
@@ -11030,6 +11028,7 @@ def snipe():
 
 
 # -------- Calculate tab (CSV-based) --------
+@app.route("/calculate", methods=["GET", "POST"])
 def calculate():
     error: Optional[str] = None
     calc_result = None
@@ -11466,6 +11465,7 @@ def calculate():
     return html
 
 
+@app.route("/factory-converter", methods=["GET", "POST"])
 def factory_converter():
     error: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
@@ -11705,6 +11705,7 @@ def factory_converter():
     return html
 
 
+@app.route("/upgrade-calculate", methods=["GET", "POST"])
 def upgrade_calculate():
     error: Optional[str] = None
     result = None
