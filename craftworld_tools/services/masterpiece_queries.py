@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from craftworld_tools.services.craftworld_core import call_graphql, fetch_masterpiece_details
+from craftworld_tools.services.masterpiece_normalizer import normalize_masterpiece_detail
 
 
 MASTERPIECE_REWARD_FIELDS = """
@@ -162,6 +163,14 @@ query Masterpiece($id: ID, $userId: String) {{
 """
 
 
+def _with_normalized(masterpiece: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(masterpiece, dict):
+        return {}
+    enriched = dict(masterpiece)
+    enriched["normalized"] = normalize_masterpiece_detail(masterpiece)
+    return enriched
+
+
 def fetch_masterpiece_details_for_user(
     masterpiece_id: int | str,
     user_id: Optional[str] = None,
@@ -172,7 +181,7 @@ def fetch_masterpiece_details_for_user(
 
     clean_user_id = str(user_id or "").strip()
     if not clean_user_id:
-        return fetch_masterpiece_details(masterpiece_id)
+        return _with_normalized(fetch_masterpiece_details(masterpiece_id))
 
     try:
         data = call_graphql(
@@ -182,9 +191,9 @@ def fetch_masterpiece_details_for_user(
         masterpiece = data.get("masterpiece")
         if not masterpiece:
             raise RuntimeError(f"No masterpiece found for id {masterpiece_id}")
-        return masterpiece
+        return _with_normalized(masterpiece)
     except Exception as exc:
         # Fall back to the older stable query so the page still loads if Craft
         # World's schema changes or the user-specific fields reject null/typing.
         print(f"[WARN] rich masterpiece query failed for {masterpiece_id}: {exc}")
-        return fetch_masterpiece_details(masterpiece_id)
+        return _with_normalized(fetch_masterpiece_details(masterpiece_id))
