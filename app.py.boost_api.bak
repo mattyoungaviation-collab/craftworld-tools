@@ -12,7 +12,6 @@ from craftworld_tools.routes.auth import register_auth_routes
 from craftworld_tools.routes.api_account import register_account_api_routes
 from craftworld_tools.routes.api_cw_auth_legacy import register_cw_auth_legacy_routes
 from craftworld_tools.routes.api_account_data_legacy import register_account_data_legacy_routes
-from craftworld_tools.routes.api_boosts_legacy import register_boosts_legacy_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -756,9 +755,6 @@ register_cw_auth_legacy_routes(app)
 
 # Extracted account data API route registration
 register_account_data_legacy_routes(app)
-
-# Extracted boost API route registration
-register_boosts_legacy_routes(app)
 
 @app.context_processor
 def inject_nav_user():
@@ -5113,6 +5109,7 @@ def api_account_uid():
     return jsonify({"ok": True, "uid": uid, "wallet": primary_wallet or None})
 
 
+@app.route("/api/boosts/mastery", methods=["POST"])
 def api_boosts_mastery():
     payload = request.get_json(silent=True) or {}
     raw_levels = payload.get("masteryLevels") if isinstance(payload, dict) else None
@@ -5143,6 +5140,7 @@ def api_boosts_mastery():
     })
 
 
+@app.route("/api/boosts/sync", methods=["POST"])
 def api_boosts_sync():
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict):
