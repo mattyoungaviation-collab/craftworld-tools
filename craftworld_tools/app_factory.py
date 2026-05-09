@@ -13,6 +13,11 @@ from flask import Flask
 
 from craftworld_tools.db import init_db
 from craftworld_tools.routes.registry import register_extracted_api_routes, register_extracted_page_routes
+from craftworld_tools.template_utils import register_template_filters
+
+
+def _package_path(*parts: str) -> str:
+    return os.path.join(os.path.dirname(__file__), *parts)
 
 
 def create_app(
@@ -30,11 +35,12 @@ def create_app(
     """
     app = Flask(
         __name__,
-        template_folder="templates",
+        template_folder=_package_path("templates"),
         static_folder=os.path.join(os.getcwd(), "static"),
     )
     app.secret_key = secret_key or os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
+    register_template_filters(app)
     init_db()
 
     if register_routes:
