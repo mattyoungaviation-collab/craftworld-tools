@@ -11,7 +11,6 @@ from flask import Flask, request, render_template_string, session, url_for, redi
 from craftworld_tools.routes.auth import register_auth_routes
 from craftworld_tools.routes.api_account import register_account_api_routes
 from craftworld_tools.routes.api_cw_auth_legacy import register_cw_auth_legacy_routes
-from craftworld_tools.routes.api_account_data_legacy import register_account_data_legacy_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -752,9 +751,6 @@ register_account_api_routes(app, get_cached_account_status)
 
 # Extracted Craft World auth route registration
 register_cw_auth_legacy_routes(app)
-
-# Extracted account data API route registration
-register_account_data_legacy_routes(app)
 
 @app.context_processor
 def inject_nav_user():
@@ -5007,6 +5003,7 @@ def api_cw_signin_with_custom_token():
 
 
 
+@app.route("/api/account_workshop", methods=["GET"])
 def api_account_workshop():
     jwt_token = _extract_bearer_token(request.headers.get("Authorization"))
     jwt_token = _normalize_cw_token(jwt_token)
@@ -5025,6 +5022,7 @@ def api_account_workshop():
     return jsonify({"ok": True, "workshop": workshop, "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
 
 
+@app.route("/api/account_proficiencies", methods=["GET"])
 def api_account_proficiencies():
     jwt_token = _extract_bearer_token(request.headers.get("Authorization"))
     jwt_token = _normalize_cw_token(jwt_token)
@@ -5047,6 +5045,7 @@ def api_account_proficiencies():
     return jsonify({"ok": True, "proficiencies": proficiencies, "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
 
 
+@app.route("/api/account_uid", methods=["GET"])
 def api_account_uid():
     jwt_token = _get_request_cw_token()
     if not jwt_token:
