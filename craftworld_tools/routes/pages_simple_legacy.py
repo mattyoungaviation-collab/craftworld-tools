@@ -4,7 +4,28 @@ from __future__ import annotations
 
 from typing import Any
 
-from craftworld_tools.routes.pages_simple import charts, privacy, terms, trees
+import craftworld_tools.routes.pages_simple as pages_simple
+from craftworld_tools.routes.legacy_globals import inject_app_globals
+
+
+def privacy():
+    inject_app_globals(pages_simple)
+    return pages_simple.privacy()
+
+
+def terms():
+    inject_app_globals(pages_simple)
+    return pages_simple.terms()
+
+
+def charts():
+    inject_app_globals(pages_simple)
+    return pages_simple.charts()
+
+
+def trees():
+    inject_app_globals(pages_simple)
+    return pages_simple.trees()
 
 
 def register_simple_page_legacy_routes(app: Any) -> None:
