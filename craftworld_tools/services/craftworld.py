@@ -1,11 +1,7 @@
-"""Craft World GraphQL service compatibility layer.
+"""Craft World GraphQL service public interface."""
 
-The root craftworld_api.py module remains the runtime implementation for now.
-This wrapper gives the app a cleaner service import path without breaking
-existing code during the large app.py split.
-"""
-
-from craftworld_api import (  # noqa: F401
+from .craftworld_core import (  # noqa: F401
+    MASTERPIECE_DETAILS_QUERY,
     call_graphql,
     call_graphql_with_jwt,
     fetch_account_status,
