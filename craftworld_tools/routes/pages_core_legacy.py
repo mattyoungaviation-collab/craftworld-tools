@@ -4,7 +4,33 @@ from __future__ import annotations
 
 from typing import Any
 
-from craftworld_tools.routes.pages_core import boosts, craft_profitability, dashboard, masterpieces_view, profitability
+import craftworld_tools.routes.pages_core as pages_core
+from craftworld_tools.routes.legacy_globals import inject_app_globals
+
+
+def dashboard():
+    inject_app_globals(pages_core)
+    return pages_core.dashboard()
+
+
+def boosts():
+    inject_app_globals(pages_core)
+    return pages_core.boosts()
+
+
+def profitability():
+    inject_app_globals(pages_core)
+    return pages_core.profitability()
+
+
+def craft_profitability():
+    inject_app_globals(pages_core)
+    return pages_core.craft_profitability()
+
+
+def masterpieces_view():
+    inject_app_globals(pages_core)
+    return pages_core.masterpieces_view()
 
 
 def register_core_page_legacy_routes(app: Any) -> None:
