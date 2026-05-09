@@ -9,7 +9,6 @@ import time
 import requests
 from flask import Flask, request, render_template_string, session, url_for, redirect, jsonify
 from craftworld_tools.routes.auth import register_auth_routes
-from craftworld_tools.routes.api_account import register_account_api_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -744,9 +743,6 @@ app.secret_key = "craftworld-tools-demo-secret"  # for session
 
 # Extracted auth routes
 register_auth_routes(app, has_uid_flag)
-
-# Extracted account status API route
-register_account_api_routes(app, get_cached_account_status)
 
 @app.context_processor
 def inject_nav_user():
@@ -4998,6 +4994,32 @@ def api_cw_signin_with_custom_token():
     })
 
 
+@app.route("/api/account_status", methods=["GET"])
+def api_account_status():
+    jwt_token = _get_request_cw_token()
+
+    app.logger.debug(
+        "/api/account_status token present=%s len=%s token=%s",
+        bool(jwt_token),
+        len(jwt_token or ""),
+        _mask_token(jwt_token),
+    )
+
+    if not jwt_token:
+        return jsonify({
+            "ok": False,
+            "auth": "missing_or_invalid",
+            "power": None,
+            "msUntilRefill": None,
+            "refillSeconds": None,
+            "refillHMS": None,
+            "primaryWallet": None,
+            "error": "Missing idToken",
+            "rawErrors": [],
+        })
+
+    payload = fetch_account_status_for_token(jwt_token)
+    return jsonify(payload)
 
 
 
