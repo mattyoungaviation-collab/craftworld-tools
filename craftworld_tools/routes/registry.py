@@ -18,9 +18,11 @@ from craftworld_tools.routes.api_mp_presets import register_mp_preset_api_routes
 from craftworld_tools.routes.api_prices import register_price_api_routes
 from craftworld_tools.routes.auth import register_auth_routes
 from craftworld_tools.routes.pages_boosts import register_boost_page_routes
+from craftworld_tools.routes.pages_crafting import register_crafting_page_routes
 from craftworld_tools.routes.pages_dashboard import register_dashboard_routes
 from craftworld_tools.routes.pages_factories import register_factory_page_routes
 from craftworld_tools.routes.pages_masterpieces import register_masterpiece_page_routes
+from craftworld_tools.routes.pages_profitability import register_profitability_page_routes
 
 
 def register_extracted_api_routes(
@@ -49,6 +51,8 @@ def register_extracted_page_routes(
     include_boosts: bool = False,
     include_factories: bool = False,
     include_masterpieces: bool = False,
+    include_profitability: bool = False,
+    include_crafting: bool = False,
 ) -> None:
     """Register extracted HTML/page routes after matching inline routes are removed.
 
@@ -65,3 +69,7 @@ def register_extracted_page_routes(
         register_factory_page_routes(app, has_uid_flag)
     if include_masterpieces:
         register_masterpiece_page_routes(app, has_uid_flag)
+    if include_profitability:
+        register_profitability_page_routes(app, has_uid_flag)
+    if include_crafting:
+        register_crafting_page_routes(app, has_uid_flag)
