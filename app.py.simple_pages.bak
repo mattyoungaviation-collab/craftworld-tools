@@ -13,7 +13,6 @@ from craftworld_tools.routes.api_account import register_account_api_routes
 from craftworld_tools.routes.api_cw_auth_legacy import register_cw_auth_legacy_routes
 from craftworld_tools.routes.api_account_data_legacy import register_account_data_legacy_routes
 from craftworld_tools.routes.api_boosts_legacy import register_boosts_legacy_routes
-from craftworld_tools.routes.pages_simple_legacy import register_simple_page_legacy_routes
 from craftworld_tools.session_helpers import has_uid_flag
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -760,9 +759,6 @@ register_account_data_legacy_routes(app)
 
 # Extracted boost API route registration
 register_boosts_legacy_routes(app)
-
-# Extracted simple page route registration
-register_simple_page_legacy_routes(app)
 
 @app.context_processor
 def inject_nav_user():
@@ -3528,6 +3524,7 @@ def index():
 
 
 
+@app.route("/terms")
 def terms():
     content = """
     <div class="card">
@@ -3769,6 +3766,7 @@ def terms():
     )
 
 
+@app.route("/privacy")
 def privacy():
     content = """
     <div class="card">
@@ -4485,6 +4483,7 @@ def dashboard():
 
 
 # -------- Live Token Charts (GeckoTerminal-style) --------
+@app.route("/charts", methods=["GET"])
 def charts():
     """
     Live token charts, like the iOS CraftMath app:
@@ -12218,6 +12217,7 @@ def upgrade_calculate():
 
 # -------- Trees tab (Earth / Water / Fire / Special) --------
 
+@app.route("/trees", methods=["GET"])
 def trees():
     """
     Tree-style overview similar to Craftworld.tips:
