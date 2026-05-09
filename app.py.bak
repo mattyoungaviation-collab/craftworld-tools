@@ -11,31 +11,6 @@ from flask import Flask, request, render_template_string, session, url_for, redi
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from craftworld_tools.config import DB_PATH, CW_GRAPHQL_URL, CW_APP_VERSION, CW_FIREBASE_API_KEY, CW_IDENTITY_SIGNIN_URL
-from craftworld_tools.db import get_db_connection, init_db
-from craftworld_tools.services.account_status import fetch_account_status_for_token
-from craftworld_tools.services.identity import cw_graphql_request, fetch_account_identity_payload
-from craftworld_tools.services.masterpiece_cache import cache_masterpiece_metadata, load_masterpiece_metadata_cache
-from craftworld_tools.services.boosts import (
-    default_boost_levels,
-    load_boost_levels_from_db,
-    save_boost_levels_to_db,
-    load_session_boost_levels,
-    save_session_boost_levels,
-)
-from craftworld_tools.session_helpers import current_uid
-from craftworld_tools.utils.auth import (
-    extract_bearer_token,
-    extract_uid_from_account_payload,
-    extract_uid_from_identity_payload,
-    extract_uid_from_jwt_payload,
-    mask_token,
-    normalize_cw_token,
-    token_cache_key,
-)
-from craftworld_tools.utils.formatting import format_hms_from_seconds, normalize_avatar_url
-from craftworld_tools.utils.wallets import normalize_wallet_address_for_cw, candidate_wallet_addresses_for_cw
-
 from craftworld_api import (
     fetch_craftworld,
     fetch_masterpieces,
@@ -48,6 +23,27 @@ from craftworld_api import (
     fetch_available_avatars,
     fetch_account_status,
 )
+
+
+def normalize_avatar_url(raw: Optional[str]) -> Optional[str]:
+    """
+    Normalize Craft World avatar URLs so the browser can display them.
+
+    - If it's already http(s), return as-is.
+    - If it's ipfs://CID/path, convert to https://ipfs.io/ipfs/CID/path
+    """
+    if not raw:
+        return None
+    url = raw.strip()
+    if not url:
+        return None
+
+    if url.startswith("ipfs://"):
+        cid_path = url[len("ipfs://"):]
+        return f"https://ipfs.io/ipfs/{cid_path}"
+
+    # already a normal URL like https://craft-world.gg/avatars/...
+    return url
 
 
 # ---------------- Database setup (users + saved boosts) ----------------
@@ -80,12 +76,249 @@ ACCOUNT_STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
 ACCOUNT_STATUS_CACHE_TTL = 5.0
 
 
+def _format_hms_from_seconds(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _token_cache_key(jwt_token: str) -> str:
+    return hashlib.sha256(jwt_token.encode("utf-8")).hexdigest()
+
+
+def _extract_uid_from_account_payload(account_payload: Any) -> Optional[str]:
+    if not isinstance(account_payload, dict):
+        return None
+
+    linked_accounts = account_payload.get("linkedAccounts")
+    if not isinstance(linked_accounts, list):
+        return None
+
+    for entry in linked_accounts:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type") or "").strip().lower() != "custom_jwt":
+            continue
+        details = entry.get("details")
+        if isinstance(details, str):
+            try:
+                details = json.loads(details)
+            except Exception:
+                details = {}
+        if isinstance(details, dict):
+            candidate = str(details.get("id") or details.get("user_id") or "").strip()
+            if candidate:
+                return candidate
+
+    return None
+
+
+def _extract_uid_from_identity_payload(identity_payload: Any) -> Optional[str]:
+    if not isinstance(identity_payload, dict):
+        return None
+
+    direct_uid_value = str(identity_payload.get("uid") or identity_payload.get("id") or "").strip()
+    if direct_uid_value:
+        return direct_uid_value
+
+    # Schema variant A: account.linkedAccounts
+    direct_uid = _extract_uid_from_account_payload(identity_payload)
+    if direct_uid:
+        return direct_uid
+
+    # Schema variant B: account.tradeAccount.linkedAccounts
+    trade_account = identity_payload.get("tradeAccount")
+    if isinstance(trade_account, dict):
+        trade_uid_value = str(trade_account.get("uid") or trade_account.get("id") or "").strip()
+        if trade_uid_value:
+            return trade_uid_value
+        trade_uid = _extract_uid_from_account_payload(trade_account)
+        if trade_uid:
+            return trade_uid
+
+    return None
+
+
+def _extract_uid_from_jwt_payload(jwt_token: Optional[str]) -> Optional[str]:
+    raw = str(jwt_token or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("jwt_"):
+        raw = raw[4:]
+    parts = raw.split(".")
+    if len(parts) < 2:
+        return None
+
+    payload_b64 = parts[1]
+    padding = "=" * (-len(payload_b64) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(payload_b64 + padding)
+        payload = json.loads(decoded.decode("utf-8"))
+    except Exception:
+        return None
+
+    for key in ("uid", "user_id", "sub"):
+        candidate = str(payload.get(key) or "").strip()
+        if candidate:
+            return candidate
+    return None
+
+def _extract_bearer_token(authorization_value: Optional[str]) -> Optional[str]:
+    if not authorization_value:
+        return None
+    value = authorization_value.strip()
+    if not value:
+        return None
+    if value.lower().startswith("bearer "):
+        token = value[7:].strip()
+        return token or None
+    return None
+
+
 def _get_request_cw_token() -> Optional[str]:
     token = _extract_bearer_token(request.headers.get("Authorization"))
     if token:
         return _normalize_cw_token(token)
     fallback = (request.args.get("cw_idToken") or "").strip()
     return _normalize_cw_token(fallback)
+
+
+def _normalize_cw_token(token: Optional[str]) -> Optional[str]:
+    value = (token or "").strip()
+    if not value:
+        return None
+    if value.startswith("jwt_"):
+        return value
+    if value.count(".") >= 2:
+        return f"jwt_{value}"
+    return value
+
+
+def _normalize_wallet_address_for_cw(value: Optional[str]) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw.lower().startswith("ronin:"):
+        raw = f"0x{raw.split(':', 1)[1]}"
+    return raw
+
+
+def _candidate_wallet_addresses_for_cw(value: Optional[str]) -> List[str]:
+    raw = (value or "").strip()
+    normalized = _normalize_wallet_address_for_cw(raw)
+    if not raw and not normalized:
+        return []
+    candidates: List[str] = []
+    if raw:
+        candidates.append(raw)
+    if normalized:
+        candidates.append(normalized)
+    if raw.lower().startswith("ronin:") and len(raw) > 6:
+        candidates.append(f"0x{raw.split(':', 1)[1]}")
+    if raw.lower().startswith("0x") and len(raw) > 2:
+        candidates.append(f"ronin:{raw[2:]}")
+    if normalized.lower().startswith("0x") and len(normalized) > 2:
+        candidates.append(f"ronin:{normalized[2:]}")
+    # Also try lowercase variants for APIs that require normalized lowercase.
+    candidates.extend([c.lower() for c in list(candidates) if c])
+    deduped: List[str] = []
+    for item in candidates:
+        if item and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def _cw_graphql_request(query: str, variables: Optional[Dict[str, Any]] = None, bearer_token: Optional[str] = None) -> Dict[str, Any]:
+    headers = {
+        "Content-Type": "application/json",
+        "x-app-version": CW_APP_VERSION,
+    }
+    normalized_token = _normalize_cw_token(bearer_token)
+    if normalized_token:
+        headers["Authorization"] = f"Bearer {normalized_token}"
+
+    payload: Dict[str, Any] = {"query": query}
+    if variables is not None:
+        payload["variables"] = variables
+
+    resp = requests.post(CW_GRAPHQL_URL, json=payload, headers=headers, timeout=20)
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"errors": [{"message": f"Invalid JSON response (HTTP {resp.status_code})"}]}
+
+    return {
+        "status_code": resp.status_code,
+        "ok": resp.ok,
+        "body": body,
+    }
+
+
+
+
+def _fetch_account_identity_payload(bearer_token: str) -> Dict[str, Any]:
+    queries = [
+        # Variant A: minimal account identity.
+        """
+        query AccountIdentity {
+          account {
+            uid
+            id
+            linkedAccounts {
+              type
+              details
+            }
+          }
+        }
+        """,
+        # Variant B: linkedAccounts hangs off tradeAccount (if available in this schema).
+        """
+        query AccountIdentity {
+          account {
+            uid
+            id
+            tradeAccount {
+              uid
+              id
+              linkedAccounts {
+                type
+                details
+              }
+            }
+          }
+        }
+        """,
+    ]
+
+    last_errors: list[Any] = []
+    for query in queries:
+        upstream = _cw_graphql_request(query=query, bearer_token=bearer_token)
+        body = upstream.get("body") or {}
+        errors = body.get("errors") or []
+        if errors:
+            last_errors = errors
+            validation_only = all(
+                isinstance(err, dict)
+                and isinstance(err.get("extensions"), dict)
+                and err.get("extensions", {}).get("code") == "GRAPHQL_VALIDATION_FAILED"
+                for err in errors
+            )
+            if validation_only:
+                continue
+            return {"ok": False, "body": body, "errors": errors}
+
+        return {"ok": True, "body": body, "errors": []}
+
+    return {"ok": False, "body": {"errors": last_errors}, "errors": last_errors}
+
+def _mask_token(token: Optional[str]) -> str:
+    if not token:
+        return "<missing>"
+    if len(token) <= 16:
+        return token[:4] + "..."
+    return f"{token[:10]}...{token[-6:]}"
 
 
 def fetch_account_status_for_token(jwt_token: str) -> Dict[str, Any]:
@@ -246,21 +479,6 @@ def init_db() -> None:
 
 
 init_db()
-
-# Compatibility aliases while app.py is being reduced.
-_format_hms_from_seconds = format_hms_from_seconds
-_token_cache_key = token_cache_key
-_extract_uid_from_account_payload = extract_uid_from_account_payload
-_extract_uid_from_identity_payload = extract_uid_from_identity_payload
-_extract_uid_from_jwt_payload = extract_uid_from_jwt_payload
-_extract_bearer_token = extract_bearer_token
-_normalize_cw_token = normalize_cw_token
-_normalize_wallet_address_for_cw = normalize_wallet_address_for_cw
-_candidate_wallet_addresses_for_cw = candidate_wallet_addresses_for_cw
-_cw_graphql_request = cw_graphql_request
-_fetch_account_identity_payload = fetch_account_identity_payload
-_mask_token = mask_token
-_current_uid = current_uid
 def cache_masterpiece_metadata(mp: Dict[str, Any]) -> None:
     """
     Store basic metadata for a masterpiece so we can reuse its name/label later.
@@ -586,6 +804,18 @@ def _default_boost_levels() -> dict[str, dict[str, int]]:
         token: {"mastery_level": 0, "workshop_level": 0}
         for token in ALL_FACTORY_TOKENS
     }
+
+
+def _current_uid() -> str:
+    """
+    Get the current Account ID (Craft World UID) for this session.
+    Used so each account has its own boost settings.
+    """
+    uid = session.get("voya_uid")
+    if not uid:
+        # fallback bucket if no UID set yet
+        return "_NO_UID_"
+    return str(uid)
 
 
 def _load_boost_levels_from_db(user_id: int) -> dict[str, dict[str, int]]:
