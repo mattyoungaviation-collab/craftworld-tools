@@ -17,6 +17,10 @@ from craftworld_tools.routes.api_masterpieces import register_masterpiece_api_ro
 from craftworld_tools.routes.api_mp_presets import register_mp_preset_api_routes
 from craftworld_tools.routes.api_prices import register_price_api_routes
 from craftworld_tools.routes.auth import register_auth_routes
+from craftworld_tools.routes.pages_boosts import register_boost_page_routes
+from craftworld_tools.routes.pages_dashboard import register_dashboard_routes
+from craftworld_tools.routes.pages_factories import register_factory_page_routes
+from craftworld_tools.routes.pages_masterpieces import register_masterpiece_page_routes
 
 
 def register_extracted_api_routes(
@@ -39,8 +43,25 @@ def register_extracted_api_routes(
 def register_extracted_page_routes(
     app: Any,
     *,
-    base_template: str,
     has_uid_flag: Callable[[], bool],
+    include_dashboard: bool = False,
+    include_auth: bool = False,
+    include_boosts: bool = False,
+    include_factories: bool = False,
+    include_masterpieces: bool = False,
 ) -> None:
-    """Register extracted HTML/page routes after matching inline routes are removed."""
-    register_auth_routes(app, base_template, has_uid_flag)
+    """Register extracted HTML/page routes after matching inline routes are removed.
+
+    The boolean flags let app.py adopt page groups one at a time without causing
+    duplicate Flask route registrations.
+    """
+    if include_dashboard:
+        register_dashboard_routes(app, has_uid_flag)
+    if include_auth:
+        register_auth_routes(app, has_uid_flag)
+    if include_boosts:
+        register_boost_page_routes(app, has_uid_flag)
+    if include_factories:
+        register_factory_page_routes(app, has_uid_flag)
+    if include_masterpieces:
+        register_masterpiece_page_routes(app, has_uid_flag)
