@@ -22,7 +22,7 @@ def resolve_db_path() -> str:
 
 DB_PATH = resolve_db_path()
 CW_GRAPHQL_URL = "https://craft-world.gg/graphql"
-CW_APP_VERSION = "1.7.3"
+CW_APP_VERSION = "1.11.0"
 CW_FIREBASE_API_KEY = "AIzaSyDgDDykbRrhbdfWUpm1BUgj4ga7d_-wy_g"
 CW_IDENTITY_SIGNIN_URL = (
     "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
