@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from craftworld_tools.config import CW_APP_VERSION
 from craftworld_tools.utils.auth import mask_token, normalize_cw_token
 
 GRAPHQL_URL = "https://craft-world.gg/graphql"
@@ -17,7 +18,7 @@ def call_graphql_with_jwt(jwt_token: str, query: str, variables: Optional[Dict[s
     headers = {
         "Authorization": f"Bearer {normalized_token}",
         "Content-Type": "application/json",
-        "x-app-version": "1.10.1",
+        "x-app-version": CW_APP_VERSION,
     }
 
     payload: Dict[str, Any] = {"query": query}
